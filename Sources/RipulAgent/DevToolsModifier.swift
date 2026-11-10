@@ -139,7 +139,6 @@ extension AgentBridge {
         tools += [
             InspectScreenTool(bridge: bridge),
             TapElementTool(),
-            TouchTool(),
             ScreenFrameTool(),
             LiveStreamOfferTool(),
             TypeTextTool(),
@@ -155,6 +154,10 @@ extension AgentBridge {
             ExplorerConformanceTool(),
             SetValueTool(),
         ]
+        // Real touches only where there are any. A Release build compiles them out,
+        // and a touch tool that could only say so made Live View offer control of
+        // an app it couldn't drive: its device list reads this list.
+        if TouchSynthesizer.isAvailable { tools.append(TouchTool()) }
         #endif
         return tools
     }

@@ -21,10 +21,27 @@ public struct CmsBlockFrame: Codable, Equatable {
     public var borderWidth: String?
     public var borderRadius: String?
     public var shadow: String?
+    /// Edge to edge: the page's side margins go; as the first block of a
+    /// title-hidden page it also runs under the status bar.
+    public var bleed: Bool?
+    /// Points: the block's surface grows by this much at its bottom, and what
+    /// follows starts that much higher, drawn over it.
+    public var overlap: Double?
+    /// `behind`, on a page's first block: fixed while the page scrolls up over it.
+    /// `bottom`, in a sidebar region: kept at the region's foot while the rest scrolls.
+    public var pin: String?
+    /// The pinned block: `sheet` makes what scrolls over it one sheet of the
+    /// page's background; unset (`clear`) leaves it clear.
+    public var pinCover: String?
+    /// The pinned block: points at the top of its content never covered.
+    public var pinKeep: Double?
+    /// The pinned block: what follows goes under it at the cover line (its
+    /// surface's bottom less `overlap`), cut `rounded` or `straight`; nil rides over it.
+    public var pinUnder: String?
 
     private enum CodingKeys: String, CodingKey {
         case size, fixedValue, width, minHeight, maxHeight, padding, margin, align
-        case background, borderColor, borderStyle, borderWidth, borderRadius, shadow
+        case background, borderColor, borderStyle, borderWidth, borderRadius, shadow, bleed, overlap, pin, pinCover, pinKeep, pinUnder
     }
 
     public init(from decoder: Decoder) throws {
@@ -43,6 +60,13 @@ public struct CmsBlockFrame: Codable, Equatable {
         borderWidth = c.cssValue(.borderWidth, number: .pixels)
         borderRadius = c.cssValue(.borderRadius, number: .pixels)
         shadow = c.cssValue(.shadow)
+        bleed = try? c.decodeIfPresent(Bool.self, forKey: .bleed)
+        overlap = (try? c.decodeIfPresent(Double.self, forKey: .overlap)).flatMap { $0.flatMap { $0 > 0 ? $0 : nil } }
+        pin = (try? c.decodeIfPresent(String.self, forKey: .pin)).flatMap { ["behind", "bottom"].contains($0) ? $0 : nil }
+        pinCover = (try? c.decodeIfPresent(String.self, forKey: .pinCover)).flatMap { $0 == "sheet" ? "sheet" : nil }
+        // 0 is kept: it cuts what scrolls at the content's top (below the status bar).
+        pinKeep = (try? c.decodeIfPresent(Double.self, forKey: .pinKeep)).flatMap { $0.flatMap { $0 >= 0 ? $0 : nil } }
+        pinUnder = (try? c.decodeIfPresent(String.self, forKey: .pinUnder)).flatMap { $0.flatMap { $0 == "rounded" || $0 == "straight" ? $0 : nil } }
     }
 }
 
@@ -94,11 +118,25 @@ public struct CmsContainerFrame: Codable, Equatable {
     public var borderRadius: String?
     public var shadow: String?
     public var fullBleed: Bool?
+    /// A sidebar layout's side widths in points (`sidebarWidth`, and
+    /// `leftSidebarWidth`/`rightSidebarWidth` beside it), read from the
+    /// layout itself, not its frame. The phone's drawer takes them, capped
+    /// to the screen.
+    public var sidebarWidth: Double?
+    public var leftSidebarWidth: Double?
+    public var rightSidebarWidth: Double?
 
     private enum CodingKeys: String, CodingKey {
         case width, minWidth, maxWidth, minHeight, maxHeight, padding, gap, background
         case direction, alignItems, justifyContent, wrap, overflow
         case borderColor, borderStyle, borderWidth, borderRadius, shadow, fullBleed
+    }
+
+    public init() {}
+
+    /// The drawer's width for a side: its own width, else the layout's.
+    public func sidebarWidth(left: Bool) -> Double? {
+        (left ? leftSidebarWidth : rightSidebarWidth) ?? sidebarWidth
     }
 
     public init(from decoder: Decoder) throws {
@@ -177,6 +215,7 @@ public indirect enum CmsPageBlocks: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case layout, items, frame, templateId, slots, columns, rowHeight, variant
+        case sidebarWidth, leftSidebarWidth, rightSidebarWidth
     }
 
     public init(from decoder: Decoder) throws {
@@ -202,10 +241,22 @@ public indirect enum CmsPageBlocks: Codable, Equatable {
         case "carousel":
             self = .carousel(items: try c.decode([CmsBlock].self, forKey: .items), frame: frame)
         case "sidebar":
+            // The side widths sit on the layout, beside its slots.
+            func width(_ key: CodingKeys) -> Double? {
+                (try? c.decodeIfPresent(Double.self, forKey: key)).flatMap { $0.flatMap { $0 > 0 ? $0 : nil } }
+            }
+            var withWidths = frame
+            let widths = (width(.sidebarWidth), width(.leftSidebarWidth), width(.rightSidebarWidth))
+            if widths.0 != nil || widths.1 != nil || widths.2 != nil {
+                if withWidths == nil { withWidths = CmsContainerFrame() }
+                withWidths?.sidebarWidth = widths.0
+                withWidths?.leftSidebarWidth = widths.1
+                withWidths?.rightSidebarWidth = widths.2
+            }
             self = .sidebar(
                 variant: try c.decode(String.self, forKey: .variant),
                 slots: try c.decode([String: CmsPageBlocks].self, forKey: .slots),
-                frame: frame
+                frame: withWidths
             )
         default:
             throw DecodingError.dataCorruptedError(
@@ -242,6 +293,9 @@ public indirect enum CmsPageBlocks: Codable, Equatable {
             try c.encode(variant, forKey: .variant)
             try c.encode(slots, forKey: .slots)
             try c.encodeIfPresent(frame, forKey: .frame)
+            try c.encodeIfPresent(frame?.sidebarWidth, forKey: .sidebarWidth)
+            try c.encodeIfPresent(frame?.leftSidebarWidth, forKey: .leftSidebarWidth)
+            try c.encodeIfPresent(frame?.rightSidebarWidth, forKey: .rightSidebarWidth)
         }
     }
 
@@ -291,8 +345,17 @@ public struct CmsPage: Codable, Identifiable, Equatable {
     public var nativeSidebarEdgeSwipe: Bool?
     /// The page carries its own chrome (sign-in, onboarding): no shell.
     public var hideShell: Bool?
+    /// `shown` (default) | `hidden`: no navigation title, and on iPhone the
+    /// bar stays hidden at the top of the scroll; a pushed page keeps its back button.
+    public var titleDisplay: String?
+    /// The site's masthead at the top (CmsMasthead.swift): true, a style's name,
+    /// or { style, title, subtitle, actions }. Drawn as a masthead block put first.
+    public var masthead: CmsJSON?
     /// A shell of the page's own instead of the site's.
     public var shellPageId: String?
+    /// `none`: no ☰ bar for the page's side regions (it opens them from its
+    /// own button); the edge swipe stays.
+    public var mobileBurgers: String?
 }
 
 /// Role-based page visibility — exact mirror of the web's
@@ -322,6 +385,8 @@ public struct CmsRenderDefinition: Codable {
     public var name: String?
     public var pages: [CmsPage]?
     public var queries: [CmsQueryDef]?
+    /// Saved views (a base query plus sources), beside the queries.
+    public var views: [CmsViewDef]?
     public var theme: CmsPortalThemeConfig?
     /// Page designated as the portal SHELL: it renders as persistent chrome
     /// (nav blocks) and routed pages render inside its `pageOutlet`.
@@ -337,6 +402,67 @@ public struct CmsRenderDefinition: Codable {
     public var cardViews: [CmsCardView]?
     public var portalConfig: CmsPortalConfig?
     public var mutations: [CmsMutationDef]?
+    public var functions: [CmsFunctionDef]?
+}
+
+/// Site-owned deterministic JavaScript calculation function (`CmsFunction` in
+/// `packages/shared-types/src/cmsFunctions.ts`), executed in an isolated
+/// QuickJS sandbox when a form expression calls `fn.<slug>(...)`.
+public struct CmsFunctionInputDef: Codable, Equatable {
+    public var name: String
+    /// `'number' | 'string' | 'boolean' | 'json'`
+    public var type: String
+    public var description: String?
+
+    public init(name: String, type: String, description: String? = nil) {
+        self.name = name
+        self.type = type
+        self.description = description
+    }
+}
+
+public struct CmsFunctionTestDef: Codable, Equatable {
+    public var name: String
+    public var input: [String: CmsJSON]
+    public var expect: CmsJSON
+
+    public init(name: String, input: [String: CmsJSON], expect: CmsJSON) {
+        self.name = name
+        self.input = input
+        self.expect = expect
+    }
+}
+
+public struct CmsFunctionDef: Codable, Equatable {
+    public var id: String
+    public var slug: String
+    public var name: String
+    public var description: String?
+    public var inputs: [CmsFunctionInputDef]
+    /// `'number' | 'string' | 'boolean'`
+    public var resultType: String
+    public var code: String
+    public var tests: [CmsFunctionTestDef]?
+
+    public init(
+        id: String,
+        slug: String,
+        name: String,
+        description: String? = nil,
+        inputs: [CmsFunctionInputDef],
+        resultType: String,
+        code: String,
+        tests: [CmsFunctionTestDef]? = nil
+    ) {
+        self.id = id
+        self.slug = slug
+        self.name = name
+        self.description = description
+        self.inputs = inputs
+        self.resultType = resultType
+        self.code = code
+        self.tests = tests
+    }
 }
 
 /// Shared column view (`columnViewRef` target): a named, query-scoped set of
@@ -373,9 +499,12 @@ public struct CmsMutationDef: Codable, Equatable {
     public var confirmMessage: String?
     public var successMessage: String?
     public var invalidateQueries: [String]?
+    /// The action contract: the inputs an action button asks for in a form
+    /// before it runs (`CmsActionForm`).
+    public var action: CmsActionConfigDef?
 
     private enum CodingKeys: String, CodingKey {
-        case slug, name, paramSources, confirmMessage, successMessage, invalidateQueries
+        case slug, name, paramSources, confirmMessage, successMessage, invalidateQueries, action
     }
 
     /// Lenient past the slug: a mutation is a side table to rendering, so an
@@ -388,6 +517,25 @@ public struct CmsMutationDef: Codable, Equatable {
         confirmMessage = try? c.decodeIfPresent(String.self, forKey: .confirmMessage)
         successMessage = try? c.decodeIfPresent(String.self, forKey: .successMessage)
         invalidateQueries = try? c.decodeIfPresent([String].self, forKey: .invalidateQueries)
+        action = try? c.decodeIfPresent(CmsActionConfigDef.self, forKey: .action)
+    }
+
+    public init(slug: String, name: String? = nil, paramSources: [String: CmsQueryParamSource]? = nil,
+                confirmMessage: String? = nil, successMessage: String? = nil,
+                invalidateQueries: [String]? = nil, action: CmsActionConfigDef? = nil) {
+        self.slug = slug; self.name = name; self.paramSources = paramSources
+        self.confirmMessage = confirmMessage; self.successMessage = successMessage
+        self.invalidateQueries = invalidateQueries; self.action = action
+    }
+
+    /// Whether its form is the record form (`CmsRecordFormSheet`) rather than
+    /// the plain input list: it has a layout (`action.form`), or an input the
+    /// plain list can't serve (hidden, computed, or a choice that fills others).
+    /// The web's one dialog serves all of them.
+    public var opensRecordForm: Bool {
+        action?.form != nil || (action?.inputs ?? []).contains {
+            $0.hidden == true || $0.fromComputed != nil || $0.optionsQuery?.fills != nil
+        }
     }
 }
 

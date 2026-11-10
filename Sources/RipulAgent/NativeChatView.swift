@@ -7,6 +7,12 @@ import UIKit
 import AppKit
 #endif
 
+private struct NativeChatFileReferenceGroup: Identifiable {
+    let id = UUID()
+    let references: [NativeChatFileReference]
+    let chatId: String
+}
+
 /// Full-featured native SwiftUI chat scroller ("Native Chat (beta)").
 ///
 /// Renders `NativeChatMessageStore.rows` — the grouped and enriched representation
@@ -25,53 +31,159 @@ public struct NativeChatView: View {
     @ObservedObject private var store: NativeChatMessageStore
     private let bridge: AgentBridge?
     private let topInset: CGFloat
+    /// The clearance below the rows with the composer open, and folded to its pill when
+    /// a host passes the fold (`ComposerFoldState`).
     private let bottomInset: CGFloat
+    private let foldedBottomInset: CGFloat?
+    private let fold: ComposerFoldState?
 
     @State private var activeToolbarMessageId: String? = nil
     @State private var highlightedMessageId: String? = nil
     @State private var zoomedImage: NativeChatImageAttachment? = nil
+    @State private var fileReferences: NativeChatFileReferenceGroup?
+    @State private var pendingFileReference: (href: String, chatId: String)?
     @State private var pendingLoadMoreAnchorId: String? = nil
     @State private var isLoadingMore: Bool = false
     @State private var displayedRows: [NativeChatRow]
     @State private var displayedTruncatedCount: Int
-    @State private var scrollCoordinator = NativeChatScrollCoordinator()
     @State private var rowActions = NativeChatRowActions()
-    @StateObject private var windowBand = NativeChatWindowBand()
+    /// Made once for the view's life, with its coordinator: `StateObject` runs
+    /// its closure only the first time. A coordinator made in `init` was made,
+    /// and given every row, each time the screen above was drawn again (any
+    /// change to the bridge), then thrown away.
+    @StateObject private var windowBand: NativeChatWindowBand
+    private var scrollCoordinator: NativeChatScrollCoordinator { windowBand.coordinator }
     @Environment(\.dynamicTypeSize) private var windowTextSize
+    /// False while the chat is not on screen (its tab behind Home, say): new
+    /// rows are held and drawn when it is shown. A chat left open behind Home
+    /// drew each streamed message as it came, 58-102 ms frames under a finger
+    /// scrolling Home on Peter's Duo (5 November 2026; docs/main-thread.md, rule 5).
+    @Environment(\.screenIsShown) private var screenIsShown
     /// How thinking is shown, the page's setting. Handed to each row rather
     /// than read from the environment, so the rows' `.equatable()` gate sees it.
     @State private var thinkingMode: ThinkingDisplayMode
+    #if os(iOS)
+    /// The owned UIKit list and its one viewport owner (docs/plans/native-chat-viewport-owner.md).
+    /// `ripul.nativeChatPerf.ownedList` set to NO brings back the SwiftUI scroller and its
+    /// coordinator, for an A/B; read when the chat is shown.
+    /// Held, not observed: this body draws nothing from the handle, and as a state object
+    /// each change of following (a fling reaching the end or leaving it) ran it in full. A
+    /// fling settling at the end on Peter's Duo showed a 35 ms frame with nothing else
+    /// named in it (9 November 2026). Its one publication reaches `updatePinnedToBottom`
+    /// through `onReceive`.
+    @State private var listHandle = NativeChatListHandle()
+    @State private var usesOwnedList: Bool
+    /// The chat `displayedRows` belong to, handed to the list with them.
+    @State private var ownedChatId: String?
+    /// The list's edges beside the system's tab rail, where its rows keep no gutter.
+    @State private var ownedRailEdges: Edge.Set = []
+    /// Until when new rows wait for the composer's clearance to finish dropping.
+    @State private var ownedHoldUntil: CFTimeInterval = 0
+    @State private var ownedFlushScheduled = false
+    #endif
 
     public init(store: NativeChatMessageStore, bridge: AgentBridge? = nil, topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
+        self.init(store: store, bridge: bridge, topInset: topInset, bottomInset: bottomInset,
+                  foldedBottomInset: nil, fold: nil)
+    }
+
+    init(store: NativeChatMessageStore, bridge: AgentBridge?, topInset: CGFloat, bottomInset: CGFloat,
+         foldedBottomInset: CGFloat?, fold: ComposerFoldState?) {
         self.store = store
         self.bridge = bridge
         self.topInset = topInset
         self.bottomInset = bottomInset
+        self.foldedBottomInset = foldedBottomInset
+        self.fold = fold
         self._thinkingMode = State(initialValue: bridge?.navigationStore.thinkingDisplayMode ?? .open)
         self._displayedRows = State(initialValue: store.rows)
         self._displayedTruncatedCount = State(initialValue: store.truncatedCount)
-        let coordinator = NativeChatScrollCoordinator()
-        let band = NativeChatWindowBand()
-        coordinator.configureWindow(rows: store.rows, publication: band)
-        self._scrollCoordinator = State(initialValue: coordinator)
-        self._windowBand = StateObject(wrappedValue: band)
+        self._windowBand = StateObject(wrappedValue: NativeChatWindowBand(rows: store.rows))
+        #if os(iOS)
+        self._usesOwnedList = State(initialValue: Self.ownedListSetting)
+        self._ownedChatId = State(initialValue: store.currentChatId)
+        #endif
     }
 
     public var body: some View {
+        let _ = ChatSlideProbe.markBody("NativeChatView") { Self._printChanges() }
         scroller
             .environment(\.openURL, OpenURLAction { url in
-                RipulSecureConnection.open(url) ? .handled : .systemAction
+                if let reference = NativeChatContextMentions.reference(in: url), let bridge {
+                    bridge.send([
+                        "type": "agent-framework:nativeChat:action",
+                        "op": "openChatReference",
+                        "chatId": store.currentChatId ?? "",
+                        "ref": reference,
+                    ])
+                    return .handled
+                }
+                if bridge != nil, let references = NativeChatFileReferences.references(in: url) {
+                    let chatId = store.currentChatId ?? ""
+                    if references.count == 1 { openHostFile(references[0].href, chatId: chatId) }
+                    else { fileReferences = NativeChatFileReferenceGroup(references: references, chatId: chatId) }
+                    return .handled
+                }
+                if let bridge, NativeChatFileReferences.isFileURL(url, pageURL: bridge.attachedWebView?.url) {
+                    openHostFile(url.absoluteString, chatId: store.currentChatId ?? "")
+                    return .handled
+                }
+                if RipulSecureConnection.open(url) { return .handled }
+                if let scheme = url.scheme?.lowercased(), ["http", "https", "mailto", "tel"].contains(scheme) {
+                    #if os(iOS)
+                    UIApplication.shared.open(url)
+                    return .handled
+                    #elseif os(macOS)
+                    NSWorkspace.shared.open(url)
+                    return .handled
+                    #endif
+                }
+                return .systemAction
             })
             .ripulSheet(item: $zoomedImage) { attachment in
                 NativeChatImageZoomSheet(attachment: attachment) {
                     zoomedImage = nil
                 }
             }
+            .ripulSheet(item: $fileReferences, onDismiss: {
+                if let pending = pendingFileReference {
+                    pendingFileReference = nil
+                    openHostFile(pending.href, chatId: pending.chatId)
+                }
+            }) { group in
+                NativeChatFileReferencesSheet(references: group.references) { reference in
+                    pendingFileReference = (reference.href, group.chatId)
+                    fileReferences = nil
+                }
+            }
+            .onChange(of: store.currentChatId) { _ in
+                pendingFileReference = nil
+                fileReferences = nil
+            }
+    }
+
+    private func openHostFile(_ href: String, chatId: String) {
+        bridge?.send(["type": "agent-framework:nativeChat:action", "op": "openFileReference", "chatId": chatId, "href": href])
     }
 
     private var scroller: some View {
         ScrollViewReader { proxy in
+            #if os(iOS)
+            if usesOwnedList { ownedList } else { scrollView(proxy: proxy) }
+            #else
             scrollView(proxy: proxy)
+            #endif
+        }
+        .overlay(alignment: .top) {
+            // Retry is an empty-load state. A stale failure from a background
+            // refresh must never cover a conversation that is already readable.
+            if !displayedRows.isEmpty, store.loadingState.phase == .loading {
+                loadingState
+                    .padding(12)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 20)
+                    .padding(.top, topInset + 8)
+            }
         }
         .onDisappear {
             handleDisappear()
@@ -79,11 +191,24 @@ public struct NativeChatView: View {
         .onChange(of: store.truncatedCount) { _, newCount in
             handleTruncatedCountChanged(newCount)
         }
-        .onChange(of: bottomInset) { _, _ in
-            handleBottomInsetChanged()
+        // The owned list hears of the composer folding from its own leaf.
+        .onChange(of: ownsList ? bottomInset : scrollerBottomInset) { old, new in
+            scrollCoordinator.entryTrace("bottomInset \(Int(old))->\(Int(new))")
+            handleBottomInsetChanged(dropping: new < old)
+        }
+        .onChange(of: topInset) { old, inset in
+            scrollCoordinator.entryTrace("topInset \(Int(old))->\(Int(inset))")
+            // Set on appear; the bar's window clearance can arrive after it.
+            scrollCoordinator.topInset = inset
         }
         .onChange(of: store.rows) { _, newRows in
             handleStoreRowsChanged(newRows)
+        }
+        // Shown again: the rows held while it was not, once a slide that
+        // brings it in has landed, so the catch-up is not drawn mid-slide.
+        .onChange(of: screenIsShown) { _, shown in
+            guard shown else { return }
+            ChatSlideProbe.afterSlide("nativeChat.catchUp") { flushHeldRows() }
         }
         .onChange(of: windowTextSize) { _, size in
             scrollCoordinator.windowTextMetrics = Self.windowMetrics(size, thinkingMode)
@@ -96,7 +221,42 @@ public struct NativeChatView: View {
             scrollCoordinator.windowTextMetrics = Self.windowMetrics(windowTextSize, mode)
             thinkingMode = mode
         }
-        .accessibilityIdentifier("NativeChatView.scroller")
+        #if os(iOS)
+        // Settings > Debug > Native Chat Performance promises a switch takes effect in the
+        // chat that is open: the other scroller appears, and its own appear handler places it.
+        .onReceive(NotificationCenter.default.publisher(for: NativeChatPerformance.changed)) { _ in
+            let owned = Self.ownedListSetting
+            if owned != usesOwnedList { usesOwnedList = owned }
+        }
+        #endif
+        .modifier(NativeChatScrollerIdentifier(active: !ownsList))
+    }
+
+    #if os(iOS)
+    /// Settings > Debug > Native Chat Performance > Owned chat list. A launch argument's
+    /// "NO" (`-ripul.nativeChatPerf.ownedList NO`) is read as well as a stored Bool.
+    private static var ownedListSetting: Bool {
+        let key = NativeChatPerformance.key(.ownedList)
+        return NativeChatPerformance.isEnabled(.ownedList)
+            && (UserDefaults.standard.object(forKey: key) == nil || UserDefaults.standard.bool(forKey: key))
+    }
+    #endif
+
+    /// The clearance below the rows as the SwiftUI scroller takes it: folded while the
+    /// composer is. Read only on that scroller's path; the owned list reads the fold in
+    /// `OwnedListClearance`, so a fold does not run this body.
+    private var scrollerBottomInset: CGFloat {
+        guard let fold, let foldedBottomInset, fold.collapsed else { return bottomInset }
+        return foldedBottomInset
+    }
+
+    /// The owned list is on (iPhone and Catalyst, unless switched off).
+    private var ownsList: Bool {
+        #if os(iOS)
+        return usesOwnedList
+        #else
+        return false
+        #endif
     }
 
     /// The page's thinking setting as the bridge hears it; nothing without a bridge.
@@ -122,6 +282,15 @@ public struct NativeChatView: View {
         return ScrollView {
             scrollContent
         }
+        .modifier(NativeChatScrollActivity(model: bridge?.scrollButton))
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        // A turn of the phone: only the rows near the screen are laid out inside it
+        // (`beginSizeTransition`). Not on the Mac, where a drag passes every width.
+        .background(SizeTransitionReader { [scrollCoordinator] current, new in
+            guard new.width != current.width else { return }
+            scrollCoordinator.beginSizeTransition()
+        })
+        #endif
         .modifier(NativeDefaultBottomScrollAnchor(
             shouldAnchorBottom: scrollCoordinator.isPinnedToBottom && store.pendingScrollRestoration?.following != false && scrollCoordinator.activeRestoration == nil
         ))
@@ -146,7 +315,254 @@ public struct NativeChatView: View {
         }
     }
 
+    #if os(iOS)
+    /// The owned list (docs/plans/native-chat-viewport-owner.md): one UIKit layout pass
+    /// lays the rows out and places the offset, `NativeChatViewport` deciding where.
+    /// Nothing here writes the offset or holds rows back for it.
+    private var ownedList: some View {
+        rowActions.configure(
+            onToggleToolbar: { id in toggleToolbar(for: id) },
+            onReply: { msg in startReply(to: msg) },
+            onScrollToMessage: { targetId in showOwnedMessage(id: targetId, highlight: true) },
+            onNavigateUserMessage: { id, dir in navigateOwnedUserMessage(from: id, direction: dir) },
+            onZoomImage: { img in zoomedImage = img }
+        )
+        return OwnedListClearance(content: ownedListContent, handle: listHandle,
+                                  foldedBottomInset: foldedBottomInset, fold: fold,
+                                  onFold: { holdOwnedRowsWhileClearanceDrops(seconds: 0.4) })
+            .reportRailEdges { edges in
+                if ownedRailEdges != edges { ownedRailEdges = edges }
+            }
+            .overlay(alignment: .top) {
+                if displayedRows.isEmpty {
+                    Group {
+                        if store.loadingState.phase == .ready {
+                            emptyState
+                        } else {
+                            loadingState
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 60)
+                        }
+                    }
+                    .padding(.top, NativeChatListScroller.edgePadding + (topInset > 0 ? topInset + NativeChatListScroller.rowSpacing : 0))
+                    .padding(.horizontal, RailGutters.standard)
+                }
+            }
+            .onAppear { handleOwnedAppear() }
+            .onChange(of: store.currentChatId) { oldID, _ in
+                handleOwnedChatChanged(previousChatID: oldID)
+            }
+            .onReceive(store.scrollCommands) { command in
+                handleOwnedScrollCommand(command)
+            }
+            // A turn later: the first value arrives as SwiftUI subscribes, mid-update.
+            .onReceive(listHandle.$isFollowing.removeDuplicates().receive(on: DispatchQueue.main)) { following in
+                updatePinnedToBottom(following)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                holdOwnedRowsWhileClearanceDrops(seconds: 0.45)
+            }
+    }
+
+    /// A send drops the composer's clearance twice: the keyboard going down, then the
+    /// composer shrinking as its text clears. While the chat follows its end, new rows
+    /// wait until the drop is over, so the sent message glides up once, above the
+    /// composer as it will rest, rather than up behind the tall composer and then down
+    /// with it (Peter, 5 November 2026: "anything over 1 line just appears").
+    private func holdOwnedRowsWhileClearanceDrops(seconds: CFTimeInterval) {
+        guard listHandle.isFollowingNow else { return }
+        ownedHoldUntil = max(ownedHoldUntil, CACurrentMediaTime() + seconds)
+    }
+
+    /// Publishes the store's rows once the clearance has stopped dropping; a second drop
+    /// (the composer after the keyboard) waits again.
+    private func publishOwnedRowsAfterClearanceDrop() {
+        guard !ownedFlushScheduled else { return }
+        ownedFlushScheduled = true
+        let wait = max(0, ownedHoldUntil - CACurrentMediaTime()) + 0.01
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+            ownedFlushScheduled = false
+            publishStoreRows()
+        }
+    }
+
+    private var ownedListContent: NativeChatListScroller.Content {
+        var content = NativeChatListScroller.Content()
+        content.chatId = ownedChatId
+        content.rows = displayedRows
+        var states: [String: Int] = [:]
+        if let id = activeToolbarMessageId { states[id, default: 0] |= 1 }
+        if let id = highlightedMessageId { states[id, default: 0] |= 2 }
+        content.rowStates = states
+        if displayedTruncatedCount > 0 || isLoadingMore {
+            content.header = AnyView(loadMoreBanner)
+            content.headerKey = "\(displayedTruncatedCount)|\(isLoadingMore)"
+        }
+        content.topInset = topInset
+        content.bottomInset = bottomInset
+        content.leadingGutter = ownedRailEdges.contains(.leading) ? 0 : RailGutters.standard
+        content.trailingGutter = ownedRailEdges.contains(.trailing) ? 0 : RailGutters.standard
+        content.textMetrics = Self.windowMetrics(windowTextSize, thinkingMode)
+        let store = store, bridge = bridge, actions = rowActions, thinking = thinkingMode
+        let toolbar = activeToolbarMessageId, highlighted = highlightedMessageId
+        content.makeRow = { row in
+            AnyView(NativeChatRowContainerView(
+                row: row,
+                isToolbarOpen: toolbar == row.id,
+                isHighlighted: highlighted == row.id,
+                thinkingMode: thinking,
+                store: store,
+                bridge: bridge,
+                actions: actions
+            )
+            .equatable())
+        }
+        return content
+    }
+
+    private func handleOwnedAppear() {
+        // The web chat can change the setting (its panels' close button folds
+        // them all) while this view is away; catch up whenever it is shown.
+        if let bridge { Task { await bridge.syncShowThinking() } }
+        listHandle.onNearTop = { requestLoadMore() }
+        listHandle.onUserScroll = {
+            if activeToolbarMessageId != nil { activeToolbarMessageId = nil }
+        }
+        listHandle.onRest = { syncOwnedPositionToWeb() }
+        listHandle.onScrollActivityChanged = { [weak model = bridge?.scrollButton] moving in
+            if model?.isScrolling != moving { model?.isScrolling = moving }
+        }
+        listHandle.onTrace = { [weak bridge] line in bridge?.handleConsoleLog(line) }
+        let handle = listHandle, store = store, bridge = bridge
+        store.captureLiveScrollSnapshot = { [weak handle, weak store, weak bridge] in
+            guard let handle, let store else { return nil }
+            return Self.ownedSnapshot(store: store, bridge: bridge, handle: handle)
+        }
+        if displayedTruncatedCount != store.truncatedCount {
+            displayedTruncatedCount = store.truncatedCount
+        }
+        publishOwnedRows(store.rows)
+        if let pending = store.pendingScrollRestoration {
+            store.pendingScrollRestoration = nil
+            restoreOwned(pending)
+        } else {
+            listHandle.enter()
+        }
+    }
+
+    private func handleOwnedChatChanged(previousChatID: String?) {
+        pendingLoadMoreAnchorId = nil
+        isLoadingMore = false
+        // Initial identity hydration can retain the very same mounted messages.
+        // A genuine switch (including an unrelated first backfill) starts fresh.
+        let previousIDs = Set(displayedRows.map(\.id))
+        let isHydration = previousChatID == nil && store.rows.contains { previousIDs.contains($0.id) }
+        if !isHydration { rowActions.rowStateRegistry.clear() }
+        displayedTruncatedCount = store.truncatedCount
+        // The list enters the new chat when its rows arrive with the chat's id.
+        publishOwnedRows(store.rows)
+        if let pending = store.pendingScrollRestoration {
+            store.pendingScrollRestoration = nil
+            restoreOwned(pending)
+        }
+    }
+
+    /// Rows as they come: the list keeps what is on screen still through any change,
+    /// so nothing is held for a coast, a jump or a restoration. Only a send's clearance
+    /// drop holds them, for the sent message's glide.
+    private func publishOwnedRows(_ rows: [NativeChatRow]) {
+        let chatId = store.currentChatId
+        let sameChat = chatId == ownedChatId
+        if sameChat, !displayedRows.isEmpty, CACurrentMediaTime() < ownedHoldUntil {
+            publishOwnedRowsAfterClearanceDrop()
+            return
+        }
+        if !sameChat { ownedChatId = chatId }
+        guard displayedRows != rows else { return }
+        // The person's own message at the tail: the chat follows again.
+        if sameChat, let last = rows.last, last.id != displayedRows.last?.id,
+           case .user(let message) = last, message.isOwnMessage {
+            listHandle.scrollToBottom(animated: true)
+        }
+        displayedRows = rows
+    }
+
+    private func handleOwnedScrollCommand(_ command: NativeChatScrollCommand) {
+        switch command {
+        case .enter:
+            listHandle.enter()
+        case .bottom(let animated):
+            listHandle.scrollToBottom(animated: animated)
+        case .userMessage(let direction):
+            let userIds = ownedUserMessageIds()
+            guard let target = direction == "down" ? userIds.last : userIds.first else { return }
+            showOwnedMessage(id: target, highlight: true)
+        case .message(let id, let highlight):
+            showOwnedMessage(id: id, highlight: highlight)
+        case .restore(let position):
+            store.pendingScrollRestoration = nil
+            restoreOwned(position)
+        }
+    }
+
+    /// The web chat's place: its row held where the page had it, or the end.
+    private func restoreOwned(_ position: NativeChatScrollPosition) {
+        store.lastScrollSnapshot = position
+        guard !position.following, let webRowId = position.webRowId,
+              let rowID = store.resolveNativeRowId(forWebRowId: webRowId) else {
+            listHandle.enter()
+            return
+        }
+        listHandle.hold(rowID: rowID, screenOffset: position.offset, chatId: position.chatId)
+    }
+
+    private func showOwnedMessage(id: String, highlight: Bool) {
+        listHandle.show(rowID: id, chatId: store.currentChatId)
+        if highlight { highlightMessage(id: id) }
+    }
+
+    private func navigateOwnedUserMessage(from currentId: String, direction: String) {
+        let userIds = ownedUserMessageIds()
+        guard let index = userIds.firstIndex(of: currentId) else { return }
+        let target = direction == "up" ? max(0, index - 1) : min(userIds.count - 1, index + 1)
+        showOwnedMessage(id: userIds[target], highlight: true)
+    }
+
+    private func ownedUserMessageIds() -> [String] {
+        store.rows.compactMap { row -> String? in
+            if case .user(let message) = row { return message.id }
+            return nil
+        }
+    }
+
+    /// Where the reader is, for the page: following, or the first row below the bar.
+    private static func ownedSnapshot(store: NativeChatMessageStore, bridge: AgentBridge?,
+                                      handle: NativeChatListHandle) -> NativeChatScrollPosition? {
+        let chatId = store.currentChatId ?? bridge?.currentSourceChatId ?? ""
+        guard !chatId.isEmpty, !store.rows.isEmpty, let position = handle.position() else {
+            return store.lastScrollSnapshot
+        }
+        guard !position.following, let rowID = position.rowID else {
+            return NativeChatScrollPosition(chatId: chatId, webRowId: nil, offset: 0, following: true)
+        }
+        return NativeChatScrollPosition(chatId: chatId, webRowId: store.resolveWebRowId(forNativeRowId: rowID),
+                                        offset: position.screenOffset, following: false)
+    }
+
+    private func syncOwnedPositionToWeb() {
+        guard let snapshot = Self.ownedSnapshot(store: store, bridge: bridge, handle: listHandle) else { return }
+        store.lastScrollSnapshot = snapshot
+        bridge?.send(NativeChatScrollCoordinator.syncPayload(snapshot))
+    }
+    #endif
+
     private func handleDisappear() {
+        #if os(iOS)
+        if usesOwnedList {
+            syncOwnedPositionToWeb()
+            return
+        }
+        #endif
         scrollCoordinator.stopFollowAnimation()
         if let snap = scrollCoordinator.captureSnapshot() {
             store.lastScrollSnapshot = snap
@@ -165,6 +581,9 @@ public struct NativeChatView: View {
         scrollCoordinator.resetForChatSwitch()
         displayedTruncatedCount = store.truncatedCount
         displayedRows = store.rows
+        // The window takes the new chat's rows before it plans its end, so the
+        // last chat's tail is never the band the new chat opens on.
+        scrollCoordinator.updateWindowRows(displayedRows)
         consumePendingRestorationOrScrollBottom(proxy: proxy)
     }
 
@@ -172,6 +591,15 @@ public struct NativeChatView: View {
         if isLoadingMore {
             isLoadingMore = false
         }
+        // Not on screen: taken with the rows when it is shown.
+        guard screenIsShown else { return }
+        #if os(iOS)
+        if usesOwnedList {
+            // The owned list lays out a banner change with its rows; nothing is held.
+            if displayedTruncatedCount != newCount { displayedTruncatedCount = newCount }
+            return
+        }
+        #endif
         if scrollCoordinator.shouldHoldRowPublication {
             scrollCoordinator.scheduleFlushHeldRowsAtRest()
         } else {
@@ -182,8 +610,16 @@ public struct NativeChatView: View {
         }
     }
 
-    private func handleBottomInsetChanged() {
+    private func handleBottomInsetChanged(dropping: Bool) {
+        #if os(iOS)
+        // The owned list takes a clearance change as its own displacement, in its layout.
+        if usesOwnedList {
+            if dropping { holdOwnedRowsWhileClearanceDrops(seconds: 0.4) }
+            return
+        }
+        #endif
         guard scrollCoordinator.isPinnedToBottom, !scrollCoordinator.isRestoring else { return }
+        scrollCoordinator.followTheKeyboard(dropping: dropping)
         scrollCoordinator.requestFollow()
     }
 
@@ -191,16 +627,36 @@ public struct NativeChatView: View {
         if isLoadingMore {
             isLoadingMore = false
         }
+        // Not on screen: held, as through a coast, and drawn when it is shown.
+        if !screenIsShown {
+            store.invalidateDirtyRowTracking()
+            return
+        }
+        #if os(iOS)
+        if usesOwnedList {
+            // Nothing is held: the list keeps what is on screen still through any change.
+            if displayedTruncatedCount != store.truncatedCount { displayedTruncatedCount = store.truncatedCount }
+            publishOwnedRows(newRows)
+            return
+        }
+        #endif
         if scrollCoordinator.shouldHoldRowPublication {
+            store.invalidateDirtyRowTracking()
             scrollCoordinator.scheduleFlushHeldRowsAtRest()
             return
         }
         if scrollCoordinator.holdsTailChange(from: displayedRows, to: newRows) {
+            store.invalidateDirtyRowTracking()
             return
         }
         if displayedTruncatedCount != store.truncatedCount {
             displayedTruncatedCount = store.truncatedCount
         }
+        #if os(iOS) && DEBUG
+        if !displayedRows.isEmpty, newRows.count > displayedRows.count + 4 {
+            scrollCoordinator.probeLanding(from: displayedRows.count, to: newRows.count)
+        }
+        #endif
         if displayedRows != newRows {
             displayedRows = newRows
         }
@@ -219,7 +675,13 @@ public struct NativeChatView: View {
                 loadMoreBanner
             }
             if displayedRows.isEmpty {
-                emptyState
+                if store.loadingState.phase == .ready {
+                    emptyState
+                } else {
+                    loadingState
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 60)
+                }
             } else {
                 if windowBand.snapshot.enabled {
                     VStack(alignment: .leading, spacing: 0) {
@@ -243,8 +705,8 @@ public struct NativeChatView: View {
                     chatRows(displayedRows)
                 }
             }
-            if bottomInset > 0 {
-                Color.clear.frame(height: bottomInset)
+            if scrollerBottomInset > 0 {
+                Color.clear.frame(height: max(0, scrollerBottomInset - Self.composerGapTrim))
             }
             // Bottom anchor placed AFTER bottomInset so scrolling to bottom
             // clears the floating ChatComposer and keyboard.
@@ -252,7 +714,8 @@ public struct NativeChatView: View {
                 .frame(height: 1)
                 .id(Self.bottomAnchor)
         }
-        .padding(.horizontal, 12)
+        // Beside the system's tab rail the safe area already keeps a margin.
+        .railGutters(12)
         .padding(.vertical, 12)
         .background(
             GeometryReader { geo in
@@ -328,8 +791,7 @@ public struct NativeChatView: View {
             return
         }
         if oldRows.isEmpty && !newRows.isEmpty {
-            scrollCoordinator.setFollowing(true)
-            scrollToBottomInitial(proxy: proxy)
+            openAtEnd(proxy: proxy)
             return
         }
         // If the user just sent a message at the tail, re-engage auto-follow.
@@ -347,7 +809,8 @@ public struct NativeChatView: View {
     }
 
     private func chatRows(_ rows: [NativeChatRow]) -> some View {
-        ForEach(rows) { row in
+        let markerOnly = scrollCoordinator.useMarkerFrames
+        return ForEach(rows) { row in
             NativeChatRowContainerView(
                 row: row,
                 isToolbarOpen: activeToolbarMessageId == row.id,
@@ -363,11 +826,15 @@ public struct NativeChatView: View {
                 NativeChatRowMarker(id: row.id, coordinator: scrollCoordinator)
             )
             .background(
-                GeometryReader { rowGeo in
-                    Color.clear.preference(
-                        key: NativeChatFramesKey.self,
-                        value: [row.id: rowGeo.frame(in: .named("NativeChatVStack"))]
-                    )
+                Group {
+                    if !markerOnly {
+                        GeometryReader { rowGeo in
+                            Color.clear.preference(
+                                key: NativeChatFramesKey.self,
+                                value: [row.id: rowGeo.frame(in: .named("NativeChatVStack"))]
+                            )
+                        }
+                    }
                 }
             )
         }
@@ -423,6 +890,8 @@ public struct NativeChatView: View {
         // A jump may target a row that is still held below the screen.
         scrollCoordinator.releaseHeldTailRows()
         switch command {
+        case .enter:
+            openAtEnd(proxy: proxy)
         case .bottom(let animated):
             scrollCoordinator.setFollowing(true)
             scrollCoordinator.requestFollow(forceInstant: !animated)
@@ -504,11 +973,13 @@ public struct NativeChatView: View {
         }
     }
 
-    private func scrollToBottomInitial(proxy: ScrollViewProxy) {
+    /// A chat that is entered (a switch, its first rows, the view appearing, the
+    /// app's `.enter`) opens at its end and is held there while it settles.
+    private func openAtEnd(proxy: ScrollViewProxy) {
         #if !os(iOS)
         proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
         #endif
-        scrollCoordinator.requestFollow(forceInstant: true)
+        scrollCoordinator.pinEntryToEnd()
         DispatchQueue.main.async {
             #if !os(iOS)
             proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
@@ -518,6 +989,12 @@ public struct NativeChatView: View {
     }
 
     private func flushHeldRows() {
+        #if os(iOS)
+        if usesOwnedList {
+            publishStoreRows()
+            return
+        }
+        #endif
         // Rows held through a coast stay held when they only change what is
         // below the screen of a reader away from the tail.
         if scrollCoordinator.holdsTailChange(from: displayedRows, to: store.rows) { return }
@@ -528,6 +1005,12 @@ public struct NativeChatView: View {
         if displayedTruncatedCount != store.truncatedCount {
             displayedTruncatedCount = store.truncatedCount
         }
+        #if os(iOS)
+        if usesOwnedList {
+            publishOwnedRows(store.rows)
+            return
+        }
+        #endif
         if displayedRows != store.rows {
             displayedRows = store.rows
         }
@@ -544,11 +1027,16 @@ public struct NativeChatView: View {
             scrollCoordinator.applyActiveRestorationStep()
             return
         }
-        scrollCoordinator.setFollowing(true)
-        scrollToBottomInitial(proxy: proxy)
+        openAtEnd(proxy: proxy)
     }
 
     private static let bottomAnchor = "native-chat-bottom-anchor"
+    /// Taken off the composer's clearance: this stack's own trailing space (its
+    /// spacing around the clearance and anchor, and its bottom padding, 33 pt)
+    /// comes on top of the clearance's gap, which left the last message about
+    /// 49 pt above the composer's glass. Peter, 5 November 2026: "the gap is a
+    /// bit big, halve it". About 24 pt now.
+    private static let composerGapTrim: CGFloat = 25
 
     private func requestLoadMore(force: Bool = false) {
         guard (force || store.truncatedCount > 0), !isLoadingMore else { return }
@@ -576,8 +1064,7 @@ public struct NativeChatView: View {
         } label: {
             HStack(spacing: 8) {
                 if isLoadingMore {
-                    ProgressView()
-                        .controlSize(.small)
+                    RenderServerSpinner(size: 16)
                 }
                 Text(isLoadingMore ? "Loading earlier messages…" : "Load \(displayedTruncatedCount) more messages")
                     .font(.ripul(.footnote, weight: .medium))
@@ -596,12 +1083,55 @@ public struct NativeChatView: View {
         .accessibilityIdentifier("NativeChatView.loadMore")
     }
 
+    private var loadingState: some View {
+        VStack(spacing: 10) {
+            if store.loadingState.phase == .failed {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                    .font(.ripulIcon(size: 24))
+                    .foregroundStyle(.ripul(.textSecondary))
+            } else if store.loadingState.fraction == nil {
+                ProgressView()
+                    .accessibilityLabel("Loading chat")
+            }
+            Text(store.loadingState.label)
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
+                .accessibilityIdentifier("NativeChatView.loadingLabel")
+            if let fraction = store.loadingState.fraction, store.loadingState.phase == .loading {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+                    .frame(maxWidth: 260)
+                    .accessibilityLabel("Chat loading progress")
+                    .accessibilityIdentifier("NativeChatView.loadingProgress")
+            }
+            if let detail = store.loadingState.detail {
+                Text(detail)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .monospacedDigit()
+            }
+            if store.loadingState.phase == .failed, let bridge {
+                Button("Retry") {
+                    guard let chatId = store.currentChatId else { return }
+                    store.applyLoadingState(.loading, chatId: chatId)
+                    bridge.send(["type": "agent-framework:nativeChat:action", "op": "retryLoad", "chatId": chatId])
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("NativeChatView.retryLoad")
+            }
+        }
+        .multilineTextAlignment(.center)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("NativeChatView.loading")
+    }
+
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.ripulIcon(size: 28))
                 .foregroundStyle(.ripul(.textTertiary))
             Text("No messages in this conversation yet.")
+                .accessibilityIdentifier("NativeChatView.empty")
                 .font(.ripul(.subheadline))
                 .foregroundStyle(.ripul(.textSecondary))
         }
@@ -610,10 +1140,45 @@ public struct NativeChatView: View {
     }
 }
 
+/// The SwiftUI scroller's identifier. The owned list's scroll view carries it itself: put
+/// on the list and its overlay, which make no one element, it replaced the identifiers of
+/// the empty and loading states inside (`NativeChatView.empty` read "NativeChatView.scroller").
+private struct NativeChatScrollerIdentifier: ViewModifier {
+    let active: Bool
+    func body(content: Content) -> some View {
+        if active { content.accessibilityIdentifier("NativeChatView.scroller") } else { content }
+    }
+}
+
+#if os(iOS)
+/// The owned list given the composer's clearance, folded or open. The fold is read here
+/// and not in `NativeChatView`, so the composer folding as the chat scrolls away from its
+/// end, and unfolding as it comes back, lays the list out again without running the
+/// chat's body (`ComposerFoldState`). `onFold` holds new rows while the clearance drops,
+/// as a drop the chat's body sees does.
+private struct OwnedListClearance: View {
+    let content: NativeChatListScroller.Content
+    let handle: NativeChatListHandle
+    let foldedBottomInset: CGFloat?
+    let fold: ComposerFoldState?
+    let onFold: () -> Void
+
+    var body: some View {
+        let folded = fold?.collapsed == true ? foldedBottomInset : nil
+        var clearance = content
+        if let folded { clearance.bottomInset = folded }
+        return NativeChatList(content: clearance, handle: handle)
+            .onChange(of: folded) { _, folded in
+                if let folded, folded < content.bottomInset { onFold() }
+            }
+    }
+}
+#endif
+
 /// Leaf publication: one assignment per band/data/filler change, never per scroll tick.
 @available(iOS 16.0, macOS 14.0, *)
 @MainActor
-private final class NativeChatWindowBand: ObservableObject {
+final class NativeChatWindowBand: ObservableObject {
     struct Snapshot {
         var enabled = false
         var rows: [NativeChatRow] = []
@@ -622,6 +1187,11 @@ private final class NativeChatWindowBand: ObservableObject {
         var serial: UInt64 = 0
     }
     @Published var snapshot = Snapshot()
+    let coordinator = NativeChatScrollCoordinator()
+
+    init(rows: [NativeChatRow]) {
+        coordinator.configureWindow(rows: rows, publication: self)
+    }
 }
 
 @available(iOS 16.0, macOS 14.0, *)
@@ -709,6 +1279,7 @@ struct NativeChatRowContainerView: View, Equatable {
         case .user(let msg):
             NativeUserMessageRowView(
                 message: msg,
+                bridge: bridge,
                 isToolbarOpen: isToolbarOpen,
                 isHighlighted: isHighlighted,
                 onToggleToolbar: { actions.onToggleToolbar?(msg.id) },
@@ -784,7 +1355,7 @@ private struct NativeConversationGapView: View {
 // MARK: - 2. Tool Group Row (NativeToolStripContent + TaskRuns + AgentComms)
 
 @available(iOS 16.0, macOS 14.0, *)
-private struct NativeToolGroupRowView: View {
+struct NativeToolGroupRowView: View {
     let group: NativeChatToolGroup
     let bridge: AgentBridge?
 
@@ -806,44 +1377,79 @@ private struct NativeToolGroupRowView: View {
 
             ForEach(group.taskRuns) { item in
                 NativeChatTaskRunEmbedView(item: item) {
-                    openToolDetails(initialCallId: item.id)
+                    let currentGroup = stripStore.latestGroup ?? group
+                    Self.openToolDetails(for: currentGroup, initialCallId: item.id, bridge: bridge)
                 }
             }
 
             ForEach(group.agentComms) { commsItem in
-                NativeChatAgentCommsRowView(item: commsItem) {
-                    openToolDetails(initialCallId: commsItem.id)
+                NativeChatAgentCommsRowView(
+                    item: commsItem,
+                    bridge: bridge,
+                    chatId: group.chatId
+                ) {
+                    let currentGroup = stripStore.latestGroup ?? group
+                    Self.openToolDetails(for: currentGroup, initialCallId: commsItem.id, bridge: bridge)
                 }
                 .nativeChatRowStateScope("agentComms:\(commsItem.id)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
-            syncStripStore()
-            stripStore.present { event in
-                handleStripEvent(event)
-            }
+            syncStripStore(for: group)
+            bindStripHandler(to: stripStore, group: group, presentIfNeeded: true)
         }
         .onDisappear {
             stripStore.hide()
         }
-        .onChange(of: group) { _, _ in
-            syncStripStore()
+        .onChange(of: group) { oldGroup, newGroup in
+            let store = rowStateContext.registry?.toolStripStore(forRow: rowStateContext.rowId, group: newGroup)
+                ?? fallbackStripStore
+            if oldGroup.tools != newGroup.tools
+                || oldGroup.updatedAt != newGroup.updatedAt
+                || oldGroup.id != newGroup.id
+                || oldGroup.chatId != newGroup.chatId {
+                NativeChatRowStateRegistry.syncToolStripStore(store, with: newGroup)
+            } else {
+                store.latestGroup = newGroup
+            }
+            bindStripHandler(to: store, group: newGroup, presentIfNeeded: false)
         }
         .accessibilityIdentifier("NativeChat.toolGroup.\(group.id)")
     }
 
-    private func syncStripStore() {
-        NativeChatRowStateRegistry.syncToolStripStore(activeStripStore, with: group)
+    private func syncStripStore(for targetGroup: NativeChatToolGroup) {
+        NativeChatRowStateRegistry.syncToolStripStore(activeStripStore, with: targetGroup)
     }
 
-    private func handleStripEvent(_ event: [String: Any]) {
+    private func bindStripHandler(
+        to store: NativeToolStripStore,
+        group targetGroup: NativeChatToolGroup,
+        presentIfNeeded: Bool
+    ) {
+        store.latestGroup = targetGroup
+        let handler: ([String: Any]) -> Void = { [weak store] event in
+            let currentGroup = store?.latestGroup ?? targetGroup
+            Self.handleStripEvent(event, for: currentGroup, bridge: bridge)
+        }
+        if presentIfNeeded || !store.isPresented {
+            store.present(send: handler)
+        } else {
+            store.updateHandler(handler)
+        }
+    }
+
+    static func handleStripEvent(
+        _ event: [String: Any],
+        for group: NativeChatToolGroup,
+        bridge: AgentBridge?
+    ) {
         guard let type = event["type"] as? String else { return }
         if type == "agent-framework:toolStrip:select",
            let toolId = event["toolId"] as? String {
             let matchingIds = group.callIdsByToolId[toolId] ?? [toolId]
             let latestCallId = matchingIds.last ?? toolId
-            openToolDetails(initialCallId: latestCallId)
+            openToolDetails(for: group, initialCallId: latestCallId, bridge: bridge)
         } else if type == "agent-framework:toolStrip:defaultAction",
                   let toolId = event["toolId"] as? String {
             let matchingIds = group.callIdsByToolId[toolId] ?? [toolId]
@@ -860,53 +1466,29 @@ private struct NativeToolGroupRowView: View {
         }
     }
 
-    private func openToolDetails(initialCallId: String) {
-        // 1. Open immediately with our local `ToolCallDetail` snapshots so offline/preview harnesses work out of the box
+    static func openToolDetails(
+        for group: NativeChatToolGroup,
+        initialCallId: String,
+        bridge: AgentBridge?
+    ) {
+        // 1. Open immediately with our local `ToolCallDetail` snapshots so offline/preview harnesses
+        //    and live rows show all calls in the row with the tapped call unfolded right away.
         if !group.calls.isEmpty, let bridge {
-            let callsJSON: [[String: Any]] = group.calls.map { call in
-                var dict: [String: Any] = [
-                    "id": call.id,
-                    "toolName": call.toolName,
-                    "status": call.status,
-                    "timestamp": call.timestamp,
-                    "arguments": call.arguments,
-                    "diagnostics": call.diagnostics,
-                    "rendererName": call.rendererName ?? call.toolName,
-                ]
-                if let res = call.result { dict["result"] = res }
-                if let err = call.error { dict["error"] = err }
-                if let ra = call.renderArguments,
-                   let data = try? JSONEncoder().encode(ra),
-                   let obj = try? JSONSerialization.jsonObject(with: data) {
-                    dict["renderArguments"] = obj
-                }
-                if let cp = call.commandPresentation {
-                    var cpDict: [String: Any] = [
-                        "label": cp.label,
-                        "symbol": cp.symbol,
-                        "command": cp.command,
-                        "summary": cp.summary,
-                    ]
-                    if let ec = cp.executionContext { cpDict["executionContext"] = ec }
-                    if let c = cp.color { cpDict["color"] = c }
-                    if let bl = cp.commandBreakLines { cpDict["commandBreakLines"] = bl }
-                    if let pl = cp.commandPipeLines { cpDict["commandPipeLines"] = pl }
-                    if let src = cp.source { cpDict["source"] = src }
-                    if let lang = cp.language { cpDict["language"] = lang }
-                    dict["commandPresentation"] = cpDict
-                }
-                return dict
-            }
-            let title = group.calls.count == 1
-                ? (group.calls.first?.commandPresentation?.label ?? group.calls.first?.toolName ?? "Tool call")
+            var seenIds = Set<String>()
+            let uniqueCalls = group.calls.filter { seenIds.insert($0.id).inserted }
+            let title = uniqueCalls.count == 1
+                ? (uniqueCalls.first?.commandPresentation?.label ?? uniqueCalls.first?.toolName ?? "Tool call")
                 : "Tool calls"
-            bridge.toolCallDetails.receive([
-                "requestId": "\(group.chatId):\(group.id)",
-                "title": title,
-                "chatId": group.chatId,
-                "initialCallId": initialCallId,
-                "calls": callsJSON,
-            ], opening: true)
+            bridge.toolCallDetails.apply(
+                ToolCallDetailsRequest(
+                    requestId: "\(group.chatId):\(group.id)",
+                    title: title,
+                    calls: uniqueCalls,
+                    initialCallId: initialCallId,
+                    chatId: group.chatId
+                ),
+                opening: true
+            )
         }
         // 2. Also ask the web forwarder to push any fresher details for this group
         bridge?.send([
@@ -950,6 +1532,7 @@ private struct NativeChatTaskRunEmbedView: View {
         }
         .onChange(of: item.snapshot) { _, next in
             state.snapshot = next
+            state.open = onOpen
         }
         #else
         Button(action: onOpen) {
@@ -974,6 +1557,8 @@ private struct NativeChatTaskRunEmbedView: View {
 @available(iOS 16.0, macOS 14.0, *)
 private struct NativeChatAgentCommsRowView: View {
     let item: NativeChatAgentCommsItem
+    var bridge: AgentBridge? = nil
+    var chatId: String? = nil
     let onOpen: () -> Void
     @NativeRowState("isExpanded") private var isExpanded = false
     @NativeRowState("showCallDetails") private var showCallDetails = false
@@ -981,6 +1566,23 @@ private struct NativeChatAgentCommsRowView: View {
     var body: some View {
         let comms = item.presentation
         let isError = comms.status.tone == "error"
+        if comms.kind == "present" && !isError {
+            NativeChatSessionListView(
+                items: comms.sessions ?? [],
+                title: comms.title,
+                emptyText: comms.status.tone == "pending" ? "Loading chats…" : "No chats to display",
+                framed: true,
+                bridge: bridge,
+                sourceChatId: chatId
+            )
+            .accessibilityIdentifier("NativeChat.agentComms.\(item.id)")
+        } else {
+            standardCardBody(comms: comms, isError: isError)
+        }
+    }
+
+    @ViewBuilder
+    private func standardCardBody(comms: AgentCommsPresentation, isError: Bool) -> some View {
         let statusColor: Color = isError
             ? .ripul(.danger)
             : comms.status.tone == "pending"
@@ -1032,6 +1634,17 @@ private struct NativeChatAgentCommsRowView: View {
             if isExpanded {
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
+                    if let sessions = comms.sessions {
+                        NativeChatSessionListView(
+                            items: sessions,
+                            title: nil,
+                            emptyText: comms.kind == "search" ? "No matching chats" : "No other agents",
+                            framed: false,
+                            bridge: bridge,
+                            sourceChatId: chatId
+                        )
+                    }
+
                     if let sent = comms.sent, !sent.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Sent message")
@@ -1257,8 +1870,7 @@ private struct NativeThinkingPeerView: View {
     @ViewBuilder
     private var statusIcon: some View {
         if isStreaming {
-            ProgressView()
-                .controlSize(.mini)
+            RenderServerSpinner(color: .ripul(.info), size: 12)
         } else {
             Image(systemName: "brain.head.profile")
                 .font(.ripulIcon(size: 11, weight: .semibold))
@@ -1272,6 +1884,7 @@ private struct NativeThinkingPeerView: View {
 @available(iOS 16.0, macOS 14.0, *)
 private struct NativeUserMessageRowView: View {
     let message: NativeChatMessage
+    let bridge: AgentBridge?
     let isToolbarOpen: Bool
     let isHighlighted: Bool
     let onToggleToolbar: () -> Void
@@ -1280,7 +1893,6 @@ private struct NativeUserMessageRowView: View {
     let onNavigateUserMessage: (String) -> Void
     let onZoomImage: (NativeChatImageAttachment) -> Void
 
-    @State private var copiedFeedback = false
     @NativeRowState("user.expandedTagId") private var expandedTagId: String? = nil
 
     private var showsGroupIncomingAvatar: Bool {
@@ -1289,21 +1901,20 @@ private struct NativeUserMessageRowView: View {
 
     var body: some View {
         VStack(alignment: showsGroupIncomingAvatar ? .leading : .trailing, spacing: 4) {
-            if isToolbarOpen {
-                userActionLozenges
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            }
-
             if showsGroupIncomingAvatar {
                 let senderText = (message.senderLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 NativeAdaptiveGroupBubbleLayout(hasSender: !senderText.isEmpty) {
                     groupBubbleChrome
-                    NativeParticipantAvatarView(
-                        name: message.senderLabel ?? "Participant",
-                        avatarUrl: message.avatarUrl,
-                        identity: message.senderUserId ?? message.senderLabel ?? "Participant",
-                        size: 30
-                    )
+                    if let sender = message.senderAgent {
+                        NativeChatAgentAvatar(sender: sender, sessionList: bridge?.sessionList)
+                    } else {
+                        NativeParticipantAvatarView(
+                            name: message.senderLabel ?? "Participant",
+                            avatarUrl: message.avatarUrl,
+                            identity: message.senderUserId ?? message.senderLabel ?? "Participant",
+                            size: 30
+                        )
+                    }
                     Text(senderText)
                         .font(.ripul(.caption, weight: .semibold))
                         .foregroundStyle(.ripul(.accent))
@@ -1344,11 +1955,14 @@ private struct NativeUserMessageRowView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(
-                    isHighlighted ? Color.ripul(.info) : Color.ripul(.separator),
-                    lineWidth: isHighlighted ? 2 : 1
-                )
+                .strokeBorder(bubbleStroke, lineWidth: isHighlighted ? 2 : 1)
         )
+        // An incoming bubble's actions start from its left edge, so a short one
+        // does not push them off the screen.
+        .overlay(alignment: .topLeading) {
+            if isToolbarOpen { edgeActions(from: .leading) }
+        }
+        .overlay(alignment: .bottomTrailing) { edgeTime }
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture {
             onToggleToolbar()
@@ -1384,14 +1998,43 @@ private struct NativeUserMessageRowView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(
-                    isHighlighted ? Color.ripul(.info) : Color.ripul(.separator),
-                    lineWidth: isHighlighted ? 2 : 1
-                )
+                .strokeBorder(bubbleStroke, lineWidth: isHighlighted ? 2 : 1)
         )
+        // What a tap reveals, on the bubble's edges as the web chat has them:
+        // over the bubble, so it never moves. Anchored at its right, running left
+        // past a short bubble rather than squeezing into it.
+        .overlay(alignment: .topTrailing) {
+            if isToolbarOpen { edgeActions(from: .trailing) }
+        }
+        .overlay(alignment: .bottomTrailing) { edgeTime }
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onTapGesture {
             onToggleToolbar()
+        }
+    }
+
+    private var bubbleStroke: Color {
+        isHighlighted ? Color.ripul(.info) : Color.ripul(.separator)
+    }
+
+    /// The actions on the bubble's top edge, at their own width from one side.
+    private func edgeActions(from side: HorizontalEdge) -> some View {
+        HStack(spacing: 6) { userActions }
+            .fixedSize()
+            .padding(side == .leading ? .leading : .trailing, 10)
+            // Centred on the top edge. An overlay shown behind an `if` drops its
+            // alignment guides, so it is moved by half a pill instead.
+            .offset(y: -NativeEdgeMetrics.pillHeight / 2)
+            .transition(.opacity)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("NativeChat.userToolbar.\(message.id)")
+    }
+
+    @ViewBuilder
+    private var edgeTime: some View {
+        if isToolbarOpen && message.timestamp > 0 {
+            NativeEdgeTime(timestamp: message.timestamp, ground: Color.ripul(.surface),
+                           tint: Color.ripul(.accent).opacity(0.08), outline: bubbleStroke)
         }
     }
 
@@ -1539,7 +2182,14 @@ private struct NativeUserMessageRowView: View {
 
             // Message prose
             if !message.content.isEmpty {
-                NativeChatMarkdownBody(content: message.content)
+                NativeChatMarkdownBody(content: message.content, contextMentions: true)
+                    .equatable()
+            }
+
+            // Context picked in the composer, after the words as on the web
+            ForEach(message.contextAttachments) { attachment in
+                NativeContextAttachmentCard(attachment: attachment)
+                    .nativeChatRowStateScope("contextAttachment:\(attachment.id)")
             }
 
             // Agent / scheduled delivery status caption
@@ -1551,37 +2201,12 @@ private struct NativeUserMessageRowView: View {
         }
     }
 
-    private var userActionLozenges: some View {
-        HStack(spacing: 6) {
-            if message.timestamp > 0 {
-                Text(formatTimestamp(message.timestamp))
-                    .font(.ripul(size: 11, weight: .medium))
-                    .foregroundStyle(.ripul(.textTertiary))
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(Color.ripul(.surface), in: Capsule())
-                    .overlay(Capsule().strokeBorder(Color.ripul(.separator), lineWidth: 1))
-            }
+    /// What a tap on the bubble reveals on its top edge.
+    @ViewBuilder
+    private var userActions: some View {
+        NativeMessageActions(message: message, bridge: bridge, includesSpeech: message.senderAgent != nil, onReply: onReply)
 
-            NativeBubbleActionLozenge(
-                title: "Reply",
-                systemImage: "arrowshape.turn.up.left",
-                action: onReply
-            )
-
-            NativeBubbleActionLozenge(
-                title: copiedFeedback ? "Copied" : "Copy",
-                systemImage: copiedFeedback ? "checkmark" : "doc.on.doc",
-                isActive: copiedFeedback
-            ) {
-                copyToClipboard(message.content)
-                copiedFeedback = true
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 1_200_000_000)
-                    copiedFeedback = false
-                }
-            }
-
+        if message.senderAgent == nil {
             NativeBubbleActionLozenge(
                 title: nil,
                 systemImage: "chevron.up",
@@ -1598,8 +2223,6 @@ private struct NativeUserMessageRowView: View {
                 onNavigateUserMessage("down")
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("NativeChat.userToolbar.\(message.id)")
     }
 
     private func contextTagSymbol(_ tagName: String) -> String {
@@ -1625,6 +2248,84 @@ private struct NativeUserMessageRowView: View {
     }
 }
 
+/// A context attachment sent with a user message: its title and source until
+/// tapped, then what was attached. The web's `ComposerContextAttachments` card.
+struct NativeContextAttachmentCard: View {
+    let attachment: NativeContextAttachment
+
+    @NativeRowState("contextAttachment.isExpanded") private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: attachment.icon.systemImage)
+                        .font(.ripulIcon(size: 16))
+                        .foregroundStyle(attachment.icon == .instructions ? .ripul(.accent) : .ripul(.textSecondary))
+                        .frame(width: 34, height: 34)
+                        .background(Color.ripul(.text).opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(attachment.title)
+                            .font(.ripul(.subheadline, weight: .semibold))
+                            .foregroundStyle(.ripul(.text))
+                        if !attachment.source.isEmpty {
+                            Text(attachment.source)
+                                .font(.ripul(.caption))
+                                .foregroundStyle(.ripul(.textSecondary))
+                        }
+                    }
+                    .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.ripulIcon(size: 12, weight: .semibold))
+                        .foregroundStyle(.ripul(.textSecondary))
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                }
+                .padding(10)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Shown" : "Hidden")
+            .accessibilityHint("Shows or hides what was attached")
+
+            if isExpanded {
+                Rectangle()
+                    .fill(.ripul(.separator))
+                    .frame(height: 1)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(attachment.scope)
+                        Spacer(minLength: 0)
+                        Text("Captured \(attachment.capturedLabel)")
+                    }
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
+                    Text(attachment.content.isEmpty ? "No text was included with this attachment." : attachment.content)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(.ripul(.text))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(12)
+            }
+        }
+        .background(.ripul(.surface), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(.ripul(.separator), lineWidth: 1)
+        )
+        // A tap in the card is the card's, not the bubble's (the web stops it too).
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onTapGesture {}
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("NativeChat.contextAttachment")
+    }
+}
+
 // MARK: - 5. Assistant Message & Interactive Question Row
 
 @available(iOS 16.0, macOS 14.0, *)
@@ -1642,11 +2343,10 @@ private struct NativeAssistantMessageRowView: View {
 
     @NativeRowState("assistant.showRespondentMeta") private var showRespondentMeta = false
     @NativeRowState("assistant.selectedTabIndex") private var selectedTabIndex = 0
-    @State private var copiedFeedback = false
-    @State private var addedFeedback = false
     @State private var metaCopiedFeedback = false
     @NativeRowState("assistant.multiSelectedValues") private var multiSelectedValues: Set<String> = []
     @NativeRowState("assistant.selectedDate", affectsHeight: false) private var selectedDate: Date = Date()
+    @State private var passwordText: String = ""
 
     private var effectiveTabs: [NativeMessageTab] {
         if !message.tabs.isEmpty { return message.tabs }
@@ -1668,7 +2368,7 @@ private struct NativeAssistantMessageRowView: View {
     }
 
     private var isMediaOnly: Bool {
-        !message.imageAttachments.isEmpty
+        (!message.imageAttachments.isEmpty || !message.videoAttachments.isEmpty)
             && message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (message.askUser?.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             && (message.askUser?.options.isEmpty ?? true)
@@ -1679,10 +2379,10 @@ private struct NativeAssistantMessageRowView: View {
 
     var body: some View {
         if isMediaOnly {
-            NativeAssistantImagesView(
-                attachments: message.imageAttachments,
-                onZoomImage: onZoomImage
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(message.videoAttachments) { NativeChatVideoView(attachment: $0) }
+                NativeAssistantImagesView(attachments: message.imageAttachments, onZoomImage: onZoomImage)
+            }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("NativeChat.assistantMessage.\(message.id)")
         } else {
@@ -1692,11 +2392,6 @@ private struct NativeAssistantMessageRowView: View {
 
     private var cardBody: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if isToolbarOpen || showRespondentMeta {
-                assistantActionLozenges
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-            }
-
             VStack(alignment: .leading, spacing: 10) {
                 // Expandable turn metadata panel (opened via respondent lozenge in toolbar or top notch)
                 if showRespondentMeta, let resp = message.respondent {
@@ -1740,7 +2435,8 @@ private struct NativeAssistantMessageRowView: View {
                     let clampedIdx = min(max(0, selectedTabIndex), effectiveTabs.count - 1)
                     let activeTab = effectiveTabs[clampedIdx]
                     if activeTab.markdown {
-                        NativeChatMarkdownBody(content: activeTab.content)
+                        NativeChatMarkdownBody(content: activeTab.content, streamsByBlock: true)
+                            .equatable()
                             .nativeChatRowStateScope("tab:\(clampedIdx)")
                     } else {
                         NativeToolCodeBlock(text: activeTab.content, title: activeTab.label, syntax: .automatic)
@@ -1752,9 +2448,10 @@ private struct NativeAssistantMessageRowView: View {
                 if let ask = message.askUser {
                     interactiveQuestionSection(ask)
                 } else if !message.content.isEmpty {
-                    NativeChatMarkdownBody(content: message.content)
+                    NativeChatMarkdownBody(content: message.content, streamsByBlock: true)
+                        .equatable()
                         .nativeChatRowStateScope("content")
-                } else if shownThinking == nil && effectiveTable == nil && message.imageAttachments.isEmpty {
+                } else if shownThinking == nil && effectiveTable == nil && message.imageAttachments.isEmpty && message.videoAttachments.isEmpty {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkle")
                             .font(.ripulIcon(.caption2))
@@ -1767,8 +2464,13 @@ private struct NativeAssistantMessageRowView: View {
 
                 // Structured Table when present
                 if let table = effectiveTable {
-                    NativeChatStructuredTableView(table: table)
+                    NativeChatStructuredTableView(table: table, options: message.askUser?.options ?? [],
+                                                  disabled: (message.askUser?.completed ?? false) || (message.askUser?.submitting ?? false)) { option in
+                        if let ask = message.askUser { selectOption(option, ask: ask) }
+                    }
                 }
+
+                ForEach(message.videoAttachments) { NativeChatVideoView(attachment: $0) }
 
                 // Attached / generated images
                 if !message.imageAttachments.isEmpty {
@@ -1777,6 +2479,24 @@ private struct NativeAssistantMessageRowView: View {
                         onZoomImage: onZoomImage
                     )
                 }
+
+                if let speech = message.speech, let call = message.toolCall?.detail {
+                    NativeChatSpeechDeliveryView(speech: speech, call: call, chatId: message.chatId, bridge: bridge)
+                }
+
+                // Words that went back to another agent as its reply say so: in the
+                // chat they look like an answer to whoever is reading.
+                if let status = message.deliveryStatus, !status.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrowshape.turn.up.right")
+                            .font(.ripulIcon(size: 10))
+                        Text(status)
+                            .font(.ripul(.caption))
+                    }
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("NativeChat.assistantDeliveryStatus.\(message.id)")
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 14)
@@ -1784,26 +2504,34 @@ private struct NativeAssistantMessageRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.ripul(.text).opacity(0.055))
+                    .fill(Self.cardGround)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(
-                        isHighlighted
-                            ? Color.ripul(.info)
-                            : isHighContext
-                                ? Color.ripul(.danger).opacity(0.6)
-                                : Color.ripul(.separator),
-                        lineWidth: isHighlighted ? 2 : 1
-                    )
+                    .strokeBorder(cardStroke, lineWidth: isHighlighted ? 2 : 1)
             )
-            .overlay(alignment: .topLeading) {
-                if !isToolbarOpen && !showRespondentMeta {
-                    respondentNotchLabel
-                        .offset(x: 10, y: -7)
+            // The respondent label, and what a tap reveals, on the card's edges as
+            // the web chat has them: over the card, so it never moves.
+            .overlay(alignment: .top) {
+                NativeEdgeActions(showsActions: isToolbarOpen) {
+                    if isToolbarOpen || showRespondentMeta {
+                        respondentActionLozenge
+                    } else {
+                        respondentNotchLabel
+                    }
+                } actions: {
+                    assistantActions
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("NativeChat.assistantToolbar.\(message.id)")
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if isToolbarOpen && message.timestamp > 0 {
+                    NativeEdgeTime(timestamp: message.timestamp, ground: Color.ripul(.canvas),
+                                   tint: Self.cardGround, outline: cardStroke)
                 }
             }
-            .padding(.top, (!isToolbarOpen && !showRespondentMeta) ? 6 : 0)
+            .padding(.top, NativeEdgeMetrics.pillHeight / 2)
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .onTapGesture {
                 onToggleToolbar()
@@ -1827,23 +2555,55 @@ private struct NativeAssistantMessageRowView: View {
         let glyph = identity?.glyph ?? resp?.icon ?? "✦"
         let tintColor = identity?.color ?? Color.ripul(.textSecondary)
 
-        HStack(spacing: 4) {
-            Text(glyph)
-                .font(.ripul(size: 11, weight: .bold))
-                .foregroundStyle(tintColor)
-            Text(label)
-                .font(.ripul(size: 12, weight: .medium))
-                .foregroundStyle(tintColor)
-            if let pct = resp?.contextPercent, pct >= 90 {
-                Text("\(pct)%")
+        // At rest, the web chat's compact label: cut into the card's top edge in
+        // the card's own fill, only its raised half outlined, in the card's border
+        // colour. A patch of the page's colour cut a square hole into the card
+        // instead (Peter, 27 Oct 2026). A tap on the card opens it into the pill.
+        NativeEdgeCutIn(edge: .top, ground: Color.ripul(.canvas), tint: Self.cardGround, outline: cardStroke) {
+            HStack(spacing: 4) {
+                respondentGlyph(glyph, size: 10, tint: tintColor)
+                Text(label)
                     .font(.ripul(size: 11, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.ripul(.danger))
+                    .tracking(0.11)
+                    .foregroundStyle(tintColor)
+                if let pct = resp?.contextPercent, pct >= 90 {
+                    Text("\(pct)%")
+                        .font(.ripul(size: 10, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.ripul(.danger))
+                }
             }
         }
-        .padding(.horizontal, 4)
-        .background(Color.ripul(.canvas))
         .accessibilityIdentifier("NativeChat.respondentNotch.\(message.id)")
+    }
+
+    /// The card's fill, over the chat's canvas.
+    private static var cardGround: Color { Color.ripul(.text).opacity(0.055) }
+
+    /// Sending replaces the glyph in the existing edge overlay. Neither the
+    /// label nor the card changes size while the answer is being delivered.
+    private func respondentGlyph(_ glyph: String, size: CGFloat, tint: Color) -> some View {
+        ZStack {
+            if let ask = message.askUser, ask.submitting && !ask.completed {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(tint)
+                    .accessibilityLabel("Sending answer")
+                    .accessibilityIdentifier("NativeChat.askUser.sending.\(message.id)")
+            } else {
+                Text(glyph)
+                    .font(.ripul(size: size, weight: .bold))
+                    .foregroundStyle(tint)
+            }
+        }
+        .frame(width: 14, height: 14)
+    }
+
+    /// The card's border: the cut-ins on its edges are outlined in it too.
+    private var cardStroke: Color {
+        isHighlighted ? Color.ripul(.info)
+            : isHighContext ? Color.ripul(.danger).opacity(0.6)
+            : Color.ripul(.separator)
     }
 
     @ViewBuilder
@@ -1854,6 +2614,8 @@ private struct NativeAssistantMessageRowView: View {
         let glyph = identity?.glyph ?? resp?.icon ?? "✦"
         let tintColor = identity?.color ?? Color.ripul(.textSecondary)
 
+        // Opened, the web chat's full pill: the family's height, outlined in the
+        // model's colour, with a chevron when the turn's details can be shown.
         Button {
             if resp != nil {
                 withAnimation(.easeInOut(duration: 0.18)) {
@@ -1861,36 +2623,39 @@ private struct NativeAssistantMessageRowView: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
-                Text(glyph)
-                    .font(.ripul(size: 11, weight: .bold))
-                    .foregroundStyle(tintColor)
+            HStack(spacing: 4) {
+                respondentGlyph(glyph, size: 12, tint: tintColor)
                 Text(label)
-                    .font(.ripul(size: 11, weight: .medium))
+                    .font(.ripul(size: 12, weight: .semibold))
+                    .tracking(0.24)
                     .foregroundStyle(tintColor)
-                if let pct = resp?.contextPercent {
+                // Only when it calls for attention, as the web's pill shows none:
+                // with it, the actions no longer fit beside the pill on a phone.
+                if let pct = resp?.contextPercent, pct >= 75 {
                     Text("\(pct)%")
                         .font(.ripul(size: 10, weight: .medium))
                         .monospacedDigit()
-                        .foregroundStyle(pct >= 90 ? Color.ripul(.danger) : pct >= 75 ? Color.ripul(.warning) : Color.ripul(.textTertiary))
+                        .foregroundStyle(pct >= 90 ? Color.ripul(.danger) : Color.ripul(.warning))
                 }
                 if resp != nil {
-                    Image(systemName: showRespondentMeta ? "chevron.up" : "info.circle")
-                        .font(.ripulIcon(size: 10))
-                        .foregroundStyle(.ripul(.textTertiary))
+                    Image(systemName: showRespondentMeta ? "chevron.up" : "chevron.down")
+                        .font(.ripulIcon(size: 8, weight: .bold))
+                        .foregroundStyle(tintColor.opacity(0.7))
                 }
             }
-            .padding(.horizontal, 9)
-            .frame(height: 24)
+            .padding(.leading, 7)
+            .padding(.trailing, 8)
+            .frame(height: NativeEdgeMetrics.pillHeight)
             .background(
                 Capsule()
                     .fill(Color.ripul(.surface))
                     .overlay(
-                        Capsule().strokeBorder(showRespondentMeta ? tintColor.opacity(0.6) : Color.ripul(.separator), lineWidth: 1)
+                        Capsule().strokeBorder(identity.map { $0.color.opacity(showRespondentMeta ? 0.6 : 0.4) } ?? Color.ripul(.separator), lineWidth: 1)
                     )
             )
         }
         .buttonStyle(.plain)
+        .transition(.opacity)
         .accessibilityIdentifier("NativeChat.respondentLozenge.\(message.id)")
     }
 
@@ -1994,6 +2759,7 @@ private struct NativeAssistantMessageRowView: View {
         VStack(alignment: .leading, spacing: 10) {
             if !ask.question.isEmpty {
                 NativeChatMarkdownBody(content: ask.question)
+                    .equatable()
             }
 
             if !ask.options.isEmpty {
@@ -2017,7 +2783,7 @@ private struct NativeAssistantMessageRowView: View {
                         .padding(.vertical, 8)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(multiSelectedValues.isEmpty)
+                    .disabled(multiSelectedValues.isEmpty || ask.submitting)
                     .accessibilityIdentifier("NativeChat.askUser.submitMulti.\(message.id)")
                 }
             }
@@ -2051,16 +2817,48 @@ private struct NativeAssistantMessageRowView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
+                    .disabled(ask.submitting)
                 }
             }
 
+            if ask.passwordInput && !ask.completed {
+                HStack(spacing: 8) {
+                    SecureField("Enter password or secret…", text: $passwordText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.ripul(.subheadline, family: .code))
+                        .disabled(ask.submitting)
+                        .onSubmit {
+                            let trimmed = passwordText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty, !ask.submitting else { return }
+                            let secret = passwordText
+                            passwordText = ""
+                            submitSingleAnswer(value: secret, label: "••••••••", ask: ask)
+                        }
+                        .accessibilityIdentifier("NativeChat.askUser.passwordField.\(message.id)")
+
+                    Button {
+                        let secret = passwordText
+                        passwordText = ""
+                        submitSingleAnswer(value: secret, label: "••••••••", ask: ask)
+                    } label: {
+                        Label("Send", systemImage: "lock.fill")
+                            .font(.ripul(.subheadline, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(passwordText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || ask.submitting)
+                    .accessibilityIdentifier("NativeChat.askUser.submitPassword.\(message.id)")
+                }
+            }
+
+            if !ask.completed, let error = ask.submissionError, !error.isEmpty {
+                Text(error)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.danger))
+                    .accessibilityIdentifier("NativeChat.askUser.error.\(message.id)")
+            }
+
             // Typed reply summary when completed and not already represented by a selected option or date picker
-            if ask.completed,
-               ask.dateInput == nil,
-               let answer = ask.answer,
-               !answer.isEmpty,
-               ask.selectedValues.isEmpty,
-               !ask.options.contains(where: { $0.value == answer || $0.label == answer }) {
+            if let answer = ask.freeTextAnswer {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.ripulIcon(size: 13))
@@ -2091,16 +2889,7 @@ private struct NativeAssistantMessageRowView: View {
         }()
 
         return Button {
-            guard !ask.completed else { return }
-            if ask.multiSelect {
-                if multiSelectedValues.contains(opt.value) {
-                    multiSelectedValues.remove(opt.value)
-                } else {
-                    multiSelectedValues.insert(opt.value)
-                }
-            } else {
-                submitSingleAnswer(value: opt.value, label: opt.label, ask: ask)
-            }
+            selectOption(opt, ask: ask)
         } label: {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: ask.multiSelect
@@ -2111,6 +2900,9 @@ private struct NativeAssistantMessageRowView: View {
                     .padding(.top, 2)
 
                 VStack(alignment: .leading, spacing: 2) {
+                    if let image = opt.image, image.hasPrefix("https://") {
+                        NativeChatChoiceImage(source: image)
+                    }
                     Text(opt.label)
                         .ripulText()
                         .font(.ripul(.subheadline, weight: isSelected ? .semibold : .regular))
@@ -2154,12 +2946,22 @@ private struct NativeAssistantMessageRowView: View {
             .opacity(ask.completed && !isSelected ? 0.6 : 1.0)
         }
         .buttonStyle(.plain)
-        .disabled(ask.completed)
+        .disabled(ask.completed || ask.submitting)
         .accessibilityIdentifier("NativeChat.askUser.option.\(opt.id)")
     }
 
+    private func selectOption(_ option: NativeAskUser.Option, ask: NativeAskUser) {
+        guard !ask.completed && !ask.submitting else { return }
+        if ask.multiSelect {
+            if multiSelectedValues.contains(option.value) { multiSelectedValues.remove(option.value) }
+            else { multiSelectedValues.insert(option.value) }
+        } else {
+            submitSingleAnswer(value: option.value, label: option.label, ask: ask)
+        }
+    }
+
     private func submitSingleAnswer(value: String, label: String, ask: NativeAskUser) {
-        store.markQuestionAnswered(messageId: message.id, answer: label, selectedValues: [value])
+        guard !ask.completed && !ask.submitting else { return }
         bridge?.send([
             "type": "agent-framework:nativeChat:action",
             "op": "answerQuestion",
@@ -2177,7 +2979,7 @@ private struct NativeAssistantMessageRowView: View {
         let chosen = ask.options.filter { multiSelectedValues.contains($0.value) }
         let values = chosen.map(\.value)
         let labels = chosen.map(\.label).joined(separator: ", ")
-        store.markQuestionAnswered(messageId: message.id, answer: labels, selectedValues: values)
+        guard !ask.completed && !ask.submitting && !values.isEmpty else { return }
         bridge?.send([
             "type": "agent-framework:nativeChat:action",
             "op": "answerQuestion",
@@ -2191,57 +2993,10 @@ private struct NativeAssistantMessageRowView: View {
         ])
     }
 
-    private var assistantActionLozenges: some View {
-        let copyText = message.askUser?.question.isEmpty == false ? (message.askUser?.question ?? "") : message.content
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                respondentActionLozenge
-
-                if message.timestamp > 0 {
-                    Text(formatTimestamp(message.timestamp))
-                        .font(.ripul(size: 11, weight: .medium))
-                        .foregroundStyle(.ripul(.textTertiary))
-                        .padding(.horizontal, 8)
-                        .frame(height: 24)
-                        .background(Color.ripul(.surface), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.ripul(.separator), lineWidth: 1))
-                }
-
-                NativeBubbleActionLozenge(
-                    title: "Reply",
-                    systemImage: "arrowshape.turn.up.left",
-                    action: onReply
-                )
-
-                NativeBubbleActionLozenge(
-                    title: copiedFeedback ? "Copied" : "Copy",
-                    systemImage: copiedFeedback ? "checkmark" : "doc.on.doc",
-                    isActive: copiedFeedback
-                ) {
-                    copyToClipboard(copyText)
-                    copiedFeedback = true
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 1_200_000_000)
-                        copiedFeedback = false
-                    }
-                }
-
-                NativeBubbleActionLozenge(
-                    title: addedFeedback ? "Added" : "Add",
-                    systemImage: addedFeedback ? "checkmark" : "plus.rectangle.on.rectangle",
-                    isActive: addedFeedback
-                ) {
-                    appendToClipboard(copyText)
-                    addedFeedback = true
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 1_200_000_000)
-                        addedFeedback = false
-                    }
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("NativeChat.assistantToolbar.\(message.id)")
+    /// What a tap on the card reveals on its top edge, beside the respondent pill.
+    @ViewBuilder
+    private var assistantActions: some View {
+        NativeMessageActions(message: message, bridge: bridge, includesSpeech: true, onReply: onReply)
     }
 
     private func severityColor(_ severity: String?) -> Color {
@@ -2282,29 +3037,6 @@ private struct NativeUserNoteRowView: View {
 
     private var noteCard: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if isToolbarOpen {
-                HStack(spacing: 6) {
-                    NativeBubbleActionLozenge(
-                        title: isExpanded ? "Collapse" : "Expand",
-                        systemImage: isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
-                    }
-                    NativeBubbleActionLozenge(
-                        title: copiedFeedback ? "Copied" : "Copy",
-                        systemImage: copiedFeedback ? "checkmark" : "doc.on.doc",
-                        isActive: copiedFeedback
-                    ) {
-                        copyToClipboard(message.content)
-                        copiedFeedback = true
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 1_200_000_000)
-                            copiedFeedback = false
-                        }
-                    }
-                }
-            }
-
             HStack(spacing: 0) {
                 Rectangle()
                     .fill(noteAccent)
@@ -2347,6 +3079,36 @@ private struct NativeUserNoteRowView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(noteAccent.opacity(0.25), lineWidth: 1)
             )
+            // What a tap reveals, cut into the note's top edge at its right as the
+            // web chat's note has it: over the note, so it never moves.
+            .overlay(alignment: .topTrailing) {
+                if isToolbarOpen {
+                    HStack(spacing: 6) {
+                        NativeBubbleActionLozenge(
+                            title: isExpanded ? "Collapse" : "Expand",
+                            systemImage: isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+                        }
+                        NativeBubbleActionLozenge(
+                            title: copiedFeedback ? "Copied" : "Copy",
+                            systemImage: copiedFeedback ? "checkmark" : "doc.on.doc",
+                            isActive: copiedFeedback
+                        ) {
+                            copyToClipboard(message.content)
+                            copiedFeedback = true
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                                copiedFeedback = false
+                            }
+                        }
+                    }
+                    .fixedSize()
+                    .padding(.trailing, 10)
+                    .offset(y: -NativeEdgeMetrics.pillHeight / 2)
+                    .transition(.opacity)
+                }
+            }
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .onTapGesture { onToggleToolbar() }
         }
@@ -3190,8 +3952,7 @@ private struct NativeArtefactCardContentView: View {
 
             if model.isLoading && !model.hasLoaded {
                 HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
+                    RenderServerSpinner(size: 16)
                     Text("Opening widget…")
                         .font(.ripul(.footnote))
                         .foregroundStyle(.ripul(.textSecondary))
@@ -3340,8 +4101,7 @@ private struct NativeArtefactCardContentView: View {
             } label: {
                 HStack(spacing: 6) {
                     if model.isBusy {
-                        ProgressView()
-                            .controlSize(.small)
+                        RenderServerSpinner(size: 16)
                     }
                     Text(model.runLabel)
                         .font(.ripul(.subheadline, weight: .semibold))
@@ -3675,6 +4435,10 @@ private struct NativeCliEventSeamRowView: View {
 @available(iOS 16.0, macOS 14.0, *)
 private struct NativeChatStructuredTableView: View {
     let table: NativeMessageTable
+    let options: [NativeAskUser.Option]
+    let disabled: Bool
+    let onSelect: (NativeAskUser.Option) -> Void
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
@@ -3695,15 +4459,25 @@ private struct NativeChatStructuredTableView: View {
                     .gridCellUnsizedAxes(.horizontal)
 
                 ForEach(Array(table.rows.enumerated()), id: \.offset) { idx, row in
+                    let option = table.matchingOption(for: row, options: options)
+                    let link = row["_link"].flatMap(URL.init(string:))
+                    let interactive = !disabled && (option != nil || link != nil)
                     GridRow {
                         ForEach(table.columns) { col in
-                            Text(row[col.key] ?? "")
-                                .font(.ripul(.caption))
-                                .foregroundStyle(.ripul(.textSecondary))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(idx.isMultiple(of: 2) ? Color.clear : Color.ripul(.text).opacity(0.03))
+                            Button {
+                                if let option { onSelect(option) }
+                                if let link { openURL(link) }
+                            } label: {
+                                Text(row[col.key] ?? "")
+                                    .font(.ripul(.caption))
+                                    .foregroundStyle(.ripul(interactive ? .info : .textSecondary))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(idx.isMultiple(of: 2) ? Color.clear : Color.ripul(.text).opacity(0.03))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!interactive)
                         }
                     }
                 }
@@ -3938,6 +4712,191 @@ private struct NativeAdaptiveGroupBubbleLayout: Layout {
     }
 }
 
+/// The pills on a bubble's edges, as the web chat sizes them (`bubbleActionToolbar.ts`).
+private enum NativeEdgeMetrics {
+    /// Every pill a tap reveals (the open respondent label and the actions): one
+    /// height, so the row reads as one family (the web's LOZENGE_HEIGHT).
+    static let pillHeight: CGFloat = 22
+    /// A compact label cut into an edge at rest: the respondent label, the time.
+    static let cutInHeight: CGFloat = 16
+}
+
+/// What a tap on a bubble reveals, cut into its top edge as the web chat's
+/// bubbleActions are: centred on the edge, after `leading` at the left,
+/// right-aligned, scrolling on their own when they do not fit. Drawn over the
+/// bubble, so opening them moves nothing: a row above it pushed the bubble down
+/// (Peter, 27 Oct 2026).
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeEdgeActions<Leading: View, Actions: View>: View {
+    let showsActions: Bool
+    let leading: Leading
+    let actions: Actions
+
+    init(showsActions: Bool, @ViewBuilder leading: () -> Leading, @ViewBuilder actions: () -> Actions) {
+        self.showsActions = showsActions
+        self.leading = leading()
+        self.actions = actions()
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            leading
+            if showsActions {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { actions }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) { actions }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .alignmentGuide(.top) { $0[VerticalAlignment.center] }
+    }
+}
+
+/// A compact label cut into a bubble's edge, as the web chat's resting respondent
+/// label and its time are: in the bubble's own fill, so its inner half is the
+/// bubble, with only the half outside it outlined, in the bubble's border colour.
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeEdgeCutIn<Content: View>: View {
+    let edge: VerticalEdge
+    /// The bubble's fill, opaque: its ground, then what is laid over it.
+    let ground: Color
+    let tint: Color
+    let outline: Color
+    let content: Content
+
+    init(edge: VerticalEdge, ground: Color, tint: Color, outline: Color, @ViewBuilder content: () -> Content) {
+        self.edge = edge
+        self.ground = ground
+        self.tint = tint
+        self.outline = outline
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(.horizontal, 6)
+            .frame(height: NativeEdgeMetrics.cutInHeight)
+            .background {
+                Capsule().fill(ground)
+                Capsule().fill(tint)
+                Capsule()
+                    .strokeBorder(outline, lineWidth: 1)
+                    .mask(alignment: edge == .top ? .top : .bottom) {
+                        Rectangle().frame(height: NativeEdgeMetrics.cutInHeight / 2)
+                    }
+            }
+    }
+}
+
+/// A bubble's time, cut into its bottom edge at the right while its actions show.
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeEdgeTime: View {
+    let timestamp: Double
+    let ground: Color
+    let tint: Color
+    let outline: Color
+
+    var body: some View {
+        NativeEdgeCutIn(edge: .bottom, ground: ground, tint: tint, outline: outline) {
+            Text(formatTimestamp(timestamp))
+                .font(.ripul(size: 11, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.ripul(.textTertiary))
+        }
+        .padding(.trailing, 10)
+        // Centred on the bottom edge. Shown behind an `if`, an overlay drops
+        // its alignment guides, so it is moved by half its height instead.
+        .offset(y: NativeEdgeMetrics.cutInHeight / 2)
+        .transition(.opacity)
+        .accessibilityIdentifier("NativeChat.time")
+    }
+}
+
+/// One toolbar for assistant panels and incoming cross-chat messages.
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeMessageActions: View {
+    let message: NativeChatMessage
+    let bridge: AgentBridge?
+    let includesSpeech: Bool
+    let onReply: () -> Void
+    @State private var copiedFeedback = false
+
+    var body: some View {
+        let copyText = message.askUser?.question.isEmpty == false ? (message.askUser?.question ?? "") : message.content
+        NativeBubbleActionLozenge(
+            title: "Reply",
+            systemImage: "arrowshape.turn.up.left",
+            action: onReply
+        )
+
+        NativeBubbleActionLozenge(
+            title: copiedFeedback ? "Copied" : "Copy",
+            systemImage: copiedFeedback ? "checkmark" : "doc.on.doc",
+            isActive: copiedFeedback
+        ) {
+            copyToClipboard(copyText)
+            copiedFeedback = true
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                copiedFeedback = false
+            }
+        }
+
+        if includesSpeech, SpeechPreferences.readAloudEnabled,
+           !NativeChatReadAloudController.panelText(for: message).isEmpty {
+            NativeMessageSpeakLozenge(message: message, bridge: bridge)
+        }
+    }
+}
+
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeMessageSpeakLozenge: View {
+    let message: NativeChatMessage
+    let bridge: AgentBridge?
+    @ObservedObject private var readAloud = NativeChatReadAloudController.shared
+
+    var body: some View {
+        let phase = readAloud.state(for: message.id)
+        if phase == .idle {
+            Menu {
+                Button {
+                    readAloud.play(message: message, mode: .quick, bridge: bridge)
+                } label: {
+                    Label("Quick overview", systemImage: "text.quote")
+                }
+                Button {
+                    readAloud.play(message: message, mode: .detailed, bridge: bridge)
+                } label: {
+                    Label("Detailed summary", systemImage: "text.alignleft")
+                }
+            } label: {
+                NativeBubbleActionLozengeLabel(
+                    title: "Speak",
+                    systemImage: "speaker.wave.2",
+                    isActive: false
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Speak")
+        } else {
+            NativeBubbleActionLozenge(
+                title: phase == .loading ? "…" : "Stop",
+                systemImage: phase == .loading ? "waveform" : "stop.fill",
+                isActive: true,
+                accessibilityLabel: "Stop speaking"
+            ) {
+                readAloud.stop()
+            }
+        }
+    }
+}
+
 @available(iOS 16.0, macOS 14.0, *)
 private struct NativeBubbleActionLozenge: View {
     let title: String?
@@ -3948,28 +4907,44 @@ private struct NativeBubbleActionLozenge: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.ripulIcon(size: 11, weight: .semibold))
-                if let title {
-                    Text(title)
-                        .font(.ripul(size: 11, weight: .medium))
-                }
-            }
-            .foregroundStyle(isActive ? Color.ripul(.success) : Color.ripul(.textSecondary))
-            .padding(.horizontal, title != nil ? 9 : 7)
-            .frame(height: 24)
-            .background(
-                Capsule()
-                    .fill(Color.ripul(.surface))
-                    .overlay(
-                        Capsule()
-                            .strokeBorder(isActive ? Color.ripul(.success).opacity(0.5) : Color.ripul(.separator), lineWidth: 1)
-                    )
+            NativeBubbleActionLozengeLabel(
+                title: title,
+                systemImage: systemImage,
+                isActive: isActive
             )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel ?? title ?? "Action")
+    }
+}
+
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeBubbleActionLozengeLabel: View {
+    let title: String?
+    let systemImage: String
+    var isActive: Bool = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.ripulIcon(size: 11, weight: .semibold))
+            if let title {
+                Text(title)
+                    .font(.ripul(size: 11, weight: .semibold))
+                    .tracking(0.22)
+            }
+        }
+        .foregroundStyle(isActive ? Color.ripul(.success) : Color.ripul(.textSecondary))
+        .padding(.horizontal, title != nil ? 8 : 7)
+        .frame(height: NativeEdgeMetrics.pillHeight)
+        .background(
+            Capsule()
+                .fill(Color.ripul(.surface))
+                .overlay(
+                    Capsule()
+                        .strokeBorder(isActive ? Color.ripul(.success).opacity(0.5) : Color.ripul(.separator), lineWidth: 1)
+                )
+        )
     }
 }
 
@@ -4042,8 +5017,8 @@ private struct NativeSwipeToReplyModifier: ViewModifier {
         }
     }
 
-    private func dragEnded() {
-        let shouldFire = armed
+    private func dragEnded(shouldTrigger: Bool = true) {
+        let shouldFire = shouldTrigger && armed
         withAnimation(.spring(response: 0.26, dampingFraction: 0.78)) {
             dragOffset = 0
             armed = false
@@ -4053,50 +5028,6 @@ private struct NativeSwipeToReplyModifier: ViewModifier {
         }
     }
 }
-
-#if os(iOS)
-@available(iOS 18.0, *)
-private struct NativeReplySwipeGesture: UIGestureRecognizerRepresentable {
-    let onChanged: (CGFloat) -> Void
-    let onEnded: () -> Void
-
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let pan = UIPanGestureRecognizer()
-        pan.delegate = context.coordinator
-        return pan
-    }
-
-    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        switch recognizer.state {
-        case .began, .changed:
-            onChanged(recognizer.translation(in: recognizer.view).x)
-        case .ended, .cancelled, .failed:
-            onEnded()
-        default:
-            break
-        }
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
-            let moved = pan.translation(in: pan.view)
-            return moved.x > 0 && abs(moved.x) > abs(moved.y) * 1.6
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-        ) -> Bool {
-            true
-        }
-    }
-}
-#endif
 
 @available(iOS 16.0, macOS 14.0, *)
 private struct NativeChatAttachmentThumbnail: View {
@@ -4301,37 +5232,35 @@ private struct NativeChatAttachmentImage: View {
     }
 }
 
-@available(iOS 16.0, macOS 14.0, *)
-private struct NativeChatImageZoomSheet: View {
-    let attachment: NativeChatImageAttachment
-    let onClose: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            ScrollView([.horizontal, .vertical]) {
-                NativeChatAttachmentImage(attachment: attachment)
-                    .scaledToFit()
-                    .padding()
-            }
-            .navigationTitle(attachment.name ?? "Image")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: onClose)
-                }
-            }
-        }
-    }
-}
-
 // MARK: - Helpers
 
 private struct NativeChatFramesKey: PreferenceKey {
     static var defaultValue: [String: CGRect] { [:] }
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// Only the button observes this state: starting a flick must not redraw the
+/// chat. Tracking, dragging, deceleration and animated jumps all hide it until
+/// SwiftUI reports idle, including the coast after the finger has lifted.
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeChatScrollActivity: ViewModifier {
+    let model: ScrollButtonModel?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content
+                .onScrollPhaseChange { _, phase in
+                    let moving = phase != .idle
+                    if model?.isScrolling != moving { model?.isScrolling = moving }
+                }
+                .onDisappear {
+                    if model?.isScrolling == true { model?.isScrolling = false }
+                }
+        } else {
+            content
+        }
     }
 }
 
@@ -4372,6 +5301,8 @@ final class NativeChatScrollCoordinator: NSObject {
     private var followDisplayLink: CADisplayLink?
     private var decelerationWaitDisplayLink: CADisplayLink?
     private var lastFollowFrameTimestamp: CFTimeInterval = 0
+    /// The follow glide's speed, in points a second toward the end.
+    private var followVelocity: CGFloat = 0
     private var isWritingOffset: Bool = false
     private var lastObservedOffsetY: CGFloat = 0
     private var pendingFollowAfterDeceleration: Bool = false
@@ -4389,6 +5320,9 @@ final class NativeChatScrollCoordinator: NSObject {
     private var perfLastFrameTimestamp: CFTimeInterval = 0
     private var perfFrames: Int = 0
     private var perfHitches: Int = 0
+    // What the hitches cost: time past each late frame's deadline, and the longest gap.
+    private var perfLostMs: Double = 0
+    private var perfWorstGapMs: Double = 0
     private var perfIdleFrames: Int = 0
     // Frames counted while settling with no finger or fling. Phone and Catalyst
     // builds are Debug, so this link runs on the devices people use: geometry that
@@ -4415,6 +5349,25 @@ final class NativeChatScrollCoordinator: NSObject {
     private var perfRowPublications: Int = 0
     private var perfRowPublicationMs: Double = 0
     private var perfTailHolds: Int = 0
+    // A page landing at rest, which the scroll line never sees (it counts only
+    // while scrolling): the wait for the next frame, then the worst frame after.
+    private var landingProbeLink: CADisplayLink?
+    private var landingProbeStart: CFTimeInterval = 0
+    private var landingProbeLast: CFTimeInterval = 0
+    private var landingProbeFirstMs: Double = -1
+    private var landingProbeWorstMs: Double = 0
+    private var landingProbeLostMs: Double = 0
+    private var landingProbeFrames = 0
+    private var landingProbeRows = (from: 0, to: 0)
+    /// Offset writes that moved a following chat at once rather than gliding, as
+    /// "reason:points", for the follow harness (`NativeChatFollowUITests`). Kept
+    /// to the last 200.
+    static var debugInstantFollows: [String] = []
+    static func noteInstantFollow(_ reason: String, points: CGFloat) {
+        guard abs(points) >= 1 else { return }
+        if debugInstantFollows.count >= 200 { debugInstantFollows.removeFirst() }
+        debugInstantFollows.append("\(reason):\(Int(points.rounded()))")
+    }
     #endif
     private lazy var tapAwayRecognizer: UITapGestureRecognizer = {
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleScrollViewTapped))
@@ -4426,9 +5379,23 @@ final class NativeChatScrollCoordinator: NSObject {
     }()
     #endif
     private weak var windowPublication: NativeChatWindowBand?
-    private var windowEnabled = false
+    #if os(iOS) && DEBUG
+    /// This scroller's `[LISTPERF]` lines, to set beside the owned list's.
+    private lazy var listFrames: NativeChatScrollFrames = {
+        let frames = NativeChatScrollFrames(path: "old")
+        frames.log = { [weak self] line in self?.bridge?.handleConsoleLog(line) }
+        frames.extra = { [weak self] in
+            "mounted=\(self?.windowPublication?.snapshot.rows.count ?? -1) rows=\(self?.store?.rows.count ?? 0)"
+        }
+        return frames
+    }()
+    #endif
+    var windowEnabled = false
+    var useMarkerFrames: Bool = PerfSwitch.isOn("markerFrames")
+    private var lastContainerFrames: [String: CGRect] = [:]
+    private var markerDeltaCheckScheduled: Bool = false
     private var windowRows: [NativeChatRow] = []
-    private var windowModel = NativeChatWindowModel(layout: .init(width: 320))
+    private(set) var windowModel = NativeChatWindowModel(layout: .init(width: 320))
     private var windowRevisions = NativeChatRowRevisionTracker<NativeChatRow>()
     private struct WindowRowRevision: Equatable {
         let content: UInt64
@@ -4489,6 +5456,28 @@ final class NativeChatScrollCoordinator: NSObject {
     private var windowMoves = 0
     private var windowCorrections = 0
     private var windowCorrectionPoints: CGFloat = 0
+    /// The way the view last travelled: toward older rows (`.up`) or newer, read from
+    /// the offset's own motion, which a coast keeps (the pan recognizer reads zero
+    /// once the finger lifts).
+    private var windowTravel: NativeChatWindowModel.Direction = .stationary
+    /// When the offset last moved other than by our own writes: an animated scroll
+    /// (a status-bar tap) moves it with no tracking or deceleration flag set.
+    private var windowLastOffsetMotion: CFTimeInterval = 0
+    /// When rows were last published: growth waits for streaming or a landing to settle.
+    private var windowLastRowsPublication: CFTimeInterval = 0
+    private var windowLastGrowthPublication: CFTimeInterval = 0
+    private var windowQuietWorkItem: DispatchWorkItem?
+    private var windowGrowthScheduled = false
+    private var windowGrowthWaits = 0
+    private var windowGrowthStepsThisRest = 0
+    private var windowGrowthSteps = 0
+    /// A turn of the phone cut the band to the rows near the screen
+    /// (`beginSizeTransition`). Until it has grown back to every row, a chat of 80
+    /// rows or fewer keeps a band and grows it at rest, as a long chat does, rather
+    /// than mounting every row again in one pass.
+    private var windowTurnBand = false
+    /// Growth waits until the turn has been laid out and animated.
+    private var windowTurnUntil: CFTimeInterval = 0
     var windowTextMetrics = "default" {
         didSet {
             #if os(iOS)
@@ -4547,6 +5536,18 @@ final class NativeChatScrollCoordinator: NSObject {
         windowRecovery = true
         checkWindowBand(forceData: true)
         windowRecovery = false
+        // The view does not stay where the wait left it. Following, it goes to
+        // the end: at once while held there on entry, otherwise gliding, as a
+        // following chat always does. Reading, an offset past a shortened end (a
+        // shorter chat entered, estimates replaced) came back only at the next
+        // touch: blank.
+        if let sv = scrollView, !sv.isTracking, !sv.isDragging, !sv.isDecelerating {
+            if isPinnedToBottom {
+                requestFollow(forceInstant: isHoldingEntryAtEnd || !followGlidesThroughLayout)
+            } else if sv.contentOffset.y > maxOffsetY(for: sv) + 0.5 {
+                writeContentOffsetY(maxOffsetY(for: sv), in: sv)
+            }
+        }
         return true
     }
 
@@ -4675,7 +5676,29 @@ final class NativeChatScrollCoordinator: NSObject {
         updateWindowRows(rows)
     }
 
-    func updateWindowRows(_ rows: [NativeChatRow]) {
+    static func makeWindowDescriptor(for row: NativeChatRow, revision: UInt64) -> NativeChatWindowModel.Descriptor {
+        let kind: String
+        switch row {
+        case .gap: kind = "gap"
+        case .toolGroup: kind = "tools"
+        case .thinking: kind = "thinking"
+        case .user: kind = "user"
+        case .note: kind = "note"
+        case .assistant: kind = "assistant"
+        case .taskNotification: kind = "task"
+        case .systemStatus: kind = "status"
+        case .error: kind = "error"
+        case .cliEvent: kind = "cli"
+        }
+        return NativeChatWindowModel.Descriptor(
+            id: row.id,
+            revision: revision,
+            kind: kind,
+            estimate: kind == "gap" || kind == "status" ? 32 : kind == "tools" ? 64 : 100
+        )
+    }
+
+    func updateWindowRows(_ rows: [NativeChatRow], dirtyRowIDs: Set<String>? = nil) {
         guard windowEnabled else {
             if windowPublication?.snapshot.enabled == true { windowPublication?.snapshot = .init() }
             return
@@ -4685,6 +5708,7 @@ final class NativeChatScrollCoordinator: NSObject {
         defer {
             perfRowPublications += 1
             perfRowPublicationMs += (CACurrentMediaTime() - perfStart) * 1000.0
+            ChatSlideProbe.mark(String(format: "nativeChat.rows %d %.1fms", rows.count, (CACurrentMediaTime() - perfStart) * 1000.0))
         }
         #endif
         #if os(iOS)
@@ -4695,33 +5719,76 @@ final class NativeChatScrollCoordinator: NSObject {
             return (row.id, localTop - row.frame.minY)
         }()
         #endif
-        let revisions = windowRevisions.revisions(for: rows.map { (id: $0.id, value: $0) })
-        windowRows = rows
-        let descriptors = zip(rows, revisions).map { row, contentRevision in
-            let revision = windowRevision(for: row.id, content: contentRevision)
-            let kind: String
-            switch row {
-            case .gap: kind = "gap"
-            case .toolGroup: kind = "tools"
-            case .thinking: kind = "thinking"
-            case .user: kind = "user"
-            case .note: kind = "note"
-            case .assistant: kind = "assistant"
-            case .taskNotification: kind = "task"
-            case .systemStatus: kind = "status"
-            case .error: kind = "error"
-            case .cliEvent: kind = "cli"
+        var uniqueRows = rows
+        var seenRowIDs = Set<String>(minimumCapacity: rows.count)
+        var droppedDuplicateIDs: [String] = []
+        for row in rows {
+            if !seenRowIDs.insert(row.id).inserted {
+                droppedDuplicateIDs.append(row.id)
             }
-            return NativeChatWindowModel.Descriptor(id: row.id, revision: revision, kind: kind,
-                estimate: kind == "gap" || kind == "status" ? 32 : kind == "tools" ? 64 : 100)
         }
-        let liveIDs = Set(rows.map(\.id))
-        windowRowRevisionByID = windowRowRevisionByID.filter { liveIDs.contains($0.key) }
-        windowModel.update(descriptors)
-        windowDescriptorByID = Dictionary(uniqueKeysWithValues: descriptors.map { ($0.id, $0) })
-        windowIndexByID = Dictionary(uniqueKeysWithValues: descriptors.enumerated().map { ($0.element.id, $0.offset) })
+        if !droppedDuplicateIDs.isEmpty {
+            print("[NativeChatScrollCoordinator] Dropping duplicate row IDs in updateWindowRows: \(droppedDuplicateIDs.joined(separator: ", "))")
+            seenRowIDs.removeAll(keepingCapacity: true)
+            uniqueRows = rows.filter { seenRowIDs.insert($0.id).inserted }
+        }
+        let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
+        let consumedDirty = dirtyRowIDs ?? store?.consumeDirtyRowIds()
+        let dirty = (incremental && droppedDuplicateIDs.isEmpty) ? consumedDirty : nil
+        let revisions: [UInt64]
+        if incremental {
+            revisions = windowRevisions.revisions(for: uniqueRows, dirtyIDs: dirty)
+        } else {
+            revisions = windowRevisions.revisions(for: uniqueRows.map { (id: $0.id, value: $0) })
+        }
+        let sameRowIDs = windowModel.descriptors.count == uniqueRows.count
+            && zip(windowModel.descriptors, uniqueRows).allSatisfy { $0.id == $1.id }
+        // New rows (a page landing) are new ground for the rest band to grow over.
+        if !sameRowIDs { windowGrowthStepsThisRest = 0 }
         #if os(iOS)
-        if let oldAnchor, let index = descriptors.firstIndex(where: { $0.id == oldAnchor.id }) {
+        windowLastRowsPublication = CACurrentMediaTime()
+        // Once the rows have been still for 3 s the chat counts as quiet: grow then,
+        // whether or not anything else happens (a chat left at its tail included).
+        windowQuietWorkItem?.cancel()
+        let quiet = DispatchWorkItem { [weak self] in
+            self?.windowGrowthStepsThisRest = 0
+            self?.scheduleWindowGrowth(after: 0)
+        }
+        windowQuietWorkItem = quiet
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.05, execute: quiet)
+        #endif
+        windowRows = uniqueRows
+        let descriptors: [NativeChatWindowModel.Descriptor]
+        if incremental, sameRowIDs, let dirty {
+            var updatedDescriptors = windowModel.descriptors
+            for id in dirty {
+                guard let idx = windowIndexByID[id] else { continue }
+                let row = uniqueRows[idx]
+                let descriptor = Self.makeWindowDescriptor(for: row, revision: windowRevision(for: id, content: revisions[idx]))
+                updatedDescriptors[idx] = descriptor
+                windowDescriptorByID[id] = descriptor
+            }
+            descriptors = updatedDescriptors
+            windowModel.update(descriptors)
+        } else {
+            descriptors = zip(uniqueRows, revisions).map { row, contentRevision in
+                Self.makeWindowDescriptor(for: row, revision: windowRevision(for: row.id, content: contentRevision))
+            }
+            if !incremental || !sameRowIDs {
+                windowRowRevisionByID = windowRowRevisionByID.filter { seenRowIDs.contains($0.key) }
+                windowIndexByID = Dictionary(
+                    descriptors.enumerated().map { ($0.element.id, $0.offset) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+            }
+            windowModel.update(descriptors)
+            windowDescriptorByID = Dictionary(
+                descriptors.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+        #if os(iOS)
+        if let oldAnchor, let index = windowIndexByID[oldAnchor.id] {
             windowPlanningTopOverride = windowModel.prefix[index] + oldAnchor.relativeTop
         }
         #endif
@@ -4738,7 +5805,180 @@ final class NativeChatScrollCoordinator: NSObject {
         windowPlanningTopOverride = nil
     }
 
-    private func checkWindowBand(forceData: Bool = false) {
+    #if os(iOS)
+    /// The screen in ledger coordinates: its top placed from the row it shows,
+    /// else from the scroll offset; at the tail while following.
+    private func windowViewport() -> Range<CGFloat> {
+        let screen = max(1, scrollView?.bounds.height ?? 800)
+        let origin = vstackAnchorView.flatMap { anchor in scrollView.map { anchor.convert(.zero, to: $0).y } } ?? 0
+        let localTop = (scrollView?.contentOffset.y ?? 0) - origin
+        let projectedTop: CGFloat? = {
+            guard !windowRecovery, let row = firstRowIntersecting(thresholdMaxY: localTop + topInset + 4),
+                  let index = windowIndexByID[row.id] else { return nil }
+            return windowModel.prefix[index] + localTop - row.frame.minY
+        }()
+        let top = isPinnedToBottom ? max(0, windowModel.totalHeight - screen)
+            : max(0, windowPlanningTopOverride ?? projectedTop ?? (localTop - windowRowsOrigin))
+        return top..<(top + screen)
+    }
+
+    /// A finger, a coast or an animated scroll is moving the view.
+    private var windowMoving: Bool {
+        guard let sv = scrollView else { return false }
+        return sv.isTracking || sv.isDragging || sv.isDecelerating || CACurrentMediaTime() - windowLastOffsetMotion < 0.1
+    }
+
+    /// A turn is running, or rows changed in the last 3 s (a page just landed). A
+    /// tool-heavy turn pauses for seconds between rows: it must not count as quiet,
+    /// or the band would grow and shrink again around every tool call.
+    private var windowChatActive: Bool {
+        CACurrentMediaTime() - windowLastRowsPublication < 3 || bridge?.isAgentRunning == true
+    }
+
+    /// How many rows the band may hold. A chat at rest grows toward every row it has
+    /// loaded: with every row mounted a scroll back through history moved nothing but
+    /// the offset (27 Oct 2026, Duo: fast flings at 112 rows 8 hitches, against 23 for
+    /// the moving band). While rows change it keeps few: a streamed change then costs
+    /// far less (main thread 75% against 100% with 83 rows mounted).
+    private var windowRestCap: Int { windowChatActive ? 64 : 160 }
+
+    /// The band holds still through a fling and grows at rest (`steadyBand`), unless
+    /// something else places it: navigation, restoration or recovery, and the follow
+    /// of a chat whose rows are changing. A coast that pins near the tail still holds
+    /// it until it stops; a quiet chat at the tail grows its band above the screen.
+    private func windowBandHoldsStill(moving: Bool) -> Bool {
+        NativeChatPerformance.isEnabled(.steadyBand) && windowTargetID == nil && !windowRecovery
+            && activeRestoration == nil && !isRestoring && (moving || !isPinnedToBottom || !windowChatActive)
+    }
+
+    /// The band as mounted, in the current row order. After rows land above or below
+    /// it the same rows by id: a page landing above shifts every index.
+    private func retainedWindowPlan() -> NativeChatWindowModel.Plan? {
+        guard let current = windowPlan else { return nil }
+        if current.structureGeneration == windowModel.structureGeneration { return current }
+        guard let publication = windowPublication, publication.snapshot.enabled,
+              let first = publication.snapshot.rows.first?.id, let last = publication.snapshot.rows.last?.id,
+              let lower = windowIndexByID[first], let upper = windowIndexByID[last], lower <= upper else { return nil }
+        return windowModel.geometry(for: lower..<(upper + 1))
+    }
+
+    private func scheduleWindowGrowth(after delay: TimeInterval = 0.03) {
+        guard windowEnabled, !windowGrowthScheduled else { return }
+        windowGrowthScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.windowGrowthScheduled = false
+            self.stepWindowGrowth()
+        }
+    }
+
+    /// A turn of the phone is about to lay the chat out at a new width
+    /// (`SizeTransitionReader`, before the system lays the turn out). Every mounted
+    /// row is laid out again at that width inside the turn, and a chat of up to 80
+    /// rows has all of them mounted: on the open Duo a turn of the Agents screen took
+    /// 0.92 to 0.95 s of main thread against 0.25 to 0.3 s on Home (7 November 2026).
+    /// So for the turn only the rows on screen and a screen either side stay mounted;
+    /// the rest wait as filler on their measured heights and come back at rest a few
+    /// rows a step, as a long chat's band grows. Only at the tail, where the chat
+    /// stays pinned to its end through any change of height: reading further back,
+    /// the turn keeps every row, as before.
+    func beginSizeTransition() {
+        guard windowEnabled, NativeChatPerformance.isEnabled(.steadyBand), isPinnedToBottom,
+              let publication = windowPublication, publication.snapshot.enabled,
+              windowTargetID == nil, !windowRecovery, activeRestoration == nil, !isRestoring,
+              windowAnchorBaseline == nil, windowLayoutAnchor == nil,
+              let current = windowPlan, !windowRows.isEmpty else { return }
+        windowTurnUntil = CACurrentMediaTime() + 0.6
+        let plan = windowModel.restPlan(viewport: windowViewport(), direction: .stationary,
+                                        ahead: 1, behind: 1, cap: 24)
+        guard plan.range.count < current.range.count else { return }
+        windowTurnBand = true
+        windowGrowthStepsThisRest = 0
+        ChatSlideProbe.mark("turn: chat band \(plan.range.lowerBound)..\(plan.range.upperBound) of \(windowRows.count)")
+        checkWindowBand(publishing: plan)
+        // Not published (a correction was pending): nothing was cut.
+        if windowPlan?.range != plan.range { windowTurnBand = false }
+        scheduleWindowGrowth(after: 0.6)
+    }
+
+    /// At rest, grow the band toward the rest band a few rows at a time, nearest the
+    /// screen first, so the next fling finds its rows mounted and measured, and their
+    /// height corrections land while nothing moves. A touch stops it; the band then
+    /// holds still, and the next rest resumes it.
+    private func stepWindowGrowth() {
+        // The turn is still being laid out or animated: grow once it has finished.
+        let turnLeft = windowTurnUntil - CACurrentMediaTime()
+        if turnLeft > 0 {
+            scheduleWindowGrowth(after: turnLeft)
+            return
+        }
+        // Following a chat whose rows change, a band grown while it was quiet shrinks
+        // here a few rows a step; nothing grows.
+        let following = isPinnedToBottom && windowChatActive
+        guard windowEnabled, windowRows.count > 80 || windowTurnBand, windowGrowthStepsThisRest < 48,
+              following || windowBandHoldsStill(moving: false),
+              NativeChatPerformance.isEnabled(.steadyBand), windowTargetID == nil, !windowRecovery,
+              activeRestoration == nil, !isRestoring,
+              let sv = scrollView, !sv.isTracking, !sv.isDragging, !sv.isDecelerating,
+              let publication = windowPublication, let current = retainedWindowPlan() else { return }
+        // UIKit has stopped but the offset moved a moment ago (the grace that covers an
+        // animated scroll): try again when it lapses, since nothing else may.
+        if windowMoving {
+            scheduleWindowGrowth(after: 0.12)
+            return
+        }
+        // The bottom inset is moving with the keyboard: the chat is laid out again every
+        // frame of it, and a step's correction waits until it stops, so rows just mounted
+        // above pushed the chat down 500-600 pt for half a second as a message was sent.
+        // Grow once it has settled.
+        // Not while the keyboard is up; its going down plans the band again, which
+        // schedules growth.
+        if smoothFollow, keyboardIsUp { return }
+        if smoothFollow, CACurrentMediaTime() < followsKeyboardUntil + 0.15 {
+            scheduleWindowGrowth(after: followsKeyboardUntil + 0.15 - CACurrentMediaTime())
+            return
+        }
+        // The last step's layout and its correction land first: one step per laid-out
+        // band, so steps never pile into one commit (a timer alone does not ensure it).
+        // (Not `awaitingGeometry`: a content-size change can leave it set with nothing pending.)
+        if windowCommittedSerial != publication.snapshot.serial
+            || windowAnchorBaseline != nil || windowLayoutAnchor != nil || pendingGeometry != nil
+            || windowMeasurementScheduled || windowWaitStarted != nil {
+            // About a second of waiting, then the next rest, landing or band check
+            // tries again: a layout that never reports must not wake the phone at rest.
+            windowGrowthWaits += 1
+            if windowGrowthWaits <= 20 { scheduleWindowGrowth(after: 0.05) }
+            return
+        }
+        windowGrowthWaits = 0
+        // Quiet: toward every loaded row (up to the cap), nearest the screen first.
+        // Rows changing: 3 screens ahead and 2 behind; following them, the follow band.
+        let reach: CGFloat = windowChatActive ? 3 : 1000
+        let target = following ? windowModel.plan(viewport: windowViewport())
+            : windowModel.restPlan(viewport: windowViewport(), direction: windowTravel,
+                                   ahead: reach, behind: windowChatActive ? 2 : reach, cap: windowRestCap)
+        guard let next = windowModel.growthStep(current: current.range, target: target, direction: windowTravel, step: 6),
+              next.range != current.range, !following || next.range.count < current.range.count else { return }
+        // Rows streaming in, or a page just landed: grow once they have been quiet a
+        // moment, so growth never interleaves with a reply's own publications. A band
+        // grown while the chat was quiet shrinks at once: that is what keeps a stream cheap.
+        if next.range.count >= current.range.count, CACurrentMediaTime() - windowLastRowsPublication < 0.5 {
+            scheduleWindowGrowth(after: 0.6)
+            return
+        }
+        // Small differences at the far edges are left alone, within the band's size:
+        // dropping and adding a row as corrections nudge the screen would never settle.
+        if next.range.count < current.range.count, current.range.count <= windowRestCap,
+           current.range.count - target.range.count <= 4 { return }
+        windowGrowthStepsThisRest += 1
+        windowGrowthSteps += 1
+        windowLastGrowthPublication = CACurrentMediaTime()
+        checkWindowBand(publishing: next)
+        scheduleWindowGrowth()
+    }
+    #endif
+
+    private func checkWindowBand(forceData: Bool = false, publishing chosen: NativeChatWindowModel.Plan? = nil) {
         guard windowEnabled, let publication = windowPublication else { return }
         #if os(iOS)
         if windowAnchorBaseline != nil || windowLayoutAnchor != nil {
@@ -4748,52 +5988,106 @@ final class NativeChatScrollCoordinator: NSObject {
         #endif
         let publishData = forceData || windowNeedsDataPublication
         let plan: NativeChatWindowModel.Plan
-        if windowRows.count <= 80 {
+        if let chosen {
+            plan = chosen
+        } else if windowRows.count <= 80 && !windowTurnBand {
             plan = windowModel.geometry(for: 0..<windowRows.count)
         } else {
             #if os(iOS)
-            let screen = max(1, scrollView?.bounds.height ?? 800)
-            let origin = vstackAnchorView.flatMap { anchor in scrollView.map { anchor.convert(.zero, to: $0).y } } ?? 0
-            let localTop = (scrollView?.contentOffset.y ?? 0) - origin
-            let projectedTop: CGFloat? = {
-                guard !windowRecovery, let row = firstRowIntersecting(thresholdMaxY: localTop + topInset + 4),
-                      let index = windowIndexByID[row.id] else { return nil }
-                return windowModel.prefix[index] + localTop - row.frame.minY
-            }()
-            let top = isPinnedToBottom ? max(0, windowModel.totalHeight - screen)
-                : max(0, windowPlanningTopOverride ?? projectedTop ?? (localTop - windowRowsOrigin))
-            let velocity = scrollView?.panGestureRecognizer.velocity(in: scrollView).y ?? 0
-            plan = windowModel.plan(viewport: top..<(top + screen), current: windowPlan,
-                direction: velocity > 0 ? .up : velocity < 0 ? .down : .stationary, fast: abs(velocity) > 1000,
-                targetID: windowTargetID)
+            let viewport = windowViewport()
+            let moving = windowMoving
+            // Rows just landed or left: this pass keeps the same rows mounted (the landed
+            // ones enter as filler) and nothing grows or goes until the next.
+            let landed = windowPlan.map { $0.structureGeneration != windowModel.structureGeneration } ?? false
+            if windowBandHoldsStill(moving: moving), let current = retainedWindowPlan() {
+                // Moving: keep the band, growing its leading edge only as the screen
+                // nears it. At rest: keep it while it covers the screen, and grow it
+                // toward the rest band in steps.
+                // Mid-fling growth waits until the screen is half a screen from the edge,
+                // then reaches two screens ahead in one change: each band change costs
+                // about a frame, so fewer, larger ones lose less.
+                plan = moving && !landed
+                    ? windowModel.motionPlan(viewport: viewport, current: current, direction: windowTravel,
+                                             cap: windowRestCap)
+                    : windowModel.motionPlan(viewport: viewport, current: current, direction: .stationary,
+                                             margin: 0, step: 0, cap: .max)
+                if !moving { scheduleWindowGrowth() }
+            } else if isPinnedToBottom, windowChatActive, NativeChatPerformance.isEnabled(.steadyBand),
+                      windowTargetID == nil, !windowRecovery, activeRestoration == nil, !isRestoring,
+                      let current = retainedWindowPlan(), current.range.count > 48 {
+                // Following a changing chat with a band grown while it was quiet: keep
+                // its rows and add the tail. It shrinks to the follow band a few rows a
+                // step (stepWindowGrowth), never all at once in the frame a message is sent.
+                plan = windowModel.motionPlan(viewport: viewport, current: current, direction: .stationary,
+                                              margin: 0, step: 0, cap: .max)
+                if !moving { scheduleWindowGrowth() }
+            } else {
+                let velocity = scrollView?.panGestureRecognizer.velocity(in: scrollView).y ?? 0
+                plan = windowModel.plan(viewport: viewport, current: windowPlan,
+                    direction: velocity > 0 ? .up : velocity < 0 ? .down : .stationary, fast: abs(velocity) > 1000,
+                    targetID: windowTargetID)
+            }
             #else
             plan = windowModel.geometry(for: 0..<windowRows.count)
             #endif
         }
         let changed = windowPlan?.range != plan.range || windowPlan?.top != plan.top || windowPlan?.bottom != plan.bottom
         windowPlan = plan
+        // Grown back to every row after a turn: a short chat mounts them all again.
+        if windowTurnBand, plan.range.lowerBound == 0, plan.range.upperBound >= windowRows.count {
+            windowTurnBand = false
+        }
         windowNeedsDataPublication = false
         guard changed || publishData || !publication.snapshot.enabled else { return }
         let mountedRows = Array(windowRows[plan.range])
         let current = publication.snapshot
-        guard !current.enabled || mountedRows != current.rows || plan.top != current.top || plan.bottom != current.bottom else {
+        let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
+        let mountedRowsEqual: Bool = {
+            guard current.enabled, mountedRows.count == current.rows.count else { return false }
+            guard incremental else { return mountedRows == current.rows }
+            for (lhs, rhs) in zip(mountedRows, current.rows) {
+                guard lhs.id == rhs.id else { return false }
+                if let lhsRev = windowDescriptorByID[lhs.id]?.revision,
+                   let rhsRev = windowPublishedDescriptors[rhs.id]?.revision,
+                   lhsRev == rhsRev {
+                    continue
+                }
+                if lhs != rhs { return false }
+            }
+            return true
+        }()
+        guard !current.enabled || !mountedRowsEqual || plan.top != current.top || plan.bottom != current.bottom else {
             // Equal UI values can have newer revision tokens after deferred/ABA
             // updates. Keep measurement keys current without changing the serial.
             windowPublishedDescriptors = windowDescriptorByID
             return
         }
-        if changed { windowMoves += 1 }
+        let sameMountedIDs = current.enabled
+            && mountedRows.count == current.rows.count
+            && zip(mountedRows, current.rows).allSatisfy { $0.id == $1.id }
+        let bandStructureChanged = !current.enabled
+            || changed
+            || !sameMountedIDs
+            || plan.top != current.top
+            || plan.bottom != current.bottom
+        // Growth at rest is counted on its own (`grow=`), not as a move.
+        if changed && chosen == nil { windowMoves += 1 }
         var snapshot = NativeChatWindowBand.Snapshot()
         snapshot.enabled = true
         snapshot.rows = mountedRows
         snapshot.top = plan.top
         snapshot.bottom = plan.bottom
-        snapshot.serial = publication.snapshot.serial &+ 1
+        if useMarkerFrames && !bandStructureChanged {
+            snapshot.serial = max(1, publication.snapshot.serial)
+        } else {
+            snapshot.serial = publication.snapshot.serial &+ 1
+        }
         #if os(iOS)
         // Capture UIKit's actual committed position BEFORE publishing the next band.
         // Preference callbacks may otherwise replace rowFrames with an intermediate
         // band pass, losing the old geometry before a coherent pass is ready.
-        if !windowRecovery, activeRestoration == nil, windowTargetID == nil, let sv = scrollView, let anchor = vstackAnchorView {
+        if (!useMarkerFrames || bandStructureChanged),
+           !windowRecovery, activeRestoration == nil, windowTargetID == nil, let sv = scrollView, let anchor = vstackAnchorView {
             let localTop = sv.contentOffset.y - anchor.convert(.zero, to: sv).y
             let ids = Set(snapshot.rows.map(\.id))
             let common = orderedRowFrames.filter { ids.contains($0.id) }
@@ -4816,9 +6110,14 @@ final class NativeChatScrollCoordinator: NSObject {
         #endif
         var transaction = Transaction()
         transaction.disablesAnimations = true
+        ChatSlideProbe.mark("nativeChat.band \(plan.range.lowerBound)..\(plan.range.upperBound) of \(windowRows.count)")
         withTransaction(transaction) { publication.snapshot = snapshot }
         #if os(iOS)
-        if windowAnchorBaseline != nil { beginWindowWait("band") }
+        if useMarkerFrames && !bandStructureChanged {
+            scheduleMarkerDataDeltaCheck()
+        } else if windowAnchorBaseline != nil {
+            beginWindowWait("band")
+        }
         #endif
     }
 
@@ -4844,6 +6143,7 @@ final class NativeChatScrollCoordinator: NSObject {
                 self.windowLayoutTarget = nil
             }
             self.windowModel.measure(captured)
+            ChatSlideProbe.mark("nativeChat.measure \(captured.count)")
             let missing = self.windowConfirmedMissing
             self.windowConfirmedMissing = []
             self.windowModel.setNoSlot(missing)
@@ -4878,6 +6178,11 @@ final class NativeChatScrollCoordinator: NSObject {
     var isRestoring: Bool = false
     var isPinnedToBottom: Bool = true
     var shownAt: Date = Date()
+    #if os(iOS)
+    /// Until when a chat that was just entered is held at its end (`pinEntryToEnd`).
+    private var entryPinUntil: CFTimeInterval = 0
+    private static let entryPinSeconds: CFTimeInterval = 3
+    #endif
     var topInset: CGFloat = 0
     weak var store: NativeChatMessageStore?
     weak var bridge: AgentBridge?
@@ -5030,6 +6335,8 @@ final class NativeChatScrollCoordinator: NSObject {
             windowWaitTicks = 0
             #endif
             windowNeedsDataPublication = false
+            windowTurnBand = false
+            windowTurnUntil = 0
             windowTargetID = nil
             windowNavigationCompletion = nil
             windowTargetIsRestoration = false
@@ -5039,6 +6346,14 @@ final class NativeChatScrollCoordinator: NSObject {
             windowPlan = nil
             windowDescriptorByID = [:]
             windowRowsOrigin = 0
+            lastContainerFrames = [:]
+            markerDeltaCheckScheduled = false
+            windowTravel = .stationary
+            windowGrowthStepsThisRest = 0
+            windowGrowthWaits = 0
+            windowQuietWorkItem?.cancel()
+            windowQuietWorkItem = nil
+            windowLastRowsPublication = 0
         }
         pendingLoadMoreSnapshot = nil
         probedUntruncatedChatId = nil
@@ -5051,7 +6366,13 @@ final class NativeChatScrollCoordinator: NSObject {
         // growth with nothing to anchor. The next layout commit replaces them.
         endRestoration()
         stopFollowAnimation()
+        // The chat switched to opens at its end unless the web chat's place is
+        // waiting (the web/native switch): the window then plans that end with
+        // the new rows, not where the last chat was being read.
+        if store?.pendingScrollRestoration == nil { isPinnedToBottom = true }
         #if os(iOS)
+        // Entering the new chat holds it at its end again (`pinEntryToEnd`).
+        entryPinUntil = 0
         stopWaitForDecelerationEnd()
         #if DEBUG
         stopScrollPerfTracking(log: false)
@@ -5073,7 +6394,7 @@ final class NativeChatScrollCoordinator: NSObject {
               activeRestoration == nil,
               store?.pendingScrollRestoration == nil,
               let sv = scrollView,
-              sv.isDecelerating else {
+              sv.isDecelerating || isKeyboardDropping else {
             return false
         }
         return true
@@ -5085,9 +6406,34 @@ final class NativeChatScrollCoordinator: NSObject {
     func scheduleFlushHeldRowsAtRest() {
         #if os(iOS)
         hasHeldRowPublication = true
+        if isKeyboardDropping, scrollView?.isDecelerating != true {
+            // Published once the keyboard is down (the deceleration wait would publish
+            // them at once, with nothing decelerating).
+            flushHeldRowsOnceKeyboardIsDown()
+            return
+        }
         scheduleWaitForDecelerationEnd()
         #endif
     }
+
+    #if os(iOS)
+    /// Publishes held rows when the inset has stopped dropping. A message of more than
+    /// one line drops it twice: the keyboard, then the composer shrinking as its text
+    /// clears, which waits again. The first wait used to find the second running and
+    /// give up, so the message stayed held until the reply's first row (Peter,
+    /// 5 November 2026: "anything over 1 line just appears").
+    private func flushHeldRowsOnceKeyboardIsDown() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, holdRowsUntil - CACurrentMediaTime()) + 0.01) { [weak self] in
+            guard let self, self.hasHeldRowPublication, self.scrollView?.isDecelerating != true else { return }
+            if self.isKeyboardDropping {
+                self.flushHeldRowsOnceKeyboardIsDown()
+                return
+            }
+            self.hasHeldRowPublication = false
+            self.onFlushHeldRows?()
+        }
+    }
+    #endif
 
     func setFollowing(_ following: Bool) {
         if following {
@@ -5118,11 +6464,120 @@ final class NativeChatScrollCoordinator: NSObject {
         onPinnedChange?(following)
     }
 
+    /// A chat that is entered opens at its end (Peter, 27 Oct 2026: it opened
+    /// blank until a scroll, or partway up). For a few seconds after, while
+    /// estimates are replaced by measured rows and a catch-up rewrites the tail,
+    /// each change of the content's height follows to the end at once, without
+    /// waiting for a layout pass to agree. The first touch ends it.
+    func pinEntryToEnd() {
+        #if os(iOS)
+        entryPinUntil = CACurrentMediaTime() + Self.entryPinSeconds
+        #if DEBUG
+        entryTraceStart = CACurrentMediaTime()
+        entryTrace("pin rows=\(windowRows.count)" + (scrollView.map { " " + Self.geometry($0) } ?? ""))
+        #endif
+        #endif
+        shownAt = Date()
+        setFollowing(true)
+        requestFollow(forceInstant: true)
+    }
+
+    #if os(iOS) && DEBUG
+    /// When the last entry pinned the chat to its end: for 3 s after, `[ENTRYNOD]` logs
+    /// every offset write, every move of the offset by anyone else, and every change of
+    /// the content's size, the scroll view's height and the chat's insets, each with the
+    /// animation it was made in. What moves a chat as it slides in (the nod, 8 November
+    /// 2026).
+    private var entryTraceStart: CFTimeInterval = 0
+
+    func entryTrace(_ message: @autoclosure () -> String) {
+        let now = CACurrentMediaTime()
+        guard entryTraceStart > 0, now - entryTraceStart < 3 else { return }
+        bridge?.handleConsoleLog("LOG: [ENTRYNOD] +\(Int((now - entryTraceStart) * 1000))ms \(message())")
+    }
+
+    private static func geometry(_ sv: UIScrollView) -> String {
+        let inset = sv.adjustedContentInset
+        return String(format: "size=%.0f h=%.0f inset=%.0f/%.0f end=%.0f", sv.contentSize.height, sv.bounds.height,
+                      inset.top, inset.bottom, sv.contentSize.height - sv.bounds.height + inset.bottom)
+    }
+    #else
+    func entryTrace(_ message: @autoclosure () -> String) {}
+    #endif
+
+    #if os(iOS)
+    private var isHoldingEntryAtEnd: Bool {
+        isPinnedToBottom && CACurrentMediaTime() < entryPinUntil
+    }
+
+    /// The follow may glide while a layout pass is pending: nothing else places the
+    /// offset (a jump, a restoration, a resize's anchor) and no instant follow waits
+    /// for that pass.
+    private var followGlidesThroughLayout: Bool {
+        smoothFollow && windowEnabled && isPinnedToBottom && windowTargetID == nil && activeRestoration == nil
+            && !isRestoring && windowLayoutAnchor == nil && !pendingForceInstantFollow
+    }
+
+    /// Settings > Debug > Native Chat Performance > Smooth follow (on unless turned off).
+    private var smoothFollow: Bool { NativeChatPerformance.isEnabled(.smoothFollow) }
+
+    /// Until when the follow keeps up with the keyboard, on the stiffer spring.
+    private var followsKeyboardUntil: CFTimeInterval = 0
+    /// Until when new rows wait while the keyboard goes down (`followTheKeyboard`).
+    private var holdRowsUntil: CFTimeInterval = 0
+    private var isKeyboardDropping: Bool { smoothFollow && CACurrentMediaTime() < holdRowsUntil }
+    /// The system keyboard is up. The band does not grow meanwhile: a send lowers it, and a
+    /// growth step whose correction lands under the keyboard's animated inset pushed the
+    /// chat down 665 pt as the message went in. Someone typing is not scrolling back, and
+    /// the band grows once the keyboard is down and the chat is quiet again.
+    private var keyboardIsUp = false
+    private var watchesTheKeyboard = false
+
+    /// Hears the keyboard from the system as it starts to move, a turn before the chat's
+    /// bottom inset follows it (the inset comes through `KeyboardObserver` and a SwiftUI
+    /// update), so nothing grows or lands in between. Selector observers, which go when
+    /// the coordinator does.
+    private func watchTheKeyboard() {
+        guard !watchesTheKeyboard else { return }
+        watchesTheKeyboard = true
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(keyboardWillShow), name: UIResponder.keyboardWillShowNotification, object: nil)
+        center.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    @objc private func keyboardWillShow(_ note: Notification) {
+        keyboardIsUp = true
+        followsKeyboardUntil = max(followsKeyboardUntil, CACurrentMediaTime() + 0.45)
+    }
+
+    @objc private func keyboardWillHide(_ note: Notification) {
+        keyboardIsUp = false
+        followsKeyboardUntil = max(followsKeyboardUntil, CACurrentMediaTime() + 0.45)
+        if smoothFollow, isPinnedToBottom {
+            holdRowsUntil = max(holdRowsUntil, CACurrentMediaTime() + 0.45)
+        }
+    }
+    #endif
+
+    /// The chat's bottom inset changed (the keyboard or the composer): for a moment the
+    /// follow moves on the stiffer spring, in either direction, to keep the last message
+    /// on the composer as it moves. Going down, new rows wait until it has: the sent
+    /// message, published 80 ms into the keyboard's 0.45 s, ended the inset's animation
+    /// at once (a band publication runs without animation), and the chat dropped the
+    /// rest of the keyboard's height in one frame.
+    func followTheKeyboard(dropping: Bool) {
+        #if os(iOS)
+        followsKeyboardUntil = CACurrentMediaTime() + 0.45
+        if dropping, isPinnedToBottom { holdRowsUntil = CACurrentMediaTime() + 0.4 }
+        #endif
+    }
+
     func stopFollowAnimation() {
         #if os(iOS)
         followDisplayLink?.invalidate()
         followDisplayLink = nil
         lastFollowFrameTimestamp = 0
+        followVelocity = 0
         if !hasHeldRowPublication && !pendingFollowAfterDeceleration && activeRestoration == nil
             && (!windowEnabled || (windowAnchorBaseline == nil && windowTargetID == nil && windowWaitStarted == nil)) {
             stopWaitForDecelerationEnd()
@@ -5130,17 +6585,33 @@ final class NativeChatScrollCoordinator: NSObject {
         #endif
     }
 
-    func requestFollow(forceInstant: Bool = false) {
+    /// - Parameter checkingBand: false only to start a glide from a content-size change,
+    ///   mid-layout, where planning the band again would publish one against frames
+    ///   the pass has not reported yet.
+    func requestFollow(forceInstant: Bool = false, checkingBand: Bool = true) {
         #if os(iOS)
-        if windowEnabled && isPinnedToBottom { checkWindowBand() }
-        if awaitingGeometry {
+        if checkingBand && windowEnabled && isPinnedToBottom { checkWindowBand() }
+        // Held at the end on entry, the end is the reader's place: nothing above
+        // it needs the pending layout's correction before the offset moves. A glide
+        // need not wait either: windowed corrections land on the live offset, so
+        // they move with it. It waited out every band change, and a band grown while
+        // the chat sat quiet shrinks in steps as a message is sent: the message sat
+        // under the composer for over half a second, then the chat leapt to it.
+        if awaitingGeometry && !isHoldingEntryAtEnd && (forceInstant || !followGlidesThroughLayout) {
             if forceInstant {
                 pendingForceInstantFollow = true
             }
             return
         }
         guard isPinnedToBottom, !isRestoring, let sv = scrollView, sv.bounds.height > 0 else { return }
-        let useInstant = forceInstant || pendingForceInstantFollow
+        // Held at the end on entry: settle to the tail at once. Smooth follow glides
+        // after a band step too, since windowed corrections land on the live offset
+        // and move with a glide. Without it, rows just mounted above the screen by
+        // growth sent the follow to the tail at once, and a quiet chat grows its band
+        // just when the keyboard comes up or a message is sent: a jump of the
+        // keyboard's height, or of the message's.
+        let useInstant = forceInstant || pendingForceInstantFollow || isHoldingEntryAtEnd
+            || (!smoothFollow && CACurrentMediaTime() - windowLastGrowthPublication < 0.6)
         if sv.isTracking || sv.isDragging {
             stopFollowAnimation()
             if sv.isDecelerating {
@@ -5157,6 +6628,10 @@ final class NativeChatScrollCoordinator: NSObject {
             scheduleWaitForDecelerationEnd()
             return
         }
+        #if DEBUG
+        let instantReason = forceInstant ? "forced" : pendingForceInstantFollow ? "forcedEarlier"
+            : isHoldingEntryAtEnd ? "entry" : useInstant ? "bandChange" : "-"
+        #endif
         pendingForceInstantFollow = false
         let target = maxOffsetY(for: sv)
         let gap = target - sv.contentOffset.y
@@ -5167,23 +6642,87 @@ final class NativeChatScrollCoordinator: NSObject {
             }
             return
         }
-        if gap < 0 {
+        // The end came up: the keyboard going down (a tapped Send lowers it) or the
+        // composer shrinking. The glide brings the chat down with them; set at once,
+        // it dropped the keyboard's height in one frame while the keyboard was still
+        // sliding down, the jump in every send. Far past the end, it goes at once.
+        if gap < 0, !smoothFollow || -gap > sv.bounds.height * 1.25 {
             stopFollowAnimation()
+            #if DEBUG
+            Self.noteInstantFollow("shrank", points: gap)
+            #endif
             writeContentOffsetY(target, in: sv)
             return
         }
         let recentlyShown = Date().timeIntervalSince(shownAt) < 0.6
         if useInstant || recentlyShown || gap > sv.bounds.height * 1.25 {
             stopFollowAnimation()
+            #if DEBUG
+            Self.noteInstantFollow(useInstant ? instantReason : recentlyShown ? "shown" : "farBehind", points: gap)
+            #endif
             writeContentOffsetY(target, in: sv)
             return
         }
         guard followDisplayLink == nil else { return }
         lastFollowFrameTimestamp = 0
         let link = CADisplayLink(target: self, selector: #selector(stepFollowAnimation(_:)))
+        // The follow runs for most of a streaming turn, and each frame moves
+        // the content under the glass composer, so the render server blurs the
+        // screen again. Sixty frames a second keeps the glide smooth (each step
+        // is sized by the time since the last, so it is rate-independent) and
+        // halves that on a 120 Hz display; it may still rise to the display's
+        // rate. Independent of the working-animation limit.
+        // Settings > Debug > Native Chat Performance > Follow at 60 fps; off,
+        // the link asks for nothing and runs at the display's rate, as before.
+        if NativeChatPerformance.isEnabled(.followRate) || PerfSwitch.followFramesPerSecond != nil {
+            let followRate = PerfSwitch.followFramesPerSecond ?? 60
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, followRate), maximum: 120, preferred: followRate)
+        }
         link.add(to: .main, forMode: .common)
         followDisplayLink = link
         #endif
+    }
+
+    func areMarkerFramesCoherent(frames: [String: CGRect], allFrames: [String: CGRect]) -> Bool {
+        guard windowEnabled, let publication = windowPublication, publication.snapshot.enabled else {
+            return true
+        }
+        guard let section = allFrames["__rows"], section.width > 0 else {
+            return false
+        }
+        var ordered: [(id: String, frame: CGRect)] = []
+        ordered.reserveCapacity(publication.snapshot.rows.count)
+        for row in publication.snapshot.rows {
+            guard let frame = frames[row.id] else { continue }
+            if frame.width > section.width + 1.0 {
+                return false
+            }
+            if case .thinking = row {
+                // Folded thinking lozenges can be narrower than the section width.
+            } else if abs(frame.width - section.width) > 1.0 {
+                return false
+            }
+            ordered.append((row.id, frame))
+        }
+        guard let first = ordered.first, let last = ordered.last else {
+            let expectedHeight = publication.snapshot.top + publication.snapshot.bottom
+            return abs((section.minY + expectedHeight) - section.maxY) < 1.5
+        }
+        let expectedFirstMinY = section.minY + publication.snapshot.top
+        guard abs(first.frame.minY - expectedFirstMinY) < 1.0 else {
+            return false
+        }
+        for index in 1..<ordered.count {
+            let expectedMinY = ordered[index - 1].frame.maxY + 10
+            guard abs(ordered[index].frame.minY - expectedMinY) < 1.0 else {
+                return false
+            }
+        }
+        let expectedMaxY = last.frame.maxY + publication.snapshot.bottom
+        guard abs(expectedMaxY - section.maxY) < 1.5 else {
+            return false
+        }
+        return true
     }
 
     #if os(iOS)
@@ -5197,9 +6736,96 @@ final class NativeChatScrollCoordinator: NSObject {
         }
     }
 
+    func collectMarkerRowFrames() -> [String: CGRect] {
+        guard let anchor = vstackAnchorView, anchor.window != nil else { return [:] }
+        var result: [String: CGRect] = [:]
+        if windowEnabled, let publication = windowPublication, publication.snapshot.enabled {
+            result.reserveCapacity(publication.snapshot.rows.count)
+            for row in publication.snapshot.rows {
+                guard let marker = rowMarkers[row.id]?.value,
+                      marker.window != nil,
+                      !marker.isHidden,
+                      marker.bounds.width > 0,
+                      marker.bounds.height > 0 else { continue }
+                result[row.id] = marker.convert(marker.bounds, to: anchor)
+            }
+        } else {
+            result.reserveCapacity(rowMarkers.count)
+            for (id, weakMarker) in rowMarkers {
+                guard let marker = weakMarker.value,
+                      marker.window != nil,
+                      !marker.isHidden,
+                      marker.bounds.width > 0,
+                      marker.bounds.height > 0 else { continue }
+                result[id] = marker.convert(marker.bounds, to: anchor)
+            }
+        }
+        return result
+    }
+
+    private func hasMarkerFrameDelta(_ markerFrames: [String: CGRect]) -> Bool {
+        guard markerFrames.count == rowFrames.count else { return true }
+        for (id, frame) in markerFrames {
+            guard let old = rowFrames[id] else { return true }
+            if abs(frame.minY - old.minY) > 0.1
+                || abs(frame.height - old.height) > 0.1
+                || abs(frame.width - old.width) > 0.1 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func recordConfirmedMissingMarkers(_ frames: [String: CGRect]) {
+        guard windowEnabled, let publication = windowPublication, publication.snapshot.enabled else { return }
+        let serial = publication.snapshot.serial
+        if windowMissingSerial != serial {
+            windowMissingSerial = serial
+            windowMissingPasses = [:]
+            windowConfirmedMissing = []
+        }
+        for row in publication.snapshot.rows {
+            if frames[row.id] != nil {
+                windowMissingPasses[row.id] = 0
+                windowConfirmedMissing.removeAll { $0.id == row.id }
+            } else if let descriptor = windowPublishedDescriptors[row.id] {
+                let key = windowModel.key(for: descriptor)
+                if !windowConfirmedMissing.contains(key) {
+                    windowConfirmedMissing.append(key)
+                }
+            }
+        }
+    }
+
+    private func scheduleMarkerDataDeltaCheck() {
+        guard useMarkerFrames, !markerDeltaCheckScheduled else { return }
+        markerDeltaCheckScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.markerDeltaCheckScheduled = false
+            guard self.useMarkerFrames,
+                  self.pendingGeometry == nil,
+                  !self.lastContainerFrames.isEmpty else { return }
+            let markerFrames = self.collectMarkerRowFrames()
+            guard self.areMarkerFramesCoherent(frames: markerFrames, allFrames: self.lastContainerFrames) else {
+                return
+            }
+            if self.hasMarkerFrameDelta(markerFrames) {
+                self.reconcileFrames(self.lastContainerFrames)
+            } else {
+                self.recordConfirmedMissingMarkers(markerFrames)
+                let merged = self.lastContainerFrames.merging(markerFrames) { _, new in new }
+                self.scheduleWindowMeasurements(merged)
+            }
+        }
+    }
+
     func notifyMarkerLayoutChanged() {
-        guard pendingGeometry != nil else { return }
-        applyPendingGeometry()
+        if pendingGeometry != nil {
+            applyPendingGeometry()
+        } else if useMarkerFrames && !lastContainerFrames.isEmpty {
+            scheduleMarkerDataDeltaCheck()
+        }
     }
 
     private func maxOffsetY(for sv: UIScrollView) -> CGFloat {
@@ -5220,11 +6846,30 @@ final class NativeChatScrollCoordinator: NSObject {
         }
         isWritingOffset = true
         let point = CGPoint(x: sv.contentOffset.x, y: y)
-        if windowEnabled && (sv.isTracking || sv.isDragging || sv.isDecelerating) {
-            // Unlike setContentOffset(_:animated:false), this preserves momentum.
-            sv.contentOffset = point
+        #if DEBUG
+        if abs(sv.contentOffset.y - y) > 0.5 {
+            entryTrace(String(format: "write %.0f->%.0f %@ anim=%.2f", sv.contentOffset.y, y,
+                              Self.geometry(sv), UIView.inheritedAnimationDuration))
+        }
+        #endif
+        let write = {
+            if self.windowEnabled && (sv.isTracking || sv.isDragging || sv.isDecelerating) {
+                // Unlike setContentOffset(_:animated:false), this preserves momentum.
+                sv.contentOffset = point
+            } else {
+                sv.setContentOffset(point, animated: false)
+            }
+        }
+        // Every write here places the chat at once; glides step on our own display link.
+        // Made inside someone else's animation (a layout pass of the slide that brings a
+        // chat in), UIKit would carry the change on that animation's curve. On Peter's Duo
+        // a cold chat's rows, landing as its slide began, drifted about 70 pt down along
+        // the slide's curve (8 November 2026, the nod): `[ENTRYNOD]` logs each write's
+        // `anim`. `-perfOff unanimatedOffsets` (Debug) brings back the old write, for an A/B.
+        if PerfSwitch.isOff("unanimatedOffsets") {
+            write()
         } else {
-            sv.setContentOffset(point, animated: false)
+            UIView.performWithoutAnimation(write)
         }
         lastObservedOffsetY = sv.contentOffset.y
         isWritingOffset = false
@@ -5269,8 +6914,48 @@ final class NativeChatScrollCoordinator: NSObject {
     }
 
     #if DEBUG
+    /// `-perfOn scrollPerf`: time a page of rows landing, at rest or not. Logs one
+    /// `[SCROLLPERF] landing` line 0.6 s later.
+    func probeLanding(from old: Int, to new: Int) {
+        guard PerfSwitch.isOn("scrollPerf"), landingProbeLink == nil else { return }
+        landingProbeRows = (old, new)
+        landingProbeStart = CACurrentMediaTime()
+        landingProbeLast = 0
+        landingProbeFirstMs = -1
+        landingProbeWorstMs = 0
+        landingProbeLostMs = 0
+        landingProbeFrames = 0
+        let link = CADisplayLink(target: self, selector: #selector(stepLandingProbe(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        landingProbeLink = link
+    }
+
+    @objc private func stepLandingProbe(_ link: CADisplayLink) {
+        let now = link.timestamp
+        let frame = link.duration > 0 ? link.duration : 1.0 / 60.0
+        if landingProbeFirstMs < 0 {
+            landingProbeFirstMs = (CACurrentMediaTime() - landingProbeStart) * 1000
+        } else if landingProbeLast > 0 {
+            let gap = now - landingProbeLast
+            landingProbeWorstMs = max(landingProbeWorstMs, gap * 1000)
+            if gap > frame * 1.5 { landingProbeLostMs += (gap - frame) * 1000 }
+        }
+        landingProbeLast = now
+        landingProbeFrames += 1
+        guard CACurrentMediaTime() - landingProbeStart > 0.6 else { return }
+        link.invalidate()
+        landingProbeLink = nil
+        bridge?.handleConsoleLog(String(format: "LOG: [SCROLLPERF] landing rows=%d->%d firstFrame=%.0fms worst=%.0fms lost=%.0fms frames=%d mounted=%d",
+            landingProbeRows.from, landingProbeRows.to, landingProbeFirstMs, landingProbeWorstMs, landingProbeLostMs,
+            landingProbeFrames, windowEnabled ? (windowPublication?.snapshot.rows.count ?? 0) : landingProbeRows.to))
+    }
+
     private func startScrollPerfTrackingIfNeeded() {
-        guard scrollPerfDisplayLink == nil else { return }
+        // A 120 Hz link on the main thread for every streaming change: phone
+        // and Catalyst builds are DEBUG, so it ran for everyone. Measuring
+        // asks for it (`-perfOn scrollPerf`).
+        guard scrollPerfDisplayLink == nil, PerfSwitch.isOn("scrollPerf") else { return }
         perfLastFrameTimestamp = 0
         perfIdleFrames = 0
         perfSettlingFrames = 0
@@ -5289,10 +6974,12 @@ final class NativeChatScrollCoordinator: NSObject {
         if log && (perfFrames > 0 || perfOffsetHandlerCalls > 0 || perfGeometryCalls > 0 || perfPrepGens > 0) {
             let rowsCount = store?.rows.count ?? rowFrames.count
             let line = String(
-                format: "LOG: [SCROLLPERF] rows=%d frames=%d hitches=%d offsetHandler=%.2fms/%dcalls geometry=%.2fms/%dcalls prep=%.2fms/%dgens drift=%.1fpt/%dover/%dsampled mounted=%d band=%d..%d moves=%d corr=%d/%.1fpt wait=%dsize/%dmarker/%dserial/%dnoanchor nav=%d layoutKeyChange=%d stuck=%d root=%.1f/%.1f rowsPub=%d/%.2fms held=%d",
+                format: "LOG: [SCROLLPERF] rows=%d frames=%d hitches=%d lost=%.0fms worst=%.0fms offsetHandler=%.2fms/%dcalls geometry=%.2fms/%dcalls prep=%.2fms/%dgens drift=%.1fpt/%dover/%dsampled mounted=%d band=%d..%d moves=%d corr=%d/%.1fpt wait=%dsize/%dmarker/%dserial/%dnoanchor nav=%d layoutKeyChange=%d stuck=%d root=%.1f/%.1f rowsPub=%d/%.2fms held=%d grow=%d",
                 rowsCount,
                 perfFrames,
                 perfHitches,
+                perfLostMs,
+                perfWorstGapMs,
                 perfOffsetHandlerMs,
                 perfOffsetHandlerCalls,
                 perfGeometryMs,
@@ -5307,10 +6994,11 @@ final class NativeChatScrollCoordinator: NSObject {
                 windowPlan?.range.upperBound ?? rowsCount,
                 windowMoves, windowCorrections, windowCorrectionPoints,
                 windowWaitSize, windowWaitMarker, windowWaitSerial, windowMissingAnchor, windowNavigationCount, windowLayoutChanges, windowStuckCount, windowLastActualHeight, windowLastExpectedHeight,
-                perfRowPublications, perfRowPublicationMs, perfTailHolds
+                perfRowPublications, perfRowPublicationMs, perfTailHolds, windowGrowthSteps
             )
             bridge?.handleConsoleLog(line)
         }
+        windowGrowthSteps = 0
         perfRowPublications = 0
         perfRowPublicationMs = 0
         perfTailHolds = 0
@@ -5331,6 +7019,8 @@ final class NativeChatScrollCoordinator: NSObject {
         perfDriftSamples = 0
         perfFrames = 0
         perfHitches = 0
+        perfLostMs = 0
+        perfWorstGapMs = 0
         perfOffsetHandlerCalls = 0
         perfOffsetHandlerMs = 0
         perfGeometryCalls = 0
@@ -5365,8 +7055,11 @@ final class NativeChatScrollCoordinator: NSObject {
                         ? (link.targetTimestamp - link.timestamp)
                         : (link.duration > 0 ? link.duration : (1.0 / 60.0))
                 )
-                if now - perfLastFrameTimestamp > targetDuration * 1.5 {
+                let gap = now - perfLastFrameTimestamp
+                if gap > targetDuration * 1.5 {
                     perfHitches += 1
+                    perfLostMs += (gap - targetDuration) * 1000
+                    perfWorstGapMs = max(perfWorstGapMs, gap * 1000)
                 }
             }
             perfLastFrameTimestamp = now
@@ -5456,7 +7149,11 @@ final class NativeChatScrollCoordinator: NSObject {
             store?.lastScrollSnapshot = snap
             sendSyncToWeb(snap)
         }
-        if hasHeldRowPublication {
+        // Rows held while the inset drops wait for it (`flushHeldRowsOnceKeyboardIsDown`):
+        // this wait also runs for band layout passes, and with nothing decelerating it
+        // published a sent message of several lines while the composer was still
+        // collapsing, which hid its glide (Peter, 5 November 2026).
+        if hasHeldRowPublication, !isKeyboardDropping {
             hasHeldRowPublication = false
             onFlushHeldRows?()
         }
@@ -5472,6 +7169,7 @@ final class NativeChatScrollCoordinator: NSObject {
             requestFollow(forceInstant: forceInstant)
         }
         scheduleAutoLoadCheck(delay: 0.05)
+        scheduleWindowGrowth()
     }
 
     @objc private func stepFollowAnimation(_ link: CADisplayLink) {
@@ -5485,7 +7183,8 @@ final class NativeChatScrollCoordinator: NSObject {
         }
         let target = maxOffsetY(for: sv)
         let distance = target - sv.contentOffset.y
-        if distance <= 1.0 {
+        let smooth = smoothFollow
+        if smooth ? abs(distance) <= 1.0 : distance <= 1.0 {
             if abs(distance) > 0.1 {
                 writeContentOffsetY(target, in: sv)
             }
@@ -5493,16 +7192,48 @@ final class NativeChatScrollCoordinator: NSObject {
             return
         }
         let now = link.timestamp
-        let elapsedMs = lastFollowFrameTimestamp > 0
-            ? min(32.0, max(1.0, (now - lastFollowFrameTimestamp) * 1000.0))
-            : 16.0
+        guard smooth else {
+            // Smooth follow off: the step it replaced.
+            let elapsedMs = lastFollowFrameTimestamp > 0
+                ? min(32.0, max(1.0, (now - lastFollowFrameTimestamp) * 1000.0))
+                : 16.0
+            lastFollowFrameTimestamp = now
+            let step = max(1.0, distance * (1.0 - exp(-elapsedMs / 85.0)))
+            writeContentOffsetY(min(target, sv.contentOffset.y + step), in: sv)
+            return
+        }
+        let dt = lastFollowFrameTimestamp > 0 ? min(1.0 / 30.0, max(1.0 / 240.0, now - lastFollowFrameTimestamp)) : 1.0 / 60.0
         lastFollowFrameTimestamp = now
-        let step = max(1.0, distance * (1.0 - exp(-elapsedMs / 85.0)))
-        writeContentOffsetY(min(target, sv.contentOffset.y + step), in: sv)
+        // A critically damped spring toward the end, which keeps its speed as the end
+        // moves: each new line draws the glide on rather than starting it again, and a
+        // sent message eases up off the composer and settles. The step it replaces
+        // (a fixed share of the distance each frame) set off at full speed every time
+        // the end moved, so a streaming reply surged and stalled line by line (Peter,
+        // 5 November 2026: "I'd like to make that scrolling buttery smooth"). An end
+        // above the chat (the keyboard going down) is met on a stiffer spring, which
+        // keeps the last message on the composer as the keyboard's fast curve lowers it.
+        let omega = distance < 0 || now < followsKeyboardUntil ? Self.followSpringDown : Self.followSpring
+        let away = -distance
+        let decay = CGFloat(exp(-omega * dt))
+        let nextAway = (away + (followVelocity + CGFloat(omega) * away) * CGFloat(dt)) * decay
+        followVelocity = (followVelocity - CGFloat(omega) * (followVelocity + CGFloat(omega) * away) * CGFloat(dt)) * decay
+        // Stop at the end rather than pass it, from either side.
+        let arrived = abs(nextAway) <= 0.5 || (away < 0) != (nextAway < 0)
+        writeContentOffsetY(arrived ? target : target + nextAway, in: sv)
+        if arrived {
+            stopFollowAnimation()
+        }
     }
+
+    /// How quickly the follow's spring closes on the end, in radians a second: a sent
+    /// message settles in about a third of a second.
+    private static let followSpring: Double = 16
+    /// The same, coming down to an end above it: about 0.2 s, the keyboard's own.
+    private static let followSpringDown: Double = 30
 
     func attach(scrollView sv: UIScrollView, anchorView: UIView) {
         self.vstackAnchorView = anchorView
+        watchTheKeyboard()
         if self.scrollView !== sv {
             if let old = self.scrollView {
                 old.removeGestureRecognizer(tapAwayRecognizer)
@@ -5528,6 +7259,12 @@ final class NativeChatScrollCoordinator: NSObject {
             self.boundsObservation = sv.observe(\.bounds, options: [.old, .new]) { [weak self] _, change in
                 guard change.oldValue?.size != change.newValue?.size else { return }
                 MainActor.assumeIsolated {
+                    #if DEBUG
+                    self?.entryTrace(String(format: "bounds %.0fx%.0f->%.0fx%.0f anim=%.2f",
+                                            change.oldValue?.width ?? 0, change.oldValue?.height ?? 0,
+                                            change.newValue?.width ?? 0, change.newValue?.height ?? 0,
+                                            UIView.inheritedAnimationDuration))
+                    #endif
                     if change.oldValue?.width != change.newValue?.width { self?.captureWindowLayoutAnchor() }
                     self?.handleBoundsChanged()
                 }
@@ -5574,7 +7311,22 @@ final class NativeChatScrollCoordinator: NSObject {
         }
         let baseOffset = geometryBaseOffset ?? sv.contentOffset.y
         let frames: [String: CGRect]
-        if let cachedFrames = pendingFilteredFrames {
+        if useMarkerFrames {
+            let liveMarkers = collectMarkerRowFrames()
+            frames = !liveMarkers.isEmpty || vstackAnchorView?.window != nil
+                ? liveMarkers
+                : (pendingFilteredFrames ?? [:])
+            pendingFilteredFrames = frames
+            guard areMarkerFramesCoherent(frames: frames, allFrames: allFrames) else {
+                if windowEnabled {
+                    windowWaitMarker += 1
+                    windowWaitReason = "marker"
+                    if windowAnchorBaseline != nil { scheduleWaitForDecelerationEnd() }
+                }
+                return
+            }
+            recordConfirmedMissingMarkers(frames)
+        } else if let cachedFrames = pendingFilteredFrames {
             frames = cachedFrames
         } else {
             let computed = allFrames.filter { (windowEnabled ? !$0.key.hasPrefix("__") : $0.key != "__content") }
@@ -5631,13 +7383,16 @@ final class NativeChatScrollCoordinator: NSObject {
             let expectedY = origin + current.minY
             guard abs(mountedY - expectedY) < 0.5 else { return }
         }
+        let measurementFrames = useMarkerFrames
+            ? allFrames.merging(frames) { _, new in new }
+            : allFrames
         pendingGeometry = nil
         pendingFilteredFrames = nil
         pendingCandidates = []
         geometryBaseOffset = nil
         rowFrames = frames
         if windowEnabled { windowCommittedSerial = windowPublication?.snapshot.serial ?? 0 }
-        scheduleWindowMeasurements(allFrames)
+        scheduleWindowMeasurements(measurementFrames)
         geometryOrigin = origin
         awaitingGeometry = false
         if windowEnabled, finishWindowNavigation(in: sv, origin: origin, frames: frames) { return }
@@ -5686,7 +7441,13 @@ final class NativeChatScrollCoordinator: NSObject {
                 // All windowed geometry (including images/streaming without a
                 // publication baseline) preserves motion since reconcileFrames.
                 let correctionBase = windowEnabled ? sv.contentOffset.y : baseOffset
-                let next = min(maxOffsetY(for: sv), max(-sv.adjustedContentInset.top, correctionBase + delta))
+                // Following, the correction is not cut at the end: when the end came up in
+                // the same pass (the keyboard going down as a Send lands), the cut dropped
+                // the chat by the keyboard's height in one frame. Past the end, the
+                // follow glides it down with the keyboard.
+                let upperBound = smoothFollow && isPinnedToBottom && windowEnabled
+                    ? CGFloat.greatestFiniteMagnitude : maxOffsetY(for: sv)
+                let next = min(upperBound, max(-sv.adjustedContentInset.top, correctionBase + delta))
                 #if DEBUG
                 let beforeCorrection = sv.contentOffset.y
                 #endif
@@ -5701,6 +7462,7 @@ final class NativeChatScrollCoordinator: NSObject {
                     windowCorrectionPoints += abs(sv.contentOffset.y - beforeCorrection)
                 }
                 perfCorrectionSinceFrame += sv.contentOffset.y - beforeCorrection
+                if isPinnedToBottom { Self.noteInstantFollow("anchor", points: sv.contentOffset.y - beforeCorrection) }
                 #endif
                 if windowEnabled && !isPinnedToBottom && abs(next - (correctionBase + delta)) > 0.5 {
                     // contentSize may lag the coherent mounted markers during resize.
@@ -5734,8 +7496,29 @@ final class NativeChatScrollCoordinator: NSObject {
     }
 
     private func handleContentSizeChanged(oldHeight: CGFloat, newHeight: CGFloat) {
+        #if DEBUG
+        if let sv = scrollView {
+            entryTrace(String(format: "size %.0f->%.0f offset=%.0f %@ anim=%.2f", oldHeight, newHeight,
+                              sv.contentOffset.y, Self.geometry(sv), UIView.inheritedAnimationDuration))
+        }
+        #endif
+        // The inset is still moving with the keyboard (the content changes every frame of
+        // its animation, and the keyboard coming up rides a spring longer than 0.45 s):
+        // the window it opened lasts until the content has been still for a few frames,
+        // shorter than the gap between a streaming reply's changes.
+        if smoothFollow, CACurrentMediaTime() < followsKeyboardUntil {
+            followsKeyboardUntil = max(followsKeyboardUntil, CACurrentMediaTime() + 0.05)
+        }
         awaitingGeometry = true
         applyPendingGeometry()
+        // Just entered: the end moved (rows measured, a catch-up). Follow it now.
+        if isHoldingEntryAtEnd {
+            requestFollow(forceInstant: true)
+        } else if newHeight > oldHeight, followGlidesThroughLayout {
+            // Following, the end moved down: glide toward it now, not once a layout
+            // pass the band holds open settles.
+            requestFollow(checkingBand: false)
+        }
     }
 
     private func handleBoundsChanged() {
@@ -5761,6 +7544,12 @@ final class NativeChatScrollCoordinator: NSObject {
                 windowTargetID = nil
                 windowNavigationCompletion = nil
             }
+            if pan.state == .began {
+                windowGrowthStepsThisRest = 0
+                windowGrowthWaits = 0
+            }
+            // A touch takes the chat over from the entry's hold at its end.
+            entryPinUntil = 0
             #if DEBUG
             startScrollPerfTrackingIfNeeded()
             #endif
@@ -5801,6 +7590,7 @@ final class NativeChatScrollCoordinator: NSObject {
                 }
                 releaseHeldTailRowsIfOnScreen()
                 scheduleAutoLoadCheck(delay: 0.05)
+                scheduleWindowGrowth()
             }
         default:
             break
@@ -5821,6 +7611,52 @@ final class NativeChatScrollCoordinator: NSObject {
         }
         let prepStart = CACurrentMediaTime()
         #endif
+        if useMarkerFrames {
+            let containerOnly = allFrames.filter { $0.key.hasPrefix("__") }
+            if !containerOnly.isEmpty {
+                lastContainerFrames = containerOnly
+            }
+            if windowEnabled, let publication = windowPublication,
+               allFrames["__window:\(publication.snapshot.serial)"] != nil,
+               let section = allFrames["__rows"] {
+                let scale = scrollView?.window?.screen.scale ?? 2
+                let width = (section.width * scale).rounded() / scale
+                let targetLayout = NativeChatWindowModel.LayoutKey(width: width, scale: scale, textMetrics: windowTextMetrics)
+                if targetLayout != windowModel.layout {
+                    if windowLayoutTarget != targetLayout { windowLayoutChanges += 1 }
+                    captureWindowLayoutAnchor()
+                    windowLayoutTarget = targetLayout
+                }
+            }
+            if pendingGeometry == nil {
+                geometryBaseOffset = scrollView?.contentOffset.y
+            }
+            let markerFrames = collectMarkerRowFrames()
+            let explicitRowFrames = allFrames.filter { (windowEnabled ? !$0.key.hasPrefix("__") : $0.key != "__content") }
+            let filtered = !markerFrames.isEmpty || vstackAnchorView?.window != nil
+                ? markerFrames
+                : explicitRowFrames
+            pendingGeometry = containerOnly.isEmpty ? allFrames : containerOnly.merging(filtered) { _, new in new }
+            pendingFilteredFrames = filtered
+            if windowEnabled, let publication = windowPublication, publication.snapshot.enabled {
+                let mountedIDs = Set(publication.snapshot.rows.map(\.id))
+                pendingCandidates = rowFrames
+                    .filter { mountedIDs.contains($0.key) }
+                    .sorted { $0.value.minY < $1.value.minY }
+            } else {
+                pendingCandidates = rowFrames
+                    .filter { filtered[$0.key] != nil }
+                    .sorted { $0.value.minY < $1.value.minY }
+            }
+            awaitingGeometry = true
+            if windowEnabled { beginWindowWait("geometry") }
+            #if DEBUG
+            perfPrepGens += 1
+            perfPrepMs += (CACurrentMediaTime() - prepStart) * 1000.0
+            #endif
+            applyPendingGeometry()
+            return
+        }
         if windowEnabled, let publication = windowPublication,
            allFrames["__window:\(publication.snapshot.serial)"] != nil {
             let serial = publication.snapshot.serial
@@ -5986,6 +7822,12 @@ final class NativeChatScrollCoordinator: NSObject {
         #if DEBUG
         if sv.isTracking || sv.isDragging || sv.isDecelerating {
             startScrollPerfTrackingIfNeeded()
+            listFrames.begin(sv)
+        }
+        // Moved by someone else: UIKit clamping it, SwiftUI, or a finger.
+        if abs(sv.contentOffset.y - lastObservedOffsetY) > 0.5 {
+            entryTrace(String(format: "moved %.0f->%.0f (not ours) %@ anim=%.2f", lastObservedOffsetY,
+                              sv.contentOffset.y, Self.geometry(sv), UIView.inheritedAnimationDuration))
         }
         let perfStart = CACurrentMediaTime()
         defer {
@@ -6029,6 +7871,11 @@ final class NativeChatScrollCoordinator: NSObject {
             pendingFollowAfterDeceleration = false
             pendingForceInstantFollow = false
             requestFollow(forceInstant: forceInstant)
+        }
+        let travel = sv.contentOffset.y - lastObservedOffsetY
+        if abs(travel) > 0.5 {
+            windowTravel = travel < 0 ? .up : .down
+            windowLastOffsetMotion = CACurrentMediaTime()
         }
         lastObservedOffsetY = sv.contentOffset.y
         if pendingGeometry == nil { checkWindowBand() }
@@ -6084,6 +7931,7 @@ final class NativeChatScrollCoordinator: NSObject {
         }
         guard let store, !store.rows.isEmpty, store.rows.count < 600 else { return }
         if store.truncatedCount > 0 {
+            ChatSlideProbe.mark("nativeChat.autoLoad truncated=\(store.truncatedCount)")
             onNearTopLoadMore?(false)
         } else if !isPinnedToBottom {
             let chatId = store.currentChatId ?? bridge?.currentSourceChatId ?? ""
@@ -6219,6 +8067,11 @@ final class NativeChatScrollCoordinator: NSObject {
     }
 
     func sendSyncToWeb(_ snapshot: NativeChatScrollPosition) {
+        bridge?.send(Self.syncPayload(snapshot))
+    }
+
+    /// The page's message for where the reader is.
+    static func syncPayload(_ snapshot: NativeChatScrollPosition) -> [String: Any] {
         var payload: [String: Any] = [
             "type": "agent-framework:nativeChat:action",
             "op": "syncScrollPosition",
@@ -6229,7 +8082,7 @@ final class NativeChatScrollCoordinator: NSObject {
         if let rowId = snapshot.webRowId {
             payload["rowId"] = rowId
         }
-        bridge?.send(payload)
+        return payload
     }
 }
 
@@ -6486,7 +8339,7 @@ private struct NativeChatProportionalImage: View {
         let size = reservedDimensions ?? CGSize(width: 193, height: 420)
         return ZStack {
             Color.ripul(.text).opacity(0.06)
-            ProgressView()
+            RenderServerSpinner(size: 20)
         }
         .frame(width: size.width, height: size.height)
     }
@@ -6505,16 +8358,5 @@ private func copyToClipboard(_ text: String) {
     #elseif os(macOS)
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(text, forType: .string)
-    #endif
-}
-
-private func appendToClipboard(_ text: String) {
-    #if os(iOS)
-    let existing = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    UIPasteboard.general.string = existing.isEmpty ? text : "\(existing)\n\n\n\(text)"
-    #elseif os(macOS)
-    let existing = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(existing.isEmpty ? text : "\(existing)\n\n\n\(text)", forType: .string)
     #endif
 }

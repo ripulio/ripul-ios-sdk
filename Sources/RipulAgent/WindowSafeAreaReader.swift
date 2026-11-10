@@ -48,12 +48,21 @@ extension EnvironmentValues {
 /// `safeAreaInsetsDidChange`, `layoutSubviews` for rotation) schedule a plain
 /// main-queue async read + report, so the window is never touched inside a
 /// SwiftUI update transaction and the state write never lands mid-update.
+///
+/// Those callbacks are not the only time the window changes. On an iPhone Duo
+/// iOS finishes moving the safe area and the camera's reserved regions after
+/// the layout pass that woke the reader, and moves the regions again when a
+/// Live Activity comes into or leaves the island, with no callback here at
+/// all. So the reader reads again as the window settles (`settleDelays`), and
+/// `WindowReservedRegionsWatch` wakes it when SwiftUI sees the regions move.
 struct WindowSafeAreaTopReader: UIViewRepresentable {
     @Environment(\.ripulTopBarSafeAreaTop) private var topOverride
     let onChange: (CGFloat) -> Void
     var onInsetsChange: ((UIEdgeInsets) -> Void)? = nil
     /// Where app-owned top chrome should sit — see `WindowTopChromeLayout`.
     var onClearanceChange: ((WindowTopChromeClearance) -> Void)? = nil
+    /// Changes each time `WindowReservedRegionsWatch` sees the regions move.
+    var regionsGeneration = 0
 
     func makeUIView(context: Context) -> ReaderView {
         let view = ReaderView()
@@ -63,6 +72,7 @@ struct WindowSafeAreaTopReader: UIViewRepresentable {
         view.onInsetsChange = onInsetsChange
         view.onClearanceChange = onClearanceChange
         view.topOverride = topOverride
+        view.regionsGeneration = regionsGeneration
         return view
     }
 
@@ -74,6 +84,10 @@ struct WindowSafeAreaTopReader: UIViewRepresentable {
             uiView.topOverride = topOverride
             uiView.scheduleReport()
         }
+        if uiView.regionsGeneration != regionsGeneration {
+            uiView.regionsGeneration = regionsGeneration
+            uiView.scheduleReport()
+        }
     }
 
     final class ReaderView: UIView {
@@ -81,9 +95,19 @@ struct WindowSafeAreaTopReader: UIViewRepresentable {
         var onInsetsChange: ((UIEdgeInsets) -> Void)?
         var onClearanceChange: ((WindowTopChromeClearance) -> Void)?
         var topOverride: CGFloat?
+        var regionsGeneration = 0
         private var lastReported: CGFloat?
         private var lastInsets: UIEdgeInsets?
         private var lastClearance: WindowTopChromeClearance?
+        private var settle: DispatchWorkItem?
+
+        /// Gaps between the reads after a wake, 1.5s in all. Measured on the
+        /// Duo simulator (1 November 2026): after an unfold the reader's one
+        /// read found no camera region, which came about 0.8s later; after a
+        /// turn it read a camera strip still shrinking (84x162 on its way to
+        /// 84x82) and inset sides not yet moved. Neither woke it again, and a
+        /// bar placed from such a read sat under the clock (Peter's open Duo).
+        static let settleDelays: [TimeInterval] = [0.25, 0.5, 0.75]
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -101,31 +125,98 @@ struct WindowSafeAreaTopReader: UIViewRepresentable {
         }
 
         func scheduleReport() {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let window = self.window else { return }
-                let insets = window.safeAreaInsets
-                if insets != self.lastInsets {
-                    self.lastInsets = insets
-                    self.onInsetsChange?(insets)
-                }
-                // Same deferred UIKit read: the status bar frame and reserved
-                // regions are window facts, never touched from a SwiftUI body.
-                var clearance = WindowTopChromeLayout.clearance(for: window)
-                if let topOverride {
-                    clearance.top = topOverride
-                    clearance.left = 0
-                    clearance.right = 0
-                }
-                if clearance != self.lastClearance {
-                    self.lastClearance = clearance
-                    self.onClearanceChange?(clearance)
-                }
-                let top = self.topOverride ?? insets.top
-                guard top != self.lastReported else { return }
-                self.lastReported = top
-                self.onChange?(top)
-            }
+            DispatchQueue.main.async { [weak self] in self?.report() }
+            scheduleSettleReads(step: 0)
         }
+
+        /// The reads after a wake. A newer wake starts them over, so a run of
+        /// layout passes (an animation) ends in one set, after the last pass.
+        private func scheduleSettleReads(step: Int) {
+            settle?.cancel()
+            settle = nil
+            guard step < Self.settleDelays.count else { return }
+            let read = DispatchWorkItem { [weak self] in
+                self?.report()
+                self?.scheduleSettleReads(step: step + 1)
+            }
+            settle = read
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelays[step], execute: read)
+        }
+
+        private func report() {
+            guard let window else { return }
+            let insets = window.safeAreaInsets
+            if insets != lastInsets {
+                lastInsets = insets
+                onInsetsChange?(insets)
+            }
+            // Same deferred UIKit read: the status bar frame and reserved
+            // regions are window facts, never touched from a SwiftUI body.
+            var clearance = WindowTopChromeLayout.clearance(for: window)
+            if let topOverride {
+                clearance.top = topOverride
+                clearance.left = 0
+                clearance.right = 0
+            }
+            if clearance != lastClearance {
+                lastClearance = clearance
+                onClearanceChange?(clearance)
+            }
+            let top = topOverride ?? insets.top
+            guard top != lastReported else { return }
+            lastReported = top
+            onChange?(top)
+        }
+    }
+}
+
+/// `WindowSafeAreaTopReader`, woken when the window's reserved regions move.
+private struct WatchedWindowSafeAreaTopReader: View {
+    let onChange: (CGFloat) -> Void
+    var onInsetsChange: ((UIEdgeInsets) -> Void)? = nil
+    var onClearanceChange: ((WindowTopChromeClearance) -> Void)? = nil
+    @State private var regionsGeneration = 0
+
+    var body: some View {
+        WindowSafeAreaTopReader(onChange: onChange, onInsetsChange: onInsetsChange,
+                                onClearanceChange: onClearanceChange, regionsGeneration: regionsGeneration)
+            .modifier(WindowReservedRegionsWatch(generation: $regionsGeneration))
+    }
+}
+
+/// Counts moves of the window's occlusion regions (the iPhone Duo's camera
+/// and status items). With a Live Activity in the island iOS widens the
+/// camera's region and moves the clock left, and nothing in UIKit calls a
+/// view about it: measured on the Duo simulator held open in portrait, the
+/// region went from 134 to 226 points wide about three seconds after the app
+/// came forward, and a reader that had read 134 kept it, so the chat's menu
+/// button stayed where the clock now is. SwiftUI's geometry follows the
+/// regions (iOS 27.1), so its change is the wake.
+private struct WindowReservedRegionsWatch: ViewModifier {
+    @Binding var generation: Int
+
+    func body(content: Content) -> some View {
+        // The 27.1 SDK's SwiftUI (8.0.85); Xcode 27.0's lacks the regions.
+        #if canImport(SwiftUI, _version: 8.0.85) && !targetEnvironment(macCatalyst)
+        if #available(iOS 27.1, *) {
+            content.onGeometryChange(for: [CGRect].self) { proxy in
+                // In the window's space, whole points: a slide that carries
+                // this view is not the regions moving.
+                let origin = proxy.frame(in: .global).origin
+                return proxy.reservedRegions(kind: .occlusion).map { region in
+                    let frame = region.frame.offsetBy(dx: origin.x, dy: origin.y)
+                    return CGRect(x: frame.minX.rounded(), y: frame.minY.rounded(),
+                                  width: frame.width.rounded(), height: frame.height.rounded())
+                }
+            } action: { _ in
+                generation &+= 1
+            }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
     }
 }
 
@@ -142,7 +233,8 @@ struct WindowSafeAreaTopReader: UIViewRepresentable {
 /// spans only the trailing ~134pt. Apple's guidance for custom bars there is
 /// to use the reserved-region API rather than the rectangular inset
 /// ("Prepare your app for iPhone Duo", 8:08), so the bar row joins the band
-/// beside the camera and its controls keep out of the region horizontally.
+/// beside the camera, level with the status items and the island, and its
+/// controls keep out of the region horizontally.
 public struct WindowTopChromeClearance: Equatable, Sendable {
     /// Window-space y at which the bar row (its 4pt gutter included) starts.
     public var top: CGFloat
@@ -178,6 +270,8 @@ public enum WindowTopChromeLayout {
     /// GlassTopBar's row: a 4pt gutter above a 44pt row, so the row's centre
     /// sits 26pt below the reported `top`.
     public static let rowCentreOffset: CGFloat = 26
+    static let rowGutter: CGFloat = 4
+    static let rowHeight: CGFloat = 44
     /// A reclaimed band must leave room for a real bar: leading button,
     /// readable lozenge and the widest trailing cluster. Below this the
     /// controls would crowd the free span, so the row stays under the inset.
@@ -189,6 +283,11 @@ public enum WindowTopChromeLayout {
     /// Test seam: substitute the status bar frame and occlusion regions the
     /// resolver would otherwise read from the window.
     public static var probeOverride: ((UIWindow) -> (statusBarFrame: CGRect, occlusions: [CGRect]))?
+    /// Test seam beside `probeOverride`: the system's top for a bar row (see
+    /// `systemBarTop(in:)`). Under `probeOverride` the window's own is never
+    /// read, so a host simulator's geometry cannot leak in; nil centres the
+    /// row on the region.
+    public static var systemBarTopOverride: ((UIWindow) -> CGFloat?)?
 
     /// Resolve from live window facts. Call from UIKit callbacks or bridge
     /// handlers only — never from a SwiftUI body (see the reader's doc).
@@ -198,8 +297,24 @@ public enum WindowTopChromeLayout {
             statusBarFrame: window.windowScene?.statusBarManager?.statusBarFrame ?? .null,
             occlusions: occlusions(in: window)
         )
+        let barTop = probeOverride == nil ? systemBarTop(in: window) : systemBarTopOverride?(window) ?? nil
         return resolve(bounds: window.bounds, safeInsets: window.safeAreaInsets,
-                       statusBarFrame: probe.statusBarFrame, occlusions: probe.occlusions)
+                       statusBarFrame: probe.statusBarFrame, occlusions: probe.occlusions, systemBarTop: barTop)
+    }
+
+    /// Where iOS puts a bar as tall as our row on the window's top edge
+    /// (`UIView.LayoutRegion.bar`, iOS 27.1), in window space: level with its
+    /// own status items. On the Duo's open display held upright it is y 26 to
+    /// 70, with a Live Activity in the island or without; the clock and the
+    /// Wi-Fi ring are centred at 48 and the island at 47.7, where a row centred
+    /// on the camera's region (41) sat 7pt high (Peter, 1 November 2026).
+    static func systemBarTop(in window: UIWindow) -> CGFloat? {
+        #if canImport(UIKit, _version: 9127.0.85)
+        if #available(iOS 27.1, *) {
+            return window.bounds.minY + window.edgeInsets(for: .bar(onEdge: UIRectEdge.top, extent: rowHeight)).top
+        }
+        #endif
+        return nil
     }
 
     /// Active occlusion reserved regions (the FaceTime camera) in window
@@ -221,8 +336,11 @@ public enum WindowTopChromeLayout {
     /// - `bounds` / `safeInsets`: the window's.
     /// - `statusBarFrame`: the scene's status bar frame (`.null` when unknown).
     /// - `occlusions`: active occlusion regions, window space, margins included.
+    /// - `systemBarTop`: where iOS puts a bar of our row's height, window space
+    ///   (`systemBarTop(in:)`), when it says.
     public static func resolve(bounds: CGRect, safeInsets: UIEdgeInsets,
-                               statusBarFrame: CGRect, occlusions: [CGRect]) -> WindowTopChromeClearance {
+                               statusBarFrame: CGRect, occlusions: [CGRect],
+                               systemBarTop: CGFloat? = nil) -> WindowTopChromeClearance {
         let safeTop = safeInsets.top
         let inherited = WindowTopChromeClearance(top: safeTop, safeTop: safeTop)
         guard safeTop > 0, bounds.width > 0 else { return inherited }
@@ -251,9 +369,16 @@ public enum WindowTopChromeLayout {
         left = max(0, left)
         right = max(0, right)
         guard (safeMaxX - safeMinX) - left - right >= minimumFreeWidth else { return inherited }
-        // Join the system's own band: the row centres on the region, like the
-        // clock beside the camera, and never sits lower than it does today.
-        let aligned = union.midY - rowCentreOffset
+        // Join the system's own band, level with its status items: where iOS
+        // puts a bar of our height when that fits in the band, else centred
+        // on the region. Never lower than under the inset.
+        let aligned: CGFloat
+        if let systemBarTop, systemBarTop >= bounds.minY,
+           systemBarTop + rowHeight <= bounds.minY + safeTop + 0.5 {
+            aligned = systemBarTop - rowGutter
+        } else {
+            aligned = union.midY - rowCentreOffset
+        }
         let top = min(safeTop, max(bounds.minY, aligned))
         return WindowTopChromeClearance(top: top, left: left, right: right, safeTop: safeTop)
     }
@@ -270,7 +395,7 @@ public struct WindowTopChrome: View {
     }
 
     public var body: some View {
-        WindowSafeAreaTopReader(onChange: { _ in }, onClearanceChange: onChange)
+        WatchedWindowSafeAreaTopReader(onChange: { _ in }, onClearanceChange: onChange)
     }
 }
 
@@ -307,7 +432,7 @@ public struct WindowSafeAreaTop: View {
     }
 
     public var body: some View {
-        WindowSafeAreaTopReader(onChange: onChange)
+        WatchedWindowSafeAreaTopReader(onChange: onChange)
     }
 }
 
@@ -319,7 +444,7 @@ public struct WindowSafeAreaInsets: View {
     public init(onChange: @escaping (UIEdgeInsets) -> Void) { self.onChange = onChange }
 
     public var body: some View {
-        WindowSafeAreaTopReader(onChange: { _ in }, onInsetsChange: onChange)
+        WatchedWindowSafeAreaTopReader(onChange: { _ in }, onInsetsChange: onChange)
     }
 }
 

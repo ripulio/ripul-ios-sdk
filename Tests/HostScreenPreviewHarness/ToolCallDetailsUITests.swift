@@ -1,6 +1,47 @@
 import XCTest
 
 final class ToolCallDetailsUITests: XCTestCase {
+    func testNativeChatLoadingProgressEmptyAndRetry() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-loading-ui-tests"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["NativeChatView.loadingLabel"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["NativeChatView.empty"].exists)
+        app.buttons["Progress"].tap()
+        XCTAssertTrue(app.staticTexts["50 of 100 messages"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.progressIndicators["NativeChatView.loadingProgress"].exists)
+        XCTAssertFalse(app.staticTexts["NativeChatView.empty"].exists)
+        app.buttons["Fail"].tap()
+        XCTAssertTrue(app.buttons["NativeChatView.retryLoad"].exists)
+        app.buttons["NativeChatView.retryLoad"].tap()
+        XCTAssertEqual(app.staticTexts["NativeChatView.loadingLabel"].label, "Loading chat…")
+        app.buttons["Empty"].tap()
+        XCTAssertTrue(app.staticTexts["NativeChatView.empty"].exists)
+        XCTAssertFalse(app.staticTexts["NativeChatView.loadingLabel"].exists)
+        app.buttons["Messages"].tap()
+        XCTAssertTrue(app.staticTexts["Loaded message"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["NativeChatView.empty"].exists)
+        app.buttons["Progress"].tap()
+        XCTAssertTrue(app.staticTexts["Loaded message"].exists)
+        XCTAssertTrue(app.staticTexts["50 of 100 messages"].waitForExistence(timeout: 3), app.debugDescription)
+    }
+
+    func testNativeChatLoadedMessagesNeverShowEmptyLoadFailure() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-loading-ui-tests"]
+        app.launch()
+        app.buttons["Messages"].tap()
+        XCTAssertTrue(app.staticTexts["Loaded message"].waitForExistence(timeout: 3))
+        app.buttons["Fail"].tap()
+        XCTAssertTrue(app.staticTexts["Loaded message"].exists)
+        XCTAssertFalse(app.staticTexts["NativeChatView.loadingLabel"].exists,
+                       "A stale load failure must not cover messages that have already loaded")
+        XCTAssertFalse(app.buttons["NativeChatView.retryLoad"].exists)
+        XCTAssertFalse(app.staticTexts["NativeChatView.empty"].exists)
+    }
+
     func testBusyLozengeRemainsVisibleUntilTaskEnds() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -925,6 +966,10 @@ final class ToolCallDetailsUITests: XCTestCase {
         let option = app.buttons["NativeChat.askUser.option.strip"]
         XCTAssertTrue(option.waitForExistence(timeout: 5))
         option.tap()
+        // No page/transport is attached in this harness. A tap must not claim
+        // success; only the separate acknowledgement can finish the card.
+        XCTAssertTrue(option.isEnabled)
+        app.buttons["NativeChatHarness.acknowledgeAnswer"].tap()
         // An answered card keeps the chosen option lit and disables them all; the
         // "Answered:" line is only for a typed answer that matches no option.
         expectation(for: NSPredicate(format: "isEnabled == false"), evaluatedWith: option)
@@ -937,5 +982,544 @@ final class ToolCallDetailsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["GIT COMMIT"].exists)
         XCTAssertTrue(app.staticTexts["CONTEXT COMPACTED"].exists)
         XCTAssertTrue(app.staticTexts["Upstream Rate Limit (429)"].exists)
+    }
+
+    func testNativeChatImageViewerFitsZoomsAndPans() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-ui-tests", "--scene=4"]
+        app.launch()
+
+        // The reply's wide picture opens fitted: its whole width across the
+        // viewer, its own shape, centred.
+        let wide = app.buttons["Landscape test card"]
+        XCTAssertTrue(wide.waitForExistence(timeout: 5))
+        wide.tap()
+        let viewer = app.scrollViews["NativeChat.imageViewer"]
+        let picture = viewer.images["NativeChat.imageViewer.image"]
+        XCTAssertTrue(picture.waitForExistence(timeout: 5))
+        assertFitted(picture, in: viewer, aspect: 1.6)
+        attachScreenshot(app, "Image viewer: wide picture fitted")
+
+        // A pinch zooms in, keeping the shape, with no blank space beside it.
+        viewer.pinch(withScale: 3, velocity: 4)
+        let zoomed = settledFrame(of: picture)
+        XCTAssertGreaterThan(zoomed.width, viewer.frame.width * 1.8)
+        XCTAssertEqual(zoomed.width / zoomed.height, 1.6, accuracy: 0.02)
+        XCTAssertLessThanOrEqual(zoomed.minX, viewer.frame.minX + 1)
+        XCTAssertGreaterThanOrEqual(zoomed.maxX, viewer.frame.maxX - 1)
+        attachScreenshot(app, "Image viewer: pinched")
+
+        // A drag pans it, and the edge it pans towards still meets the viewer's.
+        viewer.swipeLeft()
+        let panned = settledFrame(of: picture)
+        XCTAssertLessThan(panned.minX, zoomed.minX - 40)
+        XCTAssertGreaterThanOrEqual(panned.maxX, viewer.frame.maxX - 1)
+        XCTAssertEqual(panned.width, zoomed.width, accuracy: 1)
+        attachScreenshot(app, "Image viewer: panned")
+
+        // While zoomed, a downward drag stays in the picture: the sheet stays open.
+        viewer.swipeDown()
+        _ = settledFrame(of: picture)
+        XCTAssertTrue(picture.exists)
+        XCTAssertGreaterThan(picture.frame.width, viewer.frame.width * 1.8)
+
+        // A double tap goes back to the fit; the next zooms in on that point,
+        // here the top-left corner, whose edges then meet the viewer's.
+        viewer.doubleTap()
+        assertFitted(picture, in: viewer, aspect: 1.6)
+        picture.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.1)).doubleTap()
+        let corner = settledFrame(of: picture)
+        XCTAssertGreaterThan(corner.width, viewer.frame.width * 1.8)
+        XCTAssertEqual(corner.minX, viewer.frame.minX, accuracy: 1)
+        XCTAssertEqual(corner.minY, viewer.frame.minY, accuracy: 1)
+        attachScreenshot(app, "Image viewer: double tapped in at the top-left")
+
+        // At the picture's top edge a downward drag is still the picture's:
+        // the sheet stays open and the corner settles back in place.
+        viewer.swipeDown(velocity: .fast)
+        let afterDrag = settledFrame(of: picture)
+        XCTAssertTrue(picture.exists)
+        XCTAssertEqual(afterDrag.width, corner.width, accuracy: 1)
+        XCTAssertEqual(afterDrag.minY, viewer.frame.minY, accuracy: 1)
+        viewer.doubleTap()
+        assertFitted(picture, in: viewer, aspect: 1.6)
+
+        // Fitted, a downward swipe closes the sheet as before.
+        viewer.swipeDown(velocity: .fast)
+        XCTAssertTrue(picture.waitForNonExistence(timeout: 5))
+
+        // The user's tall attachment fits by its height instead, and pans up
+        // and down once zoomed.
+        let tall = app.buttons["Portrait test card"]
+        XCTAssertTrue(tall.waitForExistence(timeout: 5))
+        tall.tap()
+        XCTAssertTrue(picture.waitForExistence(timeout: 5))
+        assertFitted(picture, in: viewer, aspect: 0.5)
+        attachScreenshot(app, "Image viewer: tall picture fitted")
+        viewer.pinch(withScale: 3, velocity: 4)
+        let tallZoomed = settledFrame(of: picture)
+        XCTAssertGreaterThan(tallZoomed.height, viewer.frame.height * 1.8)
+        viewer.swipeUp()
+        let tallPanned = settledFrame(of: picture)
+        XCTAssertLessThan(tallPanned.minY, tallZoomed.minY - 40)
+        XCTAssertGreaterThanOrEqual(tallPanned.maxY, viewer.frame.maxY - 1)
+        attachScreenshot(app, "Image viewer: tall picture zoomed and panned up")
+        app.buttons["NativeChat.imageViewer.done"].tap()
+        XCTAssertTrue(picture.waitForNonExistence(timeout: 5))
+    }
+
+    func testNativeChatFirstMessageStartsBelowTheBar() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-inset-ui-tests"]
+        app.launch()
+
+        // The chat column runs under the status bar, as in the agent screen,
+        // and the bar floats at the window's top clearance. Scrolled to its
+        // top, the chat's first message must start below the bar, not behind it.
+        let bar = app.otherElements["NativeChatInsetHarness.bar"]
+        let first = app.otherElements["NativeChat.userMessage.u-inset"]
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(bar.waitForExistence(timeout: 5))
+        // The window's clearance reaches the chat a moment after it appears.
+        let deadline = Date().addingTimeInterval(5)
+        while first.frame.minY < bar.frame.maxY, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        attachScreenshot(app, "Native chat below the bar")
+        XCTAssertGreaterThanOrEqual(first.frame.minY, bar.frame.maxY,
+                                    "first message \(first.frame) under the bar \(bar.frame)")
+    }
+
+    /// Peter, 27 October 2026: dragging to extend a text selection in place also
+    /// slid the bubble to reply. A drag that is selecting text is the
+    /// selection's, and so is any drag while a selection shows; once it is
+    /// dismissed, a plain swipe replies again.
+    func testNativeChatSelectingTextDoesNotSwipeToReply() {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-ui-tests"]
+        app.launch()
+        let reply = app.staticTexts["NativeChatHarness.replyTarget"]
+        let responder = app.staticTexts["NativeChatHarness.responder"]
+        XCTAssertTrue(reply.waitForExistence(timeout: 10))
+        let prose = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "I've ported the web chat pipeline")).firstMatch
+        XCTAssertTrue(prose.waitForExistence(timeout: 5))
+        XCTAssertEqual(reply.label, "reply=-")
+        let card = app.otherElements["NativeChat.assistantMessage.a-1"]
+        let swipeRight = {
+            card.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.97))
+                .press(forDuration: 0.05, thenDragTo: card.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.97)),
+                       withVelocity: .default, thenHoldForDuration: 0)
+        }
+
+        // Long-press into the text to start a selection, then drag right to extend it.
+        prose.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.2))
+            .press(forDuration: 1.2, thenDragTo: prose.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.2)))
+        attachScreenshot(app, "Selection extended to the right")
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", ",selected"), object: responder)
+        XCTAssertEqual(XCTWaiter().wait(for: [selected], timeout: 2), .completed, "no selection was made: \(responder.label)")
+        XCTAssertEqual(reply.label, "reply=-", "extending a selection swiped the reply into a quote")
+
+        // While the selection shows, a swipe right is not a reply either.
+        swipeRight()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(reply.label, "reply=-", "a swipe with text selected replied")
+
+        // Dismissed (a tap in the text outside it), a plain swipe replies again.
+        let lastLine = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Tap any tool lozenge above")).firstMatch
+        lastLine.tap()
+        let deadline = Date().addingTimeInterval(3)
+        while responder.label.contains(",selected"), Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
+        XCTAssertFalse(responder.label.contains(",selected"), "the selection did not go: \(responder.label)")
+        swipeRight()
+        XCTAssertTrue(reply.wait(for: \.label, toEqual: "reply=a-1", timeout: 3),
+                      "a plain swipe right no longer replies: \(reply.label)")
+    }
+
+    /// Peter, 27 October 2026: the lozenges a tap reveals must cut into the
+    /// bubble's edge as the web chat's do, and not move the bubble. A reply's
+    /// actions open on its top edge beside the respondent pill, with its time on
+    /// the bottom edge; a user message's open on its top edge. Neither moves.
+    func testNativeChatEdgeActionsCutInWithoutMovingTheBubble() {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-ui-tests"]
+        app.launch()
+
+        // At rest the respondent label is cut into the card's top edge, and the
+        // card ends at the row's bottom: that gives both edges.
+        let reply = app.otherElements["NativeChat.assistantMessage.a-1"]
+        let notch = app.descendants(matching: .any).matching(identifier: "NativeChat.respondentNotch.a-1").firstMatch
+        XCTAssertTrue(notch.waitForExistence(timeout: 10))
+        let prose = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "I've ported the web chat pipeline")).firstMatch
+        XCTAssertTrue(prose.exists)
+        let resting = settledFrame(of: reply)
+        let restingProse = settledFrame(of: prose)
+        let topEdge = notch.frame.midY
+        attachScreenshot(app, "Reply at rest")
+        notch.tap()
+        let replyAction = app.otherElements["NativeChat.assistantToolbar.a-1"].buttons["Reply"]
+        XCTAssertTrue(replyAction.waitForExistence(timeout: 5))
+        let open = settledFrame(of: reply)
+        attachScreenshot(app, "Reply's actions open")
+        XCTAssertEqual(settledFrame(of: prose).minY, restingProse.minY, accuracy: 0.5, "the reply's text moved when its actions opened")
+        XCTAssertEqual(open.minY, resting.minY, accuracy: 0.5, "the reply moved when its actions opened")
+        XCTAssertEqual(open.height, resting.height, accuracy: 0.5, "the reply changed height when its actions opened")
+        XCTAssertEqual(topEdge, resting.minY + 11, accuracy: 2, "the resting label is not on the card's top edge")
+        XCTAssertEqual(replyAction.frame.midY, topEdge, accuracy: 2, "Reply is not on the card's top edge")
+        let respondent = app.buttons["NativeChat.respondentLozenge.a-1"]
+        XCTAssertTrue(respondent.exists)
+        XCTAssertEqual(respondent.frame.midY, topEdge, accuracy: 2, "the respondent pill is not on the card's top edge")
+        let time = app.descendants(matching: .any).matching(identifier: "NativeChat.time").firstMatch
+        XCTAssertTrue(time.exists)
+        XCTAssertEqual(time.frame.midY, resting.maxY, accuracy: 2, "the time is not on the card's bottom edge")
+
+        // The user message above it: bring it into view, then open its actions
+        // (which closes the reply's: one bubble's actions show at a time).
+        app.windows.firstMatch.swipeDown(velocity: .slow)
+        let user = app.otherElements["NativeChat.userMessage.u-1"]
+        XCTAssertTrue(user.waitForExistence(timeout: 5))
+        let userText = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "port the web chat tool strip")).firstMatch
+        let userResting = settledFrame(of: user)
+        let userTextResting = settledFrame(of: userText)
+        user.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.9)).tap()
+        let userReply = app.otherElements["NativeChat.userToolbar.u-1"].buttons["Reply"]
+        XCTAssertTrue(userReply.waitForExistence(timeout: 5))
+        let userOpen = settledFrame(of: user)
+        attachScreenshot(app, "User message's actions open")
+        XCTAssertEqual(settledFrame(of: userText).minY, userTextResting.minY, accuracy: 0.5, "the user message's text moved")
+        XCTAssertEqual(userOpen.minY, userResting.minY, accuracy: 0.5, "the user message moved when its actions opened")
+        XCTAssertEqual(userOpen.height, userResting.height, accuracy: 0.5, "the user message changed height")
+        XCTAssertEqual(userReply.frame.midY, userResting.minY, accuracy: 2, "Reply is not on the bubble's top edge")
+        let userTime = app.descendants(matching: .any).matching(identifier: "NativeChat.time").firstMatch
+        XCTAssertTrue(userTime.exists)
+        XCTAssertEqual(userTime.frame.midY, userResting.maxY, accuracy: 2, "the time is not on the bubble's bottom edge")
+    }
+
+    /// Peter, 27 October 2026: entering a chat in native mode, it was sometimes
+    /// blank until a scroll, and not at its end. Every chat entered opens at its
+    /// end with its last message on screen: a cold chat first after launch (sent
+    /// empty, then its rows), another chat (saved place and catch-ups), the same
+    /// chat again after reading up while rows arrived, a cold chat after another
+    /// read partway, a short chat after that, and back to a long one.
+    func testNativeChatOpensEveryEnteredChatAtItsEnd() {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-entry-ui-tests"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["NativeChatEntryHarness.report"].waitForExistence(timeout: 10))
+
+        enterNativeChat("chat-d", in: app, settle: 6)
+        readOlderNativeChatMessages(in: app)
+        enterNativeChat("chat-a", in: app, settle: 6)
+        readOlderNativeChatMessages(in: app)
+        enterNativeChat("chat-b", in: app, settle: 6)
+        readOlderNativeChatMessages(in: app)
+        enterNativeChat("chat-b", in: app, settle: 3)
+        readOlderNativeChatMessages(in: app)
+        enterNativeChat("chat-e", in: app, settle: 6)
+        readOlderNativeChatMessages(in: app)
+        enterNativeChat("chat-c", in: app, settle: 6)
+        enterNativeChat("chat-a", in: app, settle: 3)
+    }
+
+    /// A cold chat whose rows land as it slides in moves only sideways. On Peter's Duo
+    /// (8 November 2026) the rows of a cold chat, its history applied just as the
+    /// slide began, drifted about 70 pt down along the slide's own curve: the nod.
+    func testNativeChatColdEntryHoldsStillWhileSliding() {
+        continueAfterFailure = true
+        // The offset write before the fix, which took the slide's animation
+        // (`-perfOff unanimatedOffsets`): reported beside it in the same build.
+        print("[ENTRYDRIFT] control \(coldEntryDrifts(arguments: ["-perfOff", "unanimatedOffsets"]))")
+        let drifts = coldEntryDrifts(arguments: [])
+        print("[ENTRYDRIFT] fixed \(drifts)")
+        for (index, drift) in drifts.enumerated() {
+            XCTAssertTrue(drift >= 0 && drift <= 2,
+                          "entry \(index + 1) of chat-f moved \(drift) pt up or down while it slid in")
+        }
+    }
+
+    /// History landing above a chat that follows its end must not move what is on
+    /// screen. Peter's Duo, 8 November 2026: after he opened a chat, an older tool
+    /// call's screenshots landed above him one by one (seven 430 pt cards within a
+    /// second, from 2.2 s), the chat corrected each one twice, and it "nods a few
+    /// times". chat-g replays those times, then three more after the 3 s entry hold,
+    /// and tracks its last row as drawn, every frame, for seven seconds once landed.
+    func testNativeChatHoldsStillWhileHistoryLandsAboveIt() {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-entry-ui-tests"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["NativeChatEntryHarness.report"].waitForExistence(timeout: 10))
+
+        enterNativeChat("chat-c", in: app, settle: 3)
+        enterNativeChat("chat-g", in: app, settle: 8.5)
+        let state = nativeChatEntryReport(app)
+        print("[CATCHUPDRIFT] \(state)")
+        let frames = Int(state["catchUpFrames"] ?? "") ?? 0
+        XCTAssertGreaterThan(frames, 120, "the recorder did not see the last row for long enough: \(state)")
+        let drift = Double(state["catchUpDrift"] ?? "") ?? .infinity
+        XCTAssertTrue(drift >= 0 && drift <= 1,
+                      "the last row moved \(drift) pt as history landed above it: \(state)")
+        XCTAssertEqual(state["catchUpMoves"], "0", "frames where the last row moved: \(state)")
+    }
+
+    /// A composer fold undone within moments must not move a chat resting at its end.
+    /// Peter's iPhone 17 Pro Max, 9 November 2026: 1.6 s after a chat landed, the
+    /// composer folded to its pill and unfolded 15 ms later (clearance 195 → 106 → 195
+    /// pt), and the chat jumped 89 pt and came back down. chat-c once its catch-ups
+    /// have landed: three folds undone after 15 ms, its last row tracked every frame.
+    func testNativeChatHoldsStillThroughAFoldUndone() {
+        continueAfterFailure = true
+        // Two controls, reported beside it in the same build: the SwiftUI scroller this
+        // replaces, and the list taking each drop at once (`-perfOff clearanceDropDelay`).
+        print("[FOLDDRIFT] old scroller \(foldUndoneReport(arguments: ["-ripul.nativeChatPerf.ownedList", "NO"]))")
+        print("[FOLDDRIFT] control \(foldUndoneReport(arguments: ["-perfOff", "clearanceDropDelay"]))")
+        let state = foldUndoneReport(arguments: [])
+        print("[FOLDDRIFT] fixed \(state)")
+        let frames = Int(state["catchUpFrames"] ?? "") ?? 0
+        XCTAssertGreaterThan(frames, 60, "the recorder did not see the last row for long enough: \(state)")
+        let drift = Double(state["catchUpDrift"] ?? "") ?? .infinity
+        XCTAssertTrue(drift >= 0 && drift <= 1, "the last row moved \(drift) pt through a fold undone: \(state)")
+        XCTAssertEqual(state["catchUpMoves"], "0", "frames where the last row moved: \(state)")
+    }
+
+    /// Scrolling a long chat costs no more with the owned list than with the SwiftUI
+    /// scroller it replaces. Fast flings through chat-a (170 rows of text, older and
+    /// back), with every frame's gap recorded (`HitchRecorder`: frames later than one
+    /// and a half intervals, the time they lost, the worst gap), alternating the two
+    /// scrollers in the same build. XCTest's own hitch metric gives no numbers on a
+    /// simulator. Printed as `[SCROLLHITCH]`; the test asks only that frames were seen.
+    func testNativeChatScrollHitchesAgainstTheOldScroller() {
+        scrollHitchRounds([("old scroller", ["-ripul.nativeChatPerf.ownedList", "NO"]), ("owned list", [])])
+    }
+
+    /// The same flings with the owned list's rows in `UIHostingConfiguration` content
+    /// views (`-perfOff rowController`, Debug) and in the hosting controllers they are in.
+    func testNativeChatScrollHitchesRowHosting() {
+        scrollHitchRounds([("rows in content views", ["-perfOff", "rowController"]), ("rows in hosting controllers", [])])
+    }
+
+    private func scrollHitchRounds(_ variants: [(String, [String])]) {
+        continueAfterFailure = true
+        for round in 1...2 {
+            for (name, arguments) in variants {
+                let state = scrollHitches(arguments: arguments)
+                print("[SCROLLHITCH] round \(round) \(name): hitches=\(state["hitches"] ?? "-") lostMs=\(state["hitchLostMs"] ?? "-") "
+                      + "worstMs=\(state["hitchWorstMs"] ?? "-") frames=\(state["hitchFrames"] ?? "-")")
+                XCTAssertGreaterThan(Int(state["hitchFrames"] ?? "") ?? 0, 100, "\(name): no frames recorded: \(state)")
+            }
+        }
+    }
+
+    private func scrollHitches(arguments: [String]) -> [String: String] {
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-entry-ui-tests"] + arguments
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["NativeChatEntryHarness.report"].waitForExistence(timeout: 10))
+        enterNativeChat("chat-a", in: app, settle: 5)
+        app.buttons["NativeChatEntryHarness.recordHitches"].tap()
+        let window = app.windows.firstMatch
+        for _ in 0..<3 {
+            window.swipeDown(velocity: .fast)
+            window.swipeDown(velocity: .fast)
+            Thread.sleep(forTimeInterval: 0.8)
+            window.swipeUp(velocity: .fast)
+            window.swipeUp(velocity: .fast)
+            Thread.sleep(forTimeInterval: 0.8)
+        }
+        // XCUITest waits out each coast before the next swipe; the recorder runs a
+        // minute, and its counts are read as they stand.
+        Thread.sleep(forTimeInterval: 0.5)
+        return nativeChatEntryReport(app)
+    }
+
+    /// Every message on screen moves with the chat. Peter, 9 November 2026: with rows as
+    /// hosting-configuration views, "the next panel that's due sticks, then eventually
+    /// unsticks": a row passing under the status bar kept its content out of the safe
+    /// area, held at the edge. The row tests track rows' frames, not where their content
+    /// is drawn; this tracks the paragraphs themselves, as drawn, through four nudges of
+    /// 120 pt that carry rows across the top edge. The simulator has never shown the
+    /// sticking, not even in the control, so the phone remains the real check.
+    func testNativeChatMessagesMoveWithTheScroll() {
+        continueAfterFailure = true
+        // Under a bar that adds itself to the safe area, as in the app. Control, reported
+        // beside it: rows in hosting-configuration views (`-perfOff rowController`).
+        let control = paragraphMoves(arguments: ["--bar-safe-area", "-perfOff", "rowController"])
+        print("[MOVEWITHSCROLL] control compared=\(control.compared) off=\(control.off.count) worst=\(control.off.first ?? "-")")
+        let fixed = paragraphMoves(arguments: ["--bar-safe-area"])
+        print("[MOVEWITHSCROLL] fixed compared=\(fixed.compared) off=\(fixed.off.count)")
+        XCTAssertGreaterThan(fixed.compared, 8, "too few paragraphs were seen on both sides of a nudge")
+        XCTAssertEqual(fixed.off, [], "paragraphs that did not move with the chat")
+    }
+
+    /// chat-a entered, then four nudges of 120 pt: how many paragraphs were seen on both
+    /// sides of a nudge, and those that did not move 120 pt with it.
+    private func paragraphMoves(arguments: [String]) -> (compared: Int, off: [String]) {
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-entry-ui-tests"] + arguments
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["NativeChatEntryHarness.report"].waitForExistence(timeout: 10))
+        enterNativeChat("chat-a", in: app, settle: 5)
+        // One snapshot of the screen's tree per read: asking each of the hundreds of
+        // paragraphs a kept chat holds one at a time took minutes.
+        let screen = app.windows.firstMatch.frame
+        func positions() -> [String: CGFloat] {
+            var found: [String: CGFloat] = [:]
+            func visit(_ node: XCUIElementSnapshot) {
+                if node.elementType == .staticText, node.label.hasPrefix("Paragraph"), node.frame.intersects(screen) {
+                    found[node.label] = node.frame.minY
+                }
+                node.children.forEach(visit)
+            }
+            if let root = try? app.snapshot() { visit(root) }
+            return found
+        }
+        var compared = 0
+        var off: [String] = []
+        for nudge in 1...4 {
+            let before = positions()
+            app.buttons["NativeChatEntryHarness.nudge"].tap()
+            Thread.sleep(forTimeInterval: 0.5)
+            let after = positions()
+            for (label, y) in before {
+                guard let moved = after[label] else { continue }
+                compared += 1
+                if abs(moved - y - 120) > 1 {
+                    off.append(String(format: "nudge %d: %@ moved %.0f pt from %.0f", nudge, String(label.prefix(36)), moved - y, y))
+                }
+            }
+        }
+        return (compared, off)
+    }
+
+    /// Settings > Debug > Native Chat Performance > Owned chat list swaps the scroller in
+    /// the chat that is open, as the screen says, both ways. On Peter's Duo (9 November
+    /// 2026) the chat stayed on the old scroller with the switch showing on.
+    func testOwnedChatListSwitchActsInTheOpenChat() {
+        continueAfterFailure = true
+        let app = XCUIApplication()
+        // No launch argument: one would hide the switch's own value from the app.
+        app.launchArguments = ["--native-chat-entry-ui-tests"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["NativeChatEntryHarness.report"].waitForExistence(timeout: 10))
+        enterNativeChat("chat-c", in: app, settle: 5)
+        XCTAssertEqual(nativeChatEntryReport(app)["list"], "owned", "the chat did not open on the owned list")
+        app.buttons["NativeChatEntryHarness.switchScroller"].tap()
+        Thread.sleep(forTimeInterval: 2)
+        let off = nativeChatEntryReport(app)
+        XCTAssertEqual(off["list"], "old", "switched off, the open chat kept the owned list: \(off)")
+        app.buttons["NativeChatEntryHarness.switchScroller"].tap()
+        Thread.sleep(forTimeInterval: 2)
+        let on = nativeChatEntryReport(app)
+        XCTAssertEqual(on["list"], "owned", "switched back on, the open chat kept the old scroller: \(on)")
+        XCTAssertLessThanOrEqual(abs(Double(on["fromEnd"] ?? "") ?? .infinity), 2, "switched back, not at the end: \(on)")
+    }
+
+    /// chat-c entered, its catch-ups landed, then three folds undone after 15 ms.
+    private func foldUndoneReport(arguments: [String]) -> [String: String] {
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-entry-ui-tests"] + arguments
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["NativeChatEntryHarness.report"].waitForExistence(timeout: 10))
+        enterNativeChat("chat-c", in: app, settle: 5)
+        app.buttons["NativeChatEntryHarness.foldUndone"].tap()
+        Thread.sleep(forTimeInterval: 4.5)
+        return nativeChatEntryReport(app)
+    }
+
+    /// chat-f's drift on each of its two entries, among others.
+    private func coldEntryDrifts(arguments: [String]) -> [Double] {
+        let app = XCUIApplication()
+        app.launchArguments = ["--native-chat-entry-ui-tests"] + arguments
+        app.launch()
+        XCTAssertTrue(app.staticTexts["NativeChatEntryHarness.report"].waitForExistence(timeout: 10))
+        var drifts: [Double] = []
+        for chat in ["chat-c", "chat-f", "chat-a", "chat-f"] {
+            enterNativeChat(chat, in: app, settle: 3)
+            guard chat == "chat-f" else { continue }
+            drifts.append(Double(nativeChatEntryReport(app)["drift"] ?? "") ?? .infinity)
+        }
+        app.terminate()
+        return drifts
+    }
+
+    private func enterNativeChat(_ chat: String, in app: XCUIApplication, settle: TimeInterval,
+                                 file: StaticString = #filePath, line: UInt = #line) {
+        let back = app.buttons["NativeChatEntryHarness.back"]
+        if back.exists, back.isHittable {
+            back.tap()
+            Thread.sleep(forTimeInterval: 1)
+        }
+        app.buttons["NativeChatEntryHarness.open.\(chat)"].tap()
+        Thread.sleep(forTimeInterval: settle)
+        let state = nativeChatEntryReport(app)
+        attachScreenshot(app, "Entered \(chat): \(state)")
+        XCTAssertEqual(state["chat"], chat, file: file, line: line)
+        let fromEnd = Double(state["fromEnd"] ?? "") ?? .infinity
+        XCTAssertLessThanOrEqual(abs(fromEnd), 2, "\(chat) did not open at its end: \(state)", file: file, line: line)
+        let last = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier ENDSWITH %@", ".\(state["last"] ?? "-")")).firstMatch
+        XCTAssertTrue(last.exists && app.windows.firstMatch.frame.intersects(last.frame),
+                      "\(chat)'s last message is not on screen: \(state)", file: file, line: line)
+    }
+
+    /// Flings toward older messages, leaving the chat well away from its end.
+    private func readOlderNativeChatMessages(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<4 { app.windows.firstMatch.swipeDown(velocity: .fast) }
+        Thread.sleep(forTimeInterval: 2)
+        let fromEnd = Double(nativeChatEntryReport(app)["fromEnd"] ?? "") ?? 0
+        XCTAssertGreaterThan(fromEnd, 300, "the chat did not scroll up to read", file: file, line: line)
+    }
+
+    private func nativeChatEntryReport(_ app: XCUIApplication) -> [String: String] {
+        var fields: [String: String] = [:]
+        for part in app.staticTexts["NativeChatEntryHarness.report"].label.split(separator: " ") {
+            let pair = part.split(separator: "=", maxSplits: 1)
+            if pair.count == 2 { fields[String(pair[0])] = String(pair[1]) }
+        }
+        return fields
+    }
+
+    /// Inside the viewer, across it along one dimension, in the picture's own
+    /// shape, and centred.
+    private func assertFitted(_ picture: XCUIElement, in viewer: XCUIElement, aspect: CGFloat,
+                              file: StaticString = #filePath, line: UInt = #line) {
+        let frame = settledFrame(of: picture)
+        let bounds = viewer.frame
+        XCTAssertEqual(frame.width / frame.height, aspect, accuracy: 0.02, "shape of \(frame)", file: file, line: line)
+        XCTAssertTrue(frame.insetBy(dx: 1, dy: 1).width <= bounds.width && frame.insetBy(dx: 1, dy: 1).height <= bounds.height,
+                      "\(frame) is larger than the viewer \(bounds)", file: file, line: line)
+        XCTAssertTrue(abs(frame.width - bounds.width) < 1 || abs(frame.height - bounds.height) < 1,
+                      "\(frame) fills neither dimension of \(bounds)", file: file, line: line)
+        XCTAssertEqual(frame.midX, bounds.midX, accuracy: 1, "horizontal centre", file: file, line: line)
+        XCTAssertEqual(frame.midY, bounds.midY, accuracy: 1, "vertical centre", file: file, line: line)
+    }
+
+    /// The frame once two reads a beat apart agree, so a zoom, a bounce or a
+    /// deceleration has finished.
+    private func settledFrame(of element: XCUIElement) -> CGRect {
+        var last = element.frame
+        for _ in 0..<20 {
+            Thread.sleep(forTimeInterval: 0.15)
+            let now = element.frame
+            if abs(now.minX - last.minX) < 0.5, abs(now.minY - last.minY) < 0.5, abs(now.width - last.width) < 0.5 {
+                return now
+            }
+            last = now
+        }
+        return last
+    }
+
+    private func attachScreenshot(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 }

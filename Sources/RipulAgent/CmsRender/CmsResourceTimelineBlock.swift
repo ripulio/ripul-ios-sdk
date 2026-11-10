@@ -19,7 +19,9 @@ import SwiftUI
 ///
 /// Not native yet: editing (drag, resize, insert), the assignee and
 /// allocation ("things") modes, the hour, quarter and year scales, custom
-/// colour palettes and the cell layout under a bar.
+/// colour palettes, the cell layout under a bar, bar rules
+/// (`itemStyleRules`), bars from other queries (`layers`) and the filter
+/// chips (`showFilters`, docs/architecture/cmsTimelineLayers.md).
 struct CmsResourceTimelineBlockView: View {
     let block: CmsBlock
     @EnvironmentObject var runtime: CmsRuntime

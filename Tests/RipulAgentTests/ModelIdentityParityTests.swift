@@ -176,4 +176,203 @@ final class ModelIdentityParityTests: XCTestCase {
         )
         XCTAssertEqual(familyRow.runningIndicatorColor, ModelIdentity.resolve(modelId: "gpt-5-codex")?.color)
     }
+
+    #if os(macOS)
+    @available(iOS 26.0, macOS 26.0, *)
+    @MainActor
+    func testUnifiedSessionRowHeightRemainsConstantAcrossAllDynamicStates() {
+        let now = Date()
+
+        func makeSession(
+            id: String = "s1",
+            title: String = "Fix session row height jank",
+            tags: [String] = [],
+            typingNames: [String] = [],
+            latestReplyAuthorName: String? = nil,
+            startedBy: SessionStartedBy? = nil,
+            runningOnHost: Bool = false
+        ) -> UnifiedSession {
+            let chat = ChatSession(
+                id: "cli_\(id)",
+                sourceChatId: "cli_\(id)",
+                displayName: title,
+                createdAt: now,
+                latestReplyAuthorName: latestReplyAuthorName,
+                typingNames: typingNames
+            )
+            return UnifiedSession(
+                id: "claude-cli:\(id)",
+                title: title,
+                lastUsed: now,
+                gitBranch: "main",
+                messageCount: 12,
+                projectName: "ripul",
+                provider: "claude-cli",
+                providerLabel: "Claude Code",
+                model: "claude-opus-4-6",
+                machineName: "Studio",
+                machineId: "studio",
+                matchKeys: ["claude-cli:\(id)", "cli_\(id)"],
+                tags: tags,
+                startedBy: startedBy,
+                runningOnHost: runningOnHost,
+                ripulSession: chat
+            )
+        }
+
+        func measureHeight(_ view: some View, compact: Bool) -> CGFloat {
+            let hosted = NSHostingView(
+                rootView: view
+                    .environment(\.compactSessionRows, compact)
+                    .frame(width: compact ? 340 : 420)
+            )
+            return hosted.fittingSize.height
+        }
+
+        let planInProgress = TodoState(version: 1, todos: [
+            TodoItem(content: "Inspect row", status: "completed", activeForm: nil),
+            TodoItem(content: "Lock row height", status: "in_progress", activeForm: "Locking row height"),
+        ], updatedAt: now)
+        let planDone = TodoState(version: 2, todos: [
+            TodoItem(content: "Inspect row", status: "completed", activeForm: nil),
+            TodoItem(content: "Lock row height", status: "completed", activeForm: nil),
+        ], updatedAt: now)
+
+        for compact in [false, true] {
+            let idleStore = SessionListStore()
+            let baseline = measureHeight(
+                UnifiedSessionRow(sessionStore: idleStore, session: makeSession()),
+                compact: compact
+            )
+            XCTAssertGreaterThan(baseline, 0)
+
+            // 1. Short tool name (tool icon in bottom-right slot, SessionTitleLozenge on subtitle line)
+            let shortToolStore = SessionListStore()
+            shortToolStore.customIconsByChatId["s1"] = "star.fill"
+            shortToolStore.latestActivityByChatId["cli_s1"] = .toolStart(
+                toolName: "Bash", toolId: "t1", toolLabel: "Bash", toolDetail: "swift test"
+            )
+            XCTAssertEqual(
+                measureHeight(UnifiedSessionRow(sessionStore: shortToolStore, session: makeSession(runningOnHost: true), isGroupChat: true), compact: compact),
+                baseline,
+                "Tool icon in bottom-right slot with custom session icon must not alter row height (compact=\(compact))"
+            )
+
+            // 2. Long tool name (> 5 chars: SessionTitleLozenge on subtitle line)
+            let longToolStore = SessionListStore()
+            longToolStore.latestActivityByChatId["cli_s1"] = .toolStart(
+                toolName: "Grep", toolId: "t2", toolLabel: "Search", toolDetail: "UnifiedSessionRow.swift"
+            )
+            XCTAssertEqual(
+                measureHeight(UnifiedSessionRow(sessionStore: longToolStore, session: makeSession(runningOnHost: true)), compact: compact),
+                baseline,
+                "Long tool name lozenge on subtitle must not alter row height (compact=\(compact))"
+            )
+
+            // 3. Active plan + concurrent tool call (keepsOneHeight default = true)
+            let planAndToolStore = SessionListStore()
+            planAndToolStore.todoStates["cli_s1"] = planInProgress
+            planAndToolStore.latestActivityByChatId["cli_s1"] = .toolStart(
+                toolName: "Grep", toolId: "t3", toolLabel: "Search", toolDetail: "GlassSessionsList.swift"
+            )
+            XCTAssertEqual(
+                measureHeight(UnifiedSessionRow(sessionStore: planAndToolStore, session: makeSession(runningOnHost: true)), compact: compact),
+                baseline,
+                "Active plan + concurrent tool call must not alter row height (compact=\(compact))"
+            )
+
+            // 4. Completed plan
+            let planDoneStore = SessionListStore()
+            planDoneStore.todoStates["cli_s1"] = planDone
+            XCTAssertEqual(
+                measureHeight(UnifiedSessionRow(sessionStore: planDoneStore, session: makeSession()), compact: compact),
+                baseline,
+                "Completed plan lozenge must not alter row height (compact=\(compact))"
+            )
+
+            // 5. User tags (TagLozenge pills on subtitle line)
+            XCTAssertEqual(
+                measureHeight(
+                    UnifiedSessionRow(sessionStore: idleStore, session: makeSession(tags: ["urgent", "ui-jank"])),
+                    compact: compact
+                ),
+                baseline,
+                "TagLozenge pills on subtitle must not alter row height (compact=\(compact))"
+            )
+
+            // 6. Unread bold title + envelope badge + startedChatsClosed (+N pill) + typing lozenge + emoji title
+            let unreadStore = SessionListStore()
+            unreadStore.unreadChatIds = ["cli_s1"]
+            unreadStore.sessionActionsByChatId["cli_s1"] = [
+                SessionRowAction(id: "report", label: "View Report", icon: "doc.text", style: .primary, behavior: .showContent, data: [:])
+            ]
+            XCTAssertEqual(
+                measureHeight(
+                    UnifiedSessionRow(
+                        sessionStore: unreadStore,
+                        session: makeSession(
+                            title: "🚀 Release check with emoji & CJK 漢字",
+                            typingNames: ["Alex"],
+                            latestReplyAuthorName: "Alex"
+                        ),
+                        isGroupChat: true,
+                        isTeamShared: true,
+                        startedChats: 4,
+                        startedChatsClosed: true,
+                        startedChatsNeedLooking: true,
+                        unreadMentionCount: 3
+                    ),
+                    compact: compact
+                ),
+                baseline,
+                "Unread + +N pill + typing pill + action button + mention badge must not alter row height (compact=\(compact))"
+            )
+
+            // 7. Opening, archiving, deleting spinners & selection mode
+            XCTAssertEqual(
+                measureHeight(
+                    UnifiedSessionRow(sessionStore: idleStore, session: makeSession(), isOpening: true, isSelectMode: true, isSelected: true),
+                    compact: compact
+                ),
+                baseline,
+                "Opening spinner and selection mode must not alter row height (compact=\(compact))"
+            )
+            XCTAssertEqual(
+                measureHeight(
+                    UnifiedSessionRow(sessionStore: idleStore, session: makeSession(), isArchiving: true),
+                    compact: compact
+                ),
+                baseline,
+                "Archiving spinner must not alter row height (compact=\(compact))"
+            )
+            XCTAssertEqual(
+                measureHeight(
+                    UnifiedSessionRow(sessionStore: idleStore, session: makeSession(), isDeleting: true, isDeletingFromHost: true),
+                    compact: compact
+                ),
+                baseline,
+                "Deleting spinner must not alter row height (compact=\(compact))"
+            )
+        }
+    }
+    #endif
+
+    @available(iOS 26.0, macOS 26.0, *)
+    func testLeadingSessionIconToolKeyMatchesStartAndEndAndChangesOnNewTool() {
+        XCTAssertEqual(LeadingSessionIcon.toolDisplayDuration, .seconds(8))
+        XCTAssertNil(LeadingSessionIcon.ToolKey(activity: nil))
+        XCTAssertNil(LeadingSessionIcon.ToolKey(activity: .thinking))
+
+        let start = AgentActivityEvent.toolStart(toolName: "Bash", toolId: "t1", toolLabel: "Bash", toolDetail: "swift test")
+        let end = AgentActivityEvent.toolEnd(toolName: "Bash", toolId: "t1", status: "success", toolLabel: "Bash", toolDetail: "swift test")
+        let nextTool = AgentActivityEvent.toolStart(toolName: "Read", toolId: "t2", toolLabel: "Read", toolDetail: "UnifiedSessionRow.swift")
+
+        let startKey = LeadingSessionIcon.ToolKey(activity: start)
+        let endKey = LeadingSessionIcon.ToolKey(activity: end)
+        let nextKey = LeadingSessionIcon.ToolKey(activity: nextTool)
+
+        XCTAssertNotNil(startKey)
+        XCTAssertEqual(startKey, endKey, "Completing the same tool call must not count as a new tool change after the 8s window")
+        XCTAssertNotEqual(startKey, nextKey, "A new tool call must produce a distinct key so the 8s lead-icon timer resets")
+    }
 }

@@ -2,13 +2,17 @@ import Network
 import XCTest
 @testable import RipulAgent
 
-/// Stands in for the worker's `SupportRoom`: a WebSocket server on this Mac
-/// that hands each binary message from one of its two connections to the
-/// other, untouched, as the room does.
-private final class LoopbackRoom: @unchecked Sendable {
+/// Stands in for the worker's `SupportRoom` and `ScreenRelayRoom`: a
+/// WebSocket server on this Mac that hands each binary message from one of
+/// its two connections to the other, untouched, as the rooms do.
+final class LoopbackRoom: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "io.ripul.test.room")
     private var ends: [NWConnection] = []
+    /// Every binary message the room has passed on, as it saw it.
+    private var carried: [Data] = []
+
+    var carriedSoFar: [Data] { queue.sync { carried } }
 
     init() throws {
         let socket = NWProtocolWebSocket.Options()
@@ -44,6 +48,7 @@ private final class LoopbackRoom: @unchecked Sendable {
             guard let self, error == nil, let context else { return }
             let metadata = context.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
             if metadata?.opcode == .binary, let data, let other = self.ends.first(where: { $0 !== connection }) {
+                self.carried.append(data)
                 self.put(data, .binary, to: other)
             }
             self.read(connection)

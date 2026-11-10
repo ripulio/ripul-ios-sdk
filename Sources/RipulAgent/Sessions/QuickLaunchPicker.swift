@@ -90,6 +90,9 @@ struct QuickLaunchPickerButton: View {
     /// (`loadingId`) or the machine-level connect the row reports
     /// (`isLaunching`).
     private var launching: Bool { isLaunching || loadingId != nil }
+    private var actionTitle: String {
+        labelled ? (launching ? "Starting…" : (createNewChat == nil ? "New Session" : "New Chat")) : "All models"
+    }
 
     var body: some View {
         Button {
@@ -97,19 +100,7 @@ struct QuickLaunchPickerButton: View {
             isPresented = true
         } label: {
             if labelled {
-                Label(launching ? "Starting…" : (createNewChat == nil ? "New Session" : "New Chat"), systemImage: "plus")
-                    .font(.ripul(.subheadline, weight: .semibold))
-                    // Never wrap, never compress: the machine-row header used
-                    // to place a spinner beside this pill that shrank it until
-                    // "New Session" broke onto two lines.
-                    .lineLimit(1)
-                    .fixedSize()
-                    .padding(.horizontal, 14)
-                    .frame(height: 32)
-                    // A plain-style button hit-tests only the label's drawn
-                    // pixels, so a tap on the pill's padding missed it and
-                    // fell through to the machine row, toggling it instead.
-                    .contentShape(Capsule())
+                QuickLaunchButtonLabel(title: actionTitle)
             } else {
                 Image(systemName: "ellipsis")
                     .font(.ripulIcon(size: 13, weight: .semibold))
@@ -124,7 +115,8 @@ struct QuickLaunchPickerButton: View {
         .modifier(LaunchPulse(active: labelled && launching))
         .buttonStyle(.plain)
         .disabled(labelled && launching)
-        .help(labelled ? "New session" : "All models")
+        .accessibilityLabel(actionTitle)
+        .help(actionTitle)
         .uiKitIdentifier("\(identifierPrefix).quickModelPicker")
         // The 2-tap account switch: long-press → "Switch Claude account…".
         // Lives on the launch button because "which account pays" is a launch
@@ -193,6 +185,31 @@ struct QuickLaunchPickerButton: View {
 }
 
 // MARK: - Trigger chrome
+
+/// Keep one button (and its presentation state) while its label adapts to
+/// either a machine row's proposal or the section header's compact mode.
+struct QuickLaunchButtonLabel: View {
+    let title: String
+    @Environment(\.compactSectionActions) private var compactSectionActions
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            if !compactSectionActions {
+                Label(title, systemImage: "plus")
+                    .font(.ripul(.subheadline, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+            }
+            Image(systemName: "plus")
+                .font(.ripulIcon(.subheadline, weight: .semibold))
+                .frame(width: 32, height: 32)
+        }
+        // Include the padding so taps cannot fall through to the disclosure.
+        .contentShape(Capsule())
+    }
+}
 
 /// Gentle continuous opacity pulse marking the pill's launch-in-flight state.
 /// The non-trigger `phaseAnimator` form loops for as long as the view exists,

@@ -4,6 +4,7 @@ import UIKit
 /// The same audit as View Explorer's Audit tab, without opening the overlay.
 public struct ScreenAuditTool: NativeTool {
     public let name = "screen_audit"
+    public let access: NativeToolAccess = .readsScreen
     public let description = "DEVELOPER. Read the current host screen's View Explorer identity audit: named, automatic and anonymous controls, plus the full report. Uses the Audit tab's exact root and classifier. Does not navigate or open the explorer. Covers the loaded view tree and materialized SwiftUI accessibility elements; scroll/expand and audit again for other content. System remote views are not inspectable."
     public let inputSchema = ToolSchema.object()
 

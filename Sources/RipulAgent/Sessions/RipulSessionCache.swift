@@ -78,8 +78,8 @@ public final class UserDefaultsSessionCache: RipulSessionCache {
 
 /// Lookup for the per-session model-picker cache (`ripulSessionModelIds`).
 ///
-/// The model pickers (iOS context menu / ModelPickerSheet, macOS sidebar +
-/// agent screen) write the user's choice at tap time, keyed by the LIVE
+/// The model pickers (iOS context menu / ModelPickerSheet, macOS agent
+/// screen) write the user's choice at tap time, keyed by the LIVE
 /// ChatSession.id (tab id). The entry survives app restarts — but nothing
 /// re-applies it when a closed session is reopened: the web's open/import path
 /// re-derives the override from the transcript's last assistant model, which

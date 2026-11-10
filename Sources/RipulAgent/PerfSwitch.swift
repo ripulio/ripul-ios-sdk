@@ -29,10 +29,24 @@ public enum PerfSwitch {
     /// only: a launch argument cannot carry a negative number (`-1` reads as
     /// the next argument's name), so at launch use `-perfOff glow,shimmer,listPulse`.
     static var loopsAreOff: Bool { UserDefaults.standard.float(forKey: loopFramesKey) < 0 }
+    /// Measurement that costs work of its own, off unless asked for at launch:
+    /// `-perfOn scrollPerf` runs Native Chat's 120 Hz `[SCROLLPERF]` display link.
+    private static let on: Set<String> = Set(
+        (UserDefaults.standard.string(forKey: "perfOn") ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+    static func isOn(_ name: String) -> Bool { on.contains(name) }
+    /// `-perfFollowFps 120`: the rate Native Chat's follow of a streaming tail
+    /// asks for, to try against the shipped one. Nil leaves it.
+    static var followFramesPerSecond: Float? {
+        let asked = UserDefaults.standard.float(forKey: "perfFollowFps")
+        return asked >= 1 ? asked : nil
+    }
     #else
     static func isOff(_ name: String) -> Bool { false }
     static var loopFramesPerSecond: Float? { nil }
     static var loopsAreOff: Bool { false }
+    static func isOn(_ name: String) -> Bool { false }
+    static var followFramesPerSecond: Float? { nil }
     #endif
     /// The preference both read. Public so the app's debug settings can set it.
     public static let loopFramesKey = "perfLoopFps"

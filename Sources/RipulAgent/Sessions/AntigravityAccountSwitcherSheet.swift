@@ -17,6 +17,11 @@ public struct AntigravityAccountProfile: Codable, Identifiable, Equatable, Senda
 
     public var id: String { slug }
     public var isDefault: Bool { slug == "default" }
+    /// Antigravity's own folder on the Mac with nothing signed in: not an
+    /// account, so no list shows it (`CodingAccountDefaultFolder`).
+    public var isEmptyDefault: Bool { CodingAccountDefaultFolder.isEmpty(slug: slug, loggedIn: loggedIn, email: email) }
+    /// The name to show: the default folder goes by its account's email.
+    public var displayName: String { CodingAccountDefaultFolder.title(slug: slug, name: name, email: email, agent: "Antigravity") }
 
     public init(
         slug: String,
@@ -276,6 +281,9 @@ public struct AntigravityAccountSwitcherSheet: View {
     let bridge: AgentBridge
     var chatId: String? = nil
     var startsAddingAccount = false
+    var suggestedAccountName: String?
+    var suggestedAccountEmail: String?
+    var onAccountAdded: ((AntigravityAccountProfile) -> Void)?
     var onSwitched: ((AntigravityAccountProfile?) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -287,18 +295,27 @@ public struct AntigravityAccountSwitcherSheet: View {
         bridge: AgentBridge,
         chatId: String? = nil,
         onSwitched: ((AntigravityAccountProfile?) -> Void)? = nil,
-        startsAddingAccount: Bool = false
+        startsAddingAccount: Bool = false,
+        suggestedAccountName: String? = nil,
+        suggestedAccountEmail: String? = nil,
+        onAccountAdded: ((AntigravityAccountProfile) -> Void)? = nil
     ) {
         self.machine = machine
         self.bridge = bridge
         self.chatId = chatId
         self.onSwitched = onSwitched
         self.startsAddingAccount = startsAddingAccount
+        self.suggestedAccountName = suggestedAccountName
+        self.suggestedAccountEmail = suggestedAccountEmail
+        self.onAccountAdded = onAccountAdded
     }
 
     public var body: some View {
         NavigationStack {
             List {
+                if let suggestedAccountName {
+                    CodingAccountAddComputerHint(name: suggestedAccountName, email: suggestedAccountEmail, machineName: machine.displayName)
+                }
                 AntigravityAccountSection(
                     machine: machine,
                     bridge: bridge,
@@ -306,10 +323,12 @@ public struct AntigravityAccountSwitcherSheet: View {
                     onSignIn: { signIn = AntigravityAccountSignInRequest(machine: machine, profile: $0) },
                     onSwitched: onSwitched,
                     refreshToken: refreshToken,
-                    startsAddingAccount: startsAddingAccount
+                    startsAddingAccount: startsAddingAccount,
+                    suggestedAccountName: suggestedAccountName,
+                    onAccountAdded: onAccountAdded
                 )
             }.ripulThemedList()
-                .navigationTitle(chatId == nil ? "Antigravity accounts" : "Chat account")
+                .navigationTitle(suggestedAccountName != nil ? "Add Computer" : chatId == nil ? "Antigravity accounts" : "Chat account")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
@@ -329,7 +348,7 @@ public struct AntigravityAccountSwitcherSheet: View {
                 machine: request.machine,
                 bridge: bridge,
                 profile: request.profile.slug,
-                profileName: request.profile.name,
+                profileName: request.profile.displayName,
                 startSignInImmediately: true
             )
         }
@@ -352,12 +371,17 @@ struct AntigravityAccountSection: View {
     var onSwitched: ((AntigravityAccountProfile?) -> Void)? = nil
     var refreshToken: UUID? = nil
     var startsAddingAccount = false
+    var suggestedAccountName: String?
+    var onAccountAdded: ((AntigravityAccountProfile) -> Void)?
     @State private var openedAddAccount = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
 
     @State private var accounts: [AntigravityAccountProfile] = []
     @State private var active: String = "default"
     @State private var followsDefault = true
+    /// A listing has come back, so an empty one means the Mac has no account.
+    @State private var loaded = false
     @State private var loading = false
     @State private var error: String?
     @State private var switchingTo: String?
@@ -378,7 +402,15 @@ struct AntigravityAccountSection: View {
                 if chatId != nil && !accounts.isEmpty {
                     Button { Task { await selectAccount("__machine_default__") } } label: {
                         HStack {
-                            Label("Use Mac default", systemImage: "desktopcomputer")
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Same as this Mac")
+                                    // While the chat follows the Mac, its account is the Mac's.
+                                    if followsDefault, let using = accounts.first(where: { $0.slug == active }), !using.isEmptyDefault {
+                                        Text(using.displayName).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                                    }
+                                }
+                            } icon: { Image(systemName: "desktopcomputer") }
                             Spacer()
                             if followsDefault { Image(systemName: "checkmark.circle.fill") }
                         }
@@ -386,7 +418,14 @@ struct AntigravityAccountSection: View {
                     .disabled(loading || switchingTo != nil)
                     .uiKitIdentifier("AntigravityAccountSwitcherSheet.useDefault")
                 }
-                ForEach(accounts) { account in accountRow(account) }
+                if chatId == nil, loaded, error == nil,
+                   let notice = CodingAccountDefaultFolder.macNotice(listed: listedAccounts.map { ($0.slug, $0.loggedIn) },
+                                                                     active: active, agent: "Antigravity") {
+                    Text(notice).font(.ripul(.caption)).foregroundStyle(.ripul(.warning))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .uiKitIdentifier("AntigravityAccountSwitcherSheet.notice")
+                }
+                ForEach(listedAccounts) { account in accountRow(account) }
                 if let error, !error.isEmpty {
                     Text(error).font(.ripul(.caption)).foregroundStyle(.ripul(.warning))
                     Button("Retry") { Task { await refresh() } }
@@ -415,6 +454,20 @@ struct AntigravityAccountSection: View {
                         .disabled(loading || switchingTo != nil)
                         .uiKitIdentifier("AntigravityAccountSwitcherSheet.addAccount")
                 }
+                Button {
+                    let singleEmail = listedAccounts.count == 1 ? listedAccounts.first?.email : nil
+                    openURL(CodingAccountProvider.antigravity.billingAndAccountURL(email: singleEmail))
+                } label: {
+                    HStack {
+                        Label(CodingAccountProvider.antigravity.billingAndAccountTitle, systemImage: "creditcard")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
+                    }
+                }
+                .buttonStyle(.borderless)
+                .uiKitIdentifier("AntigravityAccountSwitcherSheet.billing")
             }
         } header: { RipulSectionHeader {
             HStack {
@@ -425,7 +478,7 @@ struct AntigravityAccountSection: View {
         } } footer: { RipulSectionFooter {
             if machine.isOnline {
                 Text(chatId == nil
-                    ? "Chats using the Mac default switch on their next reply. Conversation history is shared across accounts."
+                    ? "Chats on this Mac use the Active account from their next reply. Conversation history is shared across accounts."
                     : "Applies only to this chat on its next reply. Conversation history is kept.")
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -433,7 +486,14 @@ struct AntigravityAccountSection: View {
         .task(id: refreshToken) {
             if startsAddingAccount && !openedAddAccount {
                 openedAddAccount = true
+                newName = suggestedAccountName ?? ""
                 addingAccount = true
+                if suggestedAccountName != nil {
+                    await refresh()
+                    if error != nil { return }
+                    await createAndSignIn(name: newName)
+                    if error != nil { return }
+                }
             }
             repeat {
                 await refresh()
@@ -442,7 +502,7 @@ struct AntigravityAccountSection: View {
         }
         .onChange(of: scenePhase) { phase in if phase == .active { Task { await refresh() } } }
         .confirmationDialog(
-            "Remove \(deleteCandidate?.name ?? "account")?",
+            "Remove \(deleteCandidate?.displayName ?? "account")?",
             isPresented: Binding(
                 get: { deleteCandidate != nil },
                 set: { if !$0 { deleteCandidate = nil } }
@@ -469,10 +529,9 @@ struct AntigravityAccountSection: View {
             : account.usage?.error != nil ? .signIn("Sign in again", { onSignIn(account) })
             : isActive ? .active
             : .switchTo({ Task { await selectAccount(account.slug) } })
-        let detail = [account.email ?? (account.loggedIn ? "Signed in" : "Not signed in"),
-                      account.isDefault ? "This Mac's login" : nil].compactMap { $0 }.joined(separator: " · ")
+        let detail = CodingAccountDefaultFolder.detail(title: account.displayName, email: account.email, loggedIn: account.loggedIn)
         CodingAccountRow(
-            name: account.name,
+            name: account.displayName,
             detail: detail,
             isActive: isActive,
             usage: account.usage,
@@ -486,6 +545,9 @@ struct AntigravityAccountSection: View {
         .contextMenu { MenuIcons {
             if account.loggedIn {
                 Button("Sign in again", systemImage: "arrow.clockwise") { onSignIn(account) }
+            }
+            Button(CodingAccountProvider.antigravity.billingAndAccountTitle, systemImage: "arrow.up.right.square") {
+                openURL(CodingAccountProvider.antigravity.billingAndAccountURL(email: account.email))
             }
             if !account.isDefault {
                 Button("Remove", systemImage: "trash", role: .destructive) { deleteCandidate = account }
@@ -524,7 +586,14 @@ struct AntigravityAccountSection: View {
     }
 
     private func createAndSignIn(name: String) async {
-        guard !name.isEmpty else { return }
+        guard !name.isEmpty, !loading, switchingTo == nil else { return }
+        if suggestedAccountName != nil,
+           let existing = accounts.first(where: { !$0.loggedIn && $0.email == nil && $0.slug != "default" && $0.name == name }) {
+            addingAccount = false
+            onAccountAdded?(existing)
+            onSignIn(existing)
+            return
+        }
         loading = true
         let result = await bridge.createAntigravityAccount(
             machineId: machine.machineId,
@@ -543,6 +612,7 @@ struct AntigravityAccountSection: View {
                 loggedIn: false
             )
             accounts.append(profile)
+            onAccountAdded?(profile)
             onSignIn(profile)
         } else {
             error = result.error ?? "Could not create the account"
@@ -583,7 +653,11 @@ struct AntigravityAccountSection: View {
         active = chatId == nil ? res.active : res.chatAccount
         followsDefault = !res.chatPinned
         error = res.error
+        if res.error == nil { loaded = true }
     }
+
+    /// Every profile but Antigravity's own folder while nothing is signed in there.
+    private var listedAccounts: [AntigravityAccountProfile] { accounts.filter { !$0.isEmptyDefault } }
 }
 
 // MARK: - Phone-Driven Antigravity Sign-In Sheet

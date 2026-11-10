@@ -139,14 +139,79 @@ public enum SimulatorChromePath {
         )
     }
 
-    /// Total outsets around the screen in simulator points needed to fit the bezel and side buttons.
+    /// Total outsets around the screen in simulator points needed to fit the
+    /// bezel, side buttons, and the 50% overhang of overlaid top/bottom controls.
     public static func totalOutsets(for chrome: SimulatorDisplayChrome, includesButtonPadding: Bool = true) -> UIEdgeInsets {
-        let pad: CGFloat = includesButtonPadding ? 4 : 0
+        let sidePad: CGFloat = includesButtonPadding ? 4 : 0
+        let verticalPad: CGFloat = includesButtonPadding ? 26 : 0
         return UIEdgeInsets(
-            top: CGFloat(chrome.bezelTop) + pad,
-            left: CGFloat(chrome.bezelLeft) + pad,
-            bottom: CGFloat(chrome.bezelBottom) + pad,
-            right: CGFloat(chrome.bezelRight) + pad
+            top: CGFloat(chrome.bezelTop) + verticalPad,
+            left: CGFloat(chrome.bezelLeft) + sidePad,
+            bottom: CGFloat(chrome.bezelBottom) + verticalPad,
+            right: CGFloat(chrome.bezelRight) + sidePad
+        )
+    }
+
+    /// Layout metrics for the circular glass buttons overlaid on a simulator's
+    /// top and bottom hardware chrome borders.
+    public struct OverlayLayout: Sendable, Equatable {
+        /// Uniform circle diameter for all overlaid simulator buttons (top strip + Home).
+        public let buttonDiameter: CGFloat
+        /// Uniform SF Symbol point size for all overlaid simulator buttons.
+        public let iconFontSize: CGFloat
+        /// Distance from the container's top edge to the top edge of the top button row
+        /// so that the buttons cut 50% into the top border of the iPhone chrome.
+        public let topInset: CGFloat
+        /// Distance from the container's bottom edge to the bottom edge of the bottom button
+        /// so that the button cuts 50% into the bottom border of the iPhone chrome.
+        public let bottomInset: CGFloat
+        /// Horizontal inset from the container's leading/trailing edges so the outer
+        /// buttons sit along the top border inside the corner curvature.
+        public let horizontalInset: CGFloat
+    }
+
+    /// Computes uniform button sizing and insets so that overlaid controls sit
+    /// 50% inside the top and bottom borders of the iPhone hardware chrome.
+    public static func overlayLayout(
+        in containerSize: CGSize,
+        screenSize: CGSize,
+        chrome: SimulatorDisplayChrome?
+    ) -> OverlayLayout {
+        let resolvedChrome = chrome ?? .defaultPhone
+        let screenRect = Self.screenRect(
+            in: containerSize,
+            screenSize: screenSize,
+            chrome: resolvedChrome,
+            includesButtonPadding: true
+        )
+        let scale = (screenSize.width > 0 && screenRect.width > 0)
+            ? (screenRect.width / screenSize.width)
+            : 1.0
+        let hingeEdge = resolvedChrome.hingeEdge
+        let spineThickness: CGFloat = (hingeEdge != nil) ? 11.0 : 0.0
+        let chassisTop = (CGFloat(resolvedChrome.bezelTop) - (hingeEdge == "top" ? spineThickness : 0)) * scale
+        let chassisBottom = (CGFloat(resolvedChrome.bezelBottom) - (hingeEdge == "bottom" ? spineThickness : 0)) * scale
+
+        let horizontalInset = max(10, (screenRect.minX + 4).rounded(.down))
+        let availableWidth = max(100, containerSize.width - horizontalInset * 2)
+        // Up to 5 buttons across the top border with at least 4pt spacing between them.
+        let buttonDiameter = min(34, max(22, ((availableWidth - 16) / 5).rounded(.down)))
+        let iconFontSize = max(10, (buttonDiameter * (13.0 / 34.0)).rounded())
+        let radius = buttonDiameter * 0.5
+
+        // Outer top and bottom border lines of the iPhone hardware chrome.
+        let topBorderY = max(0, screenRect.minY - chassisTop + 1.5 * scale)
+        let bottomBorderY = min(containerSize.height, screenRect.maxY + chassisBottom - 1.5 * scale)
+
+        let topInset = max(0, (topBorderY - radius).rounded())
+        let bottomInset = max(0, ((containerSize.height - bottomBorderY) - radius).rounded())
+
+        return OverlayLayout(
+            buttonDiameter: buttonDiameter,
+            iconFontSize: iconFontSize,
+            topInset: topInset,
+            bottomInset: bottomInset,
+            horizontalInset: horizontalInset
         )
     }
 

@@ -20,7 +20,11 @@ struct SecureConnectionRequest: Sendable, CustomStringConvertible {
               UUID(uuidString: String(token.prefix(36))) != nil,
               UUID(uuidString: String(token.suffix(36))) != nil else { return nil }
         let id = String(parts.percentEncodedPath.dropFirst("/secure/cms-credentials/".count))
-        guard id.hasPrefix("int_"), id.count == 40, UUID(uuidString: String(id.dropFirst(4))) != nil else { return nil }
+        // Domain management has one reserved platform connection, issued by the
+        // same trusted server with the same one-time capability as site keys.
+        let platformDomains = id == "int_platform_cloudflare_domains"
+        let siteIntegration = id.hasPrefix("int_") && id.count == 40 && UUID(uuidString: String(id.dropFirst(4))) != nil
+        guard platformDomains || siteIntegration else { return nil }
         self.connectionID = id
         self.endpoint = URL(string: "\(RipulDomain.llmProxyURL)/secure/cms-credentials/\(id)")!
         self.token = token

@@ -397,6 +397,28 @@ extension SessionFamilies {
         return rows.flatMap { row in folds[row.id].map { [row, Self.foldRow(of: $0, after: row)] } ?? [row] }
     }
 
+    /// The list's first `limit` conversations as rows, for a screen that shows a
+    /// few of them (`RipulSessionsPresentation.recent`, Ripul's Home). A
+    /// conversation is a chat by itself or the head of a family, and it brings
+    /// what the list shows under it: its started chats while it is open, and its
+    /// fold control. So opening one there makes room for the chats under it
+    /// (Peter, 2 November 2026), and closing it gives the room back. `leaving`
+    /// takes rows out first (invitations).
+    func recentRows(conversations limit: Int, leaving left: (UnifiedSession) -> Bool = { _ in false }) -> [UnifiedSession] {
+        var rows: [UnifiedSession] = []
+        var conversations = 0
+        for row in rowsWithFolds(visible) where !left(row) {
+            if fold(ofRow: row.id) == nil && (depth[row.id] ?? 0) == 0 {
+                if conversations == limit { break }
+                conversations += 1
+            } else if conversations == 0 {
+                continue
+            }
+            rows.append(row)
+        }
+        return rows
+    }
+
     /// The fold a row of `rowsWithFolds` is the control of, or nil for a chat.
     func fold(ofRow id: String) -> Fold? {
         guard id.hasPrefix(Self.foldRowPrefix) else { return nil }

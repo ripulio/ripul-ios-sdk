@@ -25,6 +25,11 @@ public struct MemberAuthorityState: Decodable {
         public let whenNotHeld: String?
         public let summary: String?
         public let names: [String: String]?
+        /// What they hold in every chat on the owner's Mac, from "Permanently" on a card: folders (`repo:full:<path>`),
+        /// devices (`device:<key>`, `device:simulators` for any simulator), browsers and the page viewer.
+        public let everyChat: [String]?
+        /// The owner's names for those, by permission. Older Macs send none, and then only folders read well.
+        public let everyChatNames: [String: String]?
     }
     public struct Choice: Decodable, Identifiable {
         public let permission: String
@@ -94,6 +99,9 @@ final class MemberAuthorityModel: ObservableObject {
     @Published var devices: [MemberAuthorityState.Choice] = []
     @Published var folders: [MemberAuthorityState.Folder] = []
     @Published var browsers: [MemberAuthorityState.Choice] = []
+    /// Held in every chat on the Mac, not this one only. Shown whatever this chat's level, and taken away one by one.
+    @Published var everyChat: [String] = []
+    @Published var everyChatNames: [String: String] = [:]
     @Published var summary: String?
     @Published var error: String?
     @Published var loaded = false
@@ -154,13 +162,22 @@ final class MemberAuthorityModel: ObservableObject {
             .map { ($0, names[$0] ?? $0) }
     }
 
+    /// Take a folder away in every chat. Only this list is sent, so this chat's own permissions stay as they are.
+    func takeAwayEveryChat(_ permission: String) {
+        everyChat.removeAll { $0 == permission }
+        send(["userId": userId, "name": name, "everyChat": everyChat])
+    }
+
     private func send() {
-        let change: [String: Any] = [
+        send([
             "userId": userId, "name": name,
             "level": level == "named" && permissions.isEmpty ? "ask" : level,
             "permissions": level == "named" ? permissions.sorted() : [],
             "whenNotHeld": refusesTheRest ? "refuse" : "ask",
-        ]
+        ])
+    }
+
+    private func send(_ change: [String: Any]) {
         Task {
             saving = true
             defer { saving = false }
@@ -190,6 +207,8 @@ final class MemberAuthorityModel: ObservableObject {
         if !choosing { level = mine?.level ?? "ask" }
         permissions = held
         refusesTheRest = mine?.whenNotHeld == "refuse"
+        everyChat = mine?.everyChat ?? []
+        everyChatNames = mine?.everyChatNames ?? [:]
         summary = mine?.summary
         names = mine?.names ?? [:]
         // A folder they hold that the Mac no longer lists still shows, so it can be taken away.
@@ -220,6 +239,7 @@ public struct MemberAuthorityScreen: View {
                 Section { ProgressView("Asking the chat's Mac…") }.ripulThemedListRows()
             } else {
                 levelSection
+                if !model.everyChat.isEmpty { everyChatSection }
                 if model.level == "named" {
                     devicesSection
                     foldersSection
@@ -258,6 +278,43 @@ public struct MemberAuthorityScreen: View {
         case "acts-as-me": return "The agent does for \(model.firstName) whatever it would do for you in this chat: your Mac, your devices and your sign-ins, with no asks."
         default: return "\(model.firstName)'s requests use nothing of yours unless you say so each time."
         }
+    }
+
+    /// What one thing held in every chat reads as: a folder by its name and path, anything else by the Mac's name for it.
+    static func everyChatRow(_ permission: String, name: String?) -> (title: String, detail: String) {
+        if permission.hasPrefix("repo:") {
+            let path = String(permission.split(separator: ":", maxSplits: 2).last ?? "")
+            // The Mac's name says when it is held through a team ("WAC_ios_final (for Test team)"): switched off, the whole team loses it.
+            let title = name ?? (path == "*" ? "Every folder" : (path as NSString).lastPathComponent)
+            return (title, permission.hasPrefix("repo:full:") ? "Read and change · \(path)" : "Read · \(path)")
+        }
+        if permission == "device:simulators" { return (name ?? "Any simulator on this Mac", "Simulators · each one, as you") }
+        if permission.hasPrefix("device:") { return (name ?? "A device", "Device · its screen, its logs and your sign-ins on it") }
+        if permission == "pages" { return (name ?? "The page viewer", "Page viewer") }
+        return (name ?? String(permission.dropFirst("browser:".count)), "Browser · your sign-ins in it")
+    }
+
+    private var everyChatSection: some View {
+        Section {
+            ForEach(model.everyChat, id: \.self) { permission in
+                let shown = Self.everyChatRow(permission, name: model.everyChatNames[permission])
+                Toggle(isOn: Binding(get: { true }, set: { if !$0 { model.takeAwayEveryChat(permission) } })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(shown.title).ripulText()
+                        Text(shown.detail)
+                            .font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                            .lineLimit(1).truncationMode(.head)
+                    }
+                }
+                .uiKitIdentifier("MemberAuthority.everyChatToggle")
+            }
+        } header: {
+            RipulSectionHeader { Text("In all your chats on this Mac") }
+        } footer: {
+            RipulSectionFooter {
+                Text("\(model.firstName)'s requests use these in every chat, not just this one, until you switch them off. A repo includes its worktrees.")
+            }
+        }.ripulThemedListRows()
     }
 
     private var devicesSection: some View {

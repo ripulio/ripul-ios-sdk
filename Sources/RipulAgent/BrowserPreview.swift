@@ -28,6 +28,34 @@ final class BrowserPreviewState: ObservableObject {
     private var generation = UUID()
     private var inFlight = false
     private var lastPixels: Data?
+    /// The window's dock (`PreviewDockState`): a wide window can hold the browser beside the app.
+    weak var dock: PreviewDockState? { didSet { watchDock() } }
+    /// The browser itself is in the window's dock, so its picture would only repeat it.
+    @Published private(set) var browserDocked = false
+    private var dockWatch: AnyCancellable?
+
+    /// Let go in the window's right edge: the dock takes the browser, on this preview's tab.
+    func dockIntoWindow() {
+        guard let dock else { return }
+        collapsed = false
+        dock.dock(.browser(tabId: tabId))
+    }
+
+    /// Out of the dock: undocked, the picture over the chat again; closed, none,
+    /// as the panel's own Close leaves none (the Browser tab still has the page).
+    func returnFromDock(tabId: Int?, chatId: String?, open reopened: Bool) {
+        guard reopened, let chatId else { close(); return }
+        open(chatId: chatId, tabId: tabId)
+        collapsed = false
+    }
+
+    private func watchDock() {
+        dockWatch = dock?.$shown.sink { [weak self] shown in
+            // From its panel or carried out of Exposé: the Browser is beside the app.
+            let docked = shown?.showsBrowser == true
+            if self?.browserDocked != docked { self?.browserDocked = docked }
+        }
+    }
 
     var aspectRatio: CGFloat { imageSize.height > 0 ? imageSize.width / imageSize.height : 390.0 / 844 }
 
@@ -65,11 +93,11 @@ final class BrowserPreviewState: ObservableObject {
     }
 
     func refresh() async {
-        guard chatId != nil, allowed, !collapsed, !inFlight, let capture else { return }
+        guard chatId != nil, allowed, !collapsed, !browserDocked, !inFlight, let capture else { return }
         inFlight = true
         defer { inFlight = false }
         let version = generation
-        func current() -> Bool { generation == version && allowed && !collapsed && !Task.isCancelled }
+        func current() -> Bool { generation == version && allowed && !collapsed && !browserDocked && !Task.isCancelled }
         do {
             let snapshot = try await capture(tabId)
             guard current() else { return }
@@ -113,7 +141,7 @@ struct BrowserPreviewPanel: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if state.chatId != nil && state.allowed {
+            if state.chatId != nil && state.allowed && !state.browserDocked {
                 let ratio = state.aspectRatio
                 RipulFloatingPanel(storageKey: "ripul.browserPreview",
                     defaultSize: CGSize(width: min(geometry.size.width / 3, 300), height: min(geometry.size.width / 3, 300) / ratio),
@@ -154,8 +182,18 @@ struct BrowserPreviewPanel: View {
                             .shadow(color: Color.ripul(system: .black).opacity(0.2), radius: 10, y: 3) // theme-mapping: the panel's shadow unchanged, now on the panel and on its minimised button apart
                     }
                 }
+                .docking(dockOffer)
             }
         }.ignoresSafeArea(.container)
+    }
+
+    /// Into the window's right edge: the browser itself in the window's dock,
+    /// where the host has one to show it in.
+    private var dockOffer: FloatingPanelDocking {
+        FloatingPanelDocking(
+            canDock: { [state] width in state.dock?.canDock(containerWidth: width) ?? false },
+            hover: { [state] over in state.dock?.hover(.browser, over) },
+            drop: { [state] in state.dockIntoWindow() })
     }
 
     /// A round button drawn 36 points across over a 44-point touch area.
@@ -187,9 +225,9 @@ final class BrowserPreviewController: UIViewController {
         addChild(host); view.addSubview(host.view)
         host.view.frame = view.bounds; host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         host.didMove(toParent: self)
-        state.$chatId.combineLatest(state.$collapsed, state.$allowed)
-            .sink { [weak self] chat, collapsed, allowed in
-                self?.requested = chat != nil && !collapsed && allowed
+        state.$chatId.combineLatest(state.$collapsed, state.$allowed, state.$browserDocked)
+            .sink { [weak self] chat, collapsed, allowed, docked in
+                self?.requested = chat != nil && !collapsed && allowed && !docked
                 self?.syncCapture()
             }.store(in: &observations)
         for name in [UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {

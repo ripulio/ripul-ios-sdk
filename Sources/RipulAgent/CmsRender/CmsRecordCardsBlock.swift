@@ -128,18 +128,48 @@ struct CmsRecordCardsBlockView: View {
 
     // MARK: - Cards mode (mobile: one phone-width column)
 
+    @ViewBuilder
     private func cardColumn(rows: [[String: CmsJSON]], schema: [CmsQueryResultColumn]) -> some View {
         let fields = resolvedFields(schema: schema)
-        return LazyVStack(spacing: gap) {
-            if selectionMode == "multi" {
-                selectAllHeader(rows: rows)
+        if let styled, styled.layout != .cards {
+            // `system`: the records as rows of one rounded group; `plain`:
+            // edge-to-edge rows. Both with the style's separators.
+            VStack(spacing: 8) {
+                if selectionMode == "multi" {
+                    selectAllHeader(rows: rows)
+                }
+                CmsStyledRows(style: styled, items: rows) { row in
+                    cardBody(row: row, fields: fields)
+                        .background(isSelected(row) ? runtime.theme.tint : Color.clear)
+                        .modifier(CmsRecordRowTap(enabled: selectionMode != "none" && clickSelects) { toggle(row) })
+                        .cmsInspectorID("Cms.recordCards.row")
+                }
             }
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                card(row: row, fields: fields)
+        } else {
+            LazyVStack(spacing: cardGap) {
+                if selectionMode == "multi" {
+                    selectAllHeader(rows: rows)
+                }
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    card(row: row, fields: fields)
+                }
             }
+            .frame(maxWidth: 420)
+            .frame(maxWidth: .infinity) // centre the column in wider hosts
         }
-        .frame(maxWidth: 420)
-        .frame(maxWidth: .infinity) // centre the column in wider hosts
+    }
+
+    /// The site's list style, unless it is the bare built-in `system` (then
+    /// the cards look as they always have).
+    private var styled: CmsResolvedListStyle? {
+        let style = runtime.listStyle(for: block)
+        return style.isBareSystem ? nil : style
+    }
+
+    /// The block's own gap when it sets one, else the style's, else 16.
+    private var cardGap: CGFloat {
+        if block.props.double("gap") == nil, let styled { return styled.gap }
+        return gap
     }
 
     /// Multi-select header: selected count + Select all / Clear — parity with
@@ -162,25 +192,7 @@ struct CmsRecordCardsBlockView: View {
 
     private func card(row: [String: CmsJSON], fields: [Field]) -> some View {
         let selected = isSelected(row)
-        return VStack(alignment: .leading, spacing: 0) {
-            if showImageInCard, isBannerImage, let url = imageURL(row) {
-                AsyncImage(url: url) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        Color.secondary.opacity(0.1)
-                    }
-                }
-                .frame(height: imageHeight)
-                .frame(maxWidth: .infinity)
-                .clipped()
-            }
-            VStack(alignment: .leading, spacing: 10) {
-                cardHeader(row: row)
-                fieldFlow(row: row, fields: fields)
-            }
-            .padding(14)
-        }
+        return cardBody(row: row, fields: fields)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
@@ -198,6 +210,31 @@ struct CmsRecordCardsBlockView: View {
             toggle(row)
         }
         .cmsInspectorID("Cms.recordCards.card")
+    }
+
+    /// A record's content: the banner picture, then the header and fields.
+    private func cardBody(row: [String: CmsJSON], fields: [Field]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showImageInCard, isBannerImage, let url = imageURL(row) {
+                AsyncImage(url: url) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color.secondary.opacity(0.1)
+                    }
+                }
+                .frame(height: imageHeight)
+                .frame(maxWidth: .infinity)
+                .clipped()
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                cardHeader(row: row)
+                fieldFlow(row: row, fields: fields)
+            }
+            .padding(.horizontal, styled?.paddingHorizontal ?? 14)
+            .padding(.vertical, styled?.paddingVertical ?? 14)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -218,7 +255,7 @@ struct CmsRecordCardsBlockView: View {
                 }
                 if let title {
                     Text(title)
-                        .font(.headline)
+                        .font(styled?.titleFont ?? .headline)
                         .foregroundColor(titleColor)
                 }
                 Spacer(minLength: 0)
@@ -248,7 +285,7 @@ struct CmsRecordCardsBlockView: View {
     }
 
     private var titleColor: Color {
-        runtime.color(block.props.object("title")?.object("typography")?.string("color")) ?? .primary
+        runtime.color(block.props.object("title")?.object("typography")?.string("color")) ?? styled?.titleColor ?? runtime.theme.textPrimary
     }
 
     /// Mobile card body: fields stacked in flow, label above value.
@@ -261,7 +298,7 @@ struct CmsRecordCardsBlockView: View {
                         // " ") — skip it when empty so the card isn't padded.
                         if !(field.image != nil && field.label.trimmingCharacters(in: .whitespaces).isEmpty) {
                             Text(field.label)
-                                .font(.caption)
+                                .font(styled?.font(size: 12) ?? .caption)
                                 .foregroundColor(labelColor)
                         }
                         fieldValue(row: row, field: field)
@@ -289,7 +326,7 @@ struct CmsRecordCardsBlockView: View {
                 return s
             } ?? ""
             Text(text.isEmpty ? "—" : text)
-                .font(.subheadline)
+                .font(styled?.font(size: 15) ?? .subheadline)
                 .foregroundColor(valueColor)
         }
     }
@@ -303,7 +340,15 @@ struct CmsRecordCardsBlockView: View {
         let fit = cfg.string("fit") ?? "cover"
         let shape = cfg.string("shape") ?? "rounded"
         let urlString = (row[field.valueFrom]?.stringValue ?? "").trimmingCharacters(in: .whitespaces)
-        if shape == "circle" {
+        let chain = CmsCalendarDecorations.imageChain(cfg["chain"])
+        if !chain.isEmpty {
+            // An image chain: the picture comes from the site's image source
+            // (or an address column) rather than this value as an address.
+            CmsChainImage(candidates: CmsCalendarDecorations.imageCandidates(row, chain), fit: fit)
+                .frame(width: shape == "circle" ? 120 : nil, height: 120)
+                .frame(maxWidth: shape == "circle" ? nil : .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: shape == "circle" ? 60 : shape == "square" ? 0 : 8, style: .continuous))
+        } else if shape == "circle" {
             imageFieldContent(urlString: urlString, fit: fit)
                 .frame(width: 120, height: 120)
                 .clipShape(Circle())
@@ -346,7 +391,7 @@ struct CmsRecordCardsBlockView: View {
     }
 
     private var valueColor: Color {
-        runtime.color(block.props.object("valueTypography")?.string("color")) ?? .primary
+        runtime.textColor(block.props.object("valueTypography")?.string("color"))
     }
 
     /// Card surface: outlined/elevated fill with the portal PAPER colour
@@ -357,6 +402,8 @@ struct CmsRecordCardsBlockView: View {
     private var cardBackground: some View {
         if let frameBg = runtime.fill(block.props.object("cardFrame")?.string("background")) {
             Rectangle().fill(frameBg)
+        } else if let styled {
+            styled.fill
         } else if cardVariant == "flat" {
             Color.clear
         } else {
@@ -369,7 +416,7 @@ struct CmsRecordCardsBlockView: View {
     private var cardFrame: [String: CmsJSON]? { block.props.object("cardFrame") }
 
     private var cardCornerRadius: CGFloat {
-        runtime.radius(cardFrame?.string("borderRadius")) ?? 14
+        runtime.radius(cardFrame?.string("borderRadius")) ?? styled?.cornerRadius ?? 14
     }
 
     /// Authored border wins; else the variant default (outlined = hairline).
@@ -377,10 +424,11 @@ struct CmsRecordCardsBlockView: View {
         if let frame = cardFrame, CmsCss.points(frame.string("borderWidth")) ?? 0 > 0 {
             return runtime.color(frame.string("borderColor")) ?? runtime.theme.divider
         }
+        if let styled { return styled.borderColor }
         return cardVariant == "outlined" ? Color.secondary.opacity(0.25) : Color.clear
     }
     private var cardBorderWidth: CGFloat {
-        CmsCss.points(cardFrame?.string("borderWidth")) ?? (cardVariant == "outlined" ? 1 : 0)
+        CmsCss.points(cardFrame?.string("borderWidth")) ?? styled?.borderWidth ?? (cardVariant == "outlined" ? 1 : 0)
     }
 
     /// Shadow token → approximate SwiftUI shadow (light-mode box-shadow of
@@ -393,6 +441,9 @@ struct CmsRecordCardsBlockView: View {
         case "shadow.medium": return (.black.opacity(0.14), 9, 6)
         case "shadow.strong": return (.black.opacity(0.20), 16, 12)
         default:
+            if let styled {
+                return styled.hasShadow ? (styled.shadowColor, styled.shadowRadius, styled.shadowOffsetY) : (.clear, 0, 0)
+            }
             return cardVariant == "elevated" ? (.black.opacity(0.12), 6, 2) : (.clear, 0, 0)
         }
     }
@@ -632,5 +683,19 @@ struct CmsRecordCardsBlockView: View {
               (runtime.selections[querySlug] ?? []).isEmpty else { return }
         seededSelectAll = true
         runtime.setSelectedRows(querySlug, rows: rows)
+    }
+}
+
+/// A record row's tap, when tapping selects.
+private struct CmsRecordRowTap: ViewModifier {
+    let enabled: Bool
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.contentShape(Rectangle()).onTapGesture(perform: action)
+        } else {
+            content
+        }
     }
 }

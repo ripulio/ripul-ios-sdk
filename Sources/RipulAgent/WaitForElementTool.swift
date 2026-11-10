@@ -13,6 +13,7 @@ import UIKit
 /// that invalidated it for actuation), accessibility id, or visible text.
 public struct WaitForElementTool: NativeTool {
     public let name = "wait_for_element"
+    public let access: NativeToolAccess = .readsScreen
     public let description = "Wait until an element in the host app appears (default) or disappears, addressed "
         + "by a snapshot handle, accessibility id, or visible text. Call this right after tap_element / type_text / "
         + "scroll_element: it returns the moment the screen matches, so you never inspect a half-rendered tree. "

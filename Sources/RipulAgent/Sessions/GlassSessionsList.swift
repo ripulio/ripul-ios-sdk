@@ -236,6 +236,7 @@ public struct GlassSessionsList: View {
     /// Whether new-Ripul-Agent tiles are allowed on machine rows. Injected by the
     /// host (was an app-side flag).
     var allowRipulAgents: Bool = false
+    var showsMachinesPanel: Bool = true
     /// Quick actions (host-defined machine actions). The owner discovers them
     /// (onDiscoverActions fires on row expand) and executes them; empty/nil =
     /// no quick-action UI.
@@ -255,6 +256,9 @@ public struct GlassSessionsList: View {
     var onOpenUniversalLink: ((URL) -> Void)? = nil
     var onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil
     var olderChats: OlderChatsRow? = nil
+    /// The whole list, or a few of its first rows (`RipulSessionsPresentation`).
+    var presentation: RipulSessionsPresentation = .full
+    var visibility: SessionListVisibility? = nil
 
     @State private var needsAnswerOnly = false
     /// The tabs' host chat ids, for `attentionKeys`: rebuilt when the tabs change.
@@ -283,9 +287,17 @@ public struct GlassSessionsList: View {
     /// Heads of families whose started chats are all shown; see `SessionFamilies`.
     @State private var openFamilies: Set<String> = []
     @State private var heldSessionOrder: [String]?
+    /// While Home's rows hold their order: the chats of its first
+    /// conversations, each with every chat under it, the only chats those
+    /// rows can show. Arranging every chat of the account for three rows, on
+    /// every change a Mac reported, took up to 345 ms on Peter's Duo
+    /// (5 November 2026). A chat started under one of them since shows when the
+    /// order is next taken (the rows appearing, the app coming back, Refresh).
+    @State private var heldRecentChatIds: Set<String>?
     @State private var sessionOrderRelease: Task<Void, Never>?
     @Environment(\.scenePhase) private var sessionListScenePhase
     @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+    private var listIsSeen: Bool { (visibility?.isSeen ?? true) && listCanBeSeen }
     /// Heads of families whose started chats the person has put away by tapping the head's icon.
     @State private var closedFamilies: Set<String>
     /// The same, kept for the next launch. Written once the family has finished
@@ -293,8 +305,9 @@ public struct GlassSessionsList: View {
     /// redraw every view reading that store, in the middle of the drawer.
     @StoredDefault("ripulClosedSessionFamilies") private var storedClosedFamilies: Set<String> = []
     #if os(iOS)
-    @Environment(\.ripulBottomBarFrame) private var bottomBar
-    @State private var actionBarNavigationClearance: CGFloat = 0
+    /// Read only by the action bars' padding: as this view's own state, each
+    /// new measurement redrew every row.
+    @State private var actionBarNavigationClearance = MeasuredClearance()
     #endif
     @State private var actionBarHeight: CGFloat = 0
     // NOTE: the optimistic active-row override now lives inside GlassRichList,
@@ -315,9 +328,11 @@ public struct GlassSessionsList: View {
     /// Bumped on QuickLaunchPreferences.didChangeNotification to force the
     /// shortcut strip to re-read the cache after a Settings edit.
     @State private var quickLaunchRevision = 0
-    @State private var presentedPlan: (content: String, fileName: String)? = nil
+    @State private var presentedContent: (content: String, fileName: String)? = nil
     /// Session whose tags are being edited (drives the tags editor sheet).
     @State private var taggingSession: UnifiedSession? = nil
+    /// Session whose custom icon is being picked.
+    @State private var iconPickerSession: UnifiedSession? = nil
     /// The chat the person is choosing a place for; see `PutUnderSheet`.
     @State private var placingSession: UnifiedSession? = nil
     #if DEBUG
@@ -363,6 +378,7 @@ public struct GlassSessionsList: View {
         selectedSessionId: String? = nil,
         onRefresh: (() async -> Void)? = nil,
         allowRipulAgents: Bool = false,
+        showsMachinesPanel: Bool = true,
         onDiscoverActions: ((RemoteMachine) -> Void)? = nil,
         remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:],
         onExecuteAction: ((RemoteMachine, RemoteActionDescriptor, [String: Any]) async -> [String: Any])? = nil,
@@ -372,10 +388,14 @@ public struct GlassSessionsList: View {
         onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
         onOpenUniversalLink: ((URL) -> Void)? = nil,
         olderChats: OlderChatsRow? = nil,
+        presentation: RipulSessionsPresentation = .full,
+        visibility: SessionListVisibility? = nil,
         searchText: Binding<String>,
         renamingSession: Binding<ChatSession?>,
         renameText: Binding<String>
     ) {
+        self.presentation = presentation
+        self.visibility = visibility
         self.bridge = bridge
         self.sessionStore = sessionStore
         self.navigationStore = navigationStore
@@ -413,6 +433,7 @@ public struct GlassSessionsList: View {
         self.selectedSessionId = selectedSessionId
         self.onRefresh = onRefresh
         self.allowRipulAgents = allowRipulAgents
+        self.showsMachinesPanel = showsMachinesPanel
         self.onDiscoverActions = onDiscoverActions
         self.remoteActionsByMachine = remoteActionsByMachine
         self.onExecuteAction = onExecuteAction
@@ -537,6 +558,7 @@ public struct GlassSessionsList: View {
                 title: "Machines",
                 subtitle: machineNamesSummary,
                 isExpanded: $machinesExpanded,
+                compactSubtitle: { machineIconsSummary },
                 collapsedAccessory: { machinesPanelTrailing }
             ) {
                 ForEach(chatHostMachines) { machine in
@@ -558,6 +580,26 @@ public struct GlassSessionsList: View {
         }
     }
 
+    /// A long roster can scroll horizontally without wrapping the closed
+    /// header or squeezing its title and New Chat button off screen.
+    private var machineIconsSummary: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(chatHostMachines) { machine in
+                    Image(systemName: machine.icon(cache: cache) ?? machine.defaultIconName)
+                        .font(.ripulIcon(size: 16))
+                        .foregroundStyle(.ripul(accentOr: .info))
+                        .frame(width: 20, height: 20)
+                        .opacity(machine.isOnline && !machine.isDisabled(cache: cache) ? 1 : 0.5)
+                        .accessibilityLabel(machine.displayName)
+                        .help(machine.displayName)
+                }
+            }
+        }
+        .frame(idealWidth: CGFloat(max(0, chatHostMachines.count * 26 - 6)), maxHeight: 20)
+        .uiKitIdentifier("GlassSessionsList.machines.icons")
+    }
+
     @ViewBuilder
     private func machineRow(
         for machine: RemoteMachine,
@@ -566,7 +608,7 @@ public struct GlassSessionsList: View {
     ) -> some View {
         MachineRowExpandable(
             machine: machine,
-            activeSessions: bridge.sessions.filter { $0.remoteMachineName == machine.displayName },
+            activeSessions: tabs.filter { $0.remoteMachineName == machine.displayName },
             isConnecting: connectingMachineId == machine.machineId,
             isExpanded: machineExpandedBinding(for: machine),
             onConnect: { callbacks.onConnect(machine) },
@@ -625,7 +667,7 @@ public struct GlassSessionsList: View {
             collapsible: false,
             followsContainerBottomCorners: true,
             titleAccessory: {
-                if !PendingQuestionStore.shared.questions.isEmpty || needsAnswerOnly {
+                if !PendingQuestionStore.shared.waiting.isEmpty || needsAnswerOnly {
                     attentionChip
                 }
             },
@@ -721,55 +763,7 @@ public struct GlassSessionsList: View {
                       } else if let invite = invite(for: session) {
                         inviteRow(invite, session: session)
                       } else {
-                      // The chats put away under this one: its row speaks for them.
-                      let putAway = families.heads[session.id]?.putAway ?? []
-                      VStack(alignment: .leading, spacing: 0) {
-                        UnifiedSessionRow(
-                            sessionStore: sessionStore,
-                            session: session,
-                            cachedLastActive: ([session] + putAway).compactMap { lastActiveBySessionId[$0.id] }.max(),
-                            // Spinner runs while navigating — keyed on navigatingToSessionId
-                            // (cleared after slide animation) rather than openingUnifiedSessionId
-                            // (cleared before onSelect fires, too early for the sweep + animation).
-                            // Guard the navigating clauses on a non-nil navigatingToSessionId:
-                            // session.ripulSession?.id is nil for un-imported rows, and a bare
-                            // `nil == nil` would pin the spinner ON for every such row at rest.
-                            isOpening: openingUnifiedSessionId == session.id
-                                || (navigationStore.navigatingToSessionId != nil
-                                    && (navigationStore.navigatingToSessionId == session.ripulSession?.id
-                                        || navigationStore.navigatingToSessionId == session.id)),
-                            isArchiving: archivingUnifiedSessionId == session.id,
-                            isDeleting: deletingUnifiedSessionId == session.id,
-                            isDeletingFromHost: deletingUnifiedSessionId == session.id && deletingFromHost,
-                            machineIcon: session.machineName.flatMap { machineIcons[$0] },
-                            // A started chat says where it is working only when that
-                            // differs from the chat it sits under.
-                            hideProjectName: activeProjectFilter != nil || families.sharesFolder.contains(session.id),
-                            hideBranch: families.sharesBranch.contains(session.id),
-                            isSelectMode: isSelecting,
-                            isSelected: selectedSessionIds.contains(session.id),
-                            isGroupChat: isGroupChat(session),
-                            isTeamShared: !teamSharedKeys.isEmpty && session.matchKeys.contains(where: teamSharedKeys.contains),
-                            familyDepth: families.depth[session.id] ?? 0,
-                            startedChats: families.heads[session.id]?.started ?? 0,
-                            startedChatsClosed: families.heads[session.id]?.isClosed ?? false,
-                            startedChatsNeedLooking: families.heads[session.id]?.needsLooking ?? false,
-                            startedChatsPutAway: putAway,
-                            onToggleStartedChats: {
-                                if families.heads[session.id]?.isClosed == true {
-                                    closedFamilies.subtract([session.id, session.metadataKey])
-                                } else {
-                                    closedFamilies.insert(session.id)
-                                    closedFamilies.insert(session.metadataKey)
-                                }
-                            },
-                            onSessionAction: { action in
-                                handleSessionAction(action, session: session)
-                            },
-                            attention: .some(attention(for: session)),
-                            unreadMentionCount: PendingQuestionStore.shared.unreadMentionCount(anyOf: attentionKeys(for: session))
-                        )
-                      }
+                      sessionRow(session, families: families)
                       }
                     },
                     swipe: { session in
@@ -867,11 +861,6 @@ public struct GlassSessionsList: View {
     }
 
     /// Which resting state the list is in, or nil when it has rows to draw.
-    ///
-    /// "No machine has answered yet" is Sessions' own version of `unresolved`
-    /// and has no Plans equivalent — Plans resolves against exactly one
-    /// machine+folder, so its unresolved case is "no folder". Same slot,
-    /// different sentence, which is why the component takes the string.
     private func emptyState(visible: Int) -> GlassListEmptyState? {
         if isLoadingRemoteSessions && unifiedSessions.isEmpty { return .loading }
         if unifiedSessions.isEmpty { return .empty("No sessions found.") }
@@ -896,9 +885,157 @@ public struct GlassSessionsList: View {
         return .idle
     }
 
-    /// Session-vocabulary row actions. Stays here rather than in the shared
-    /// component: thinking mode, move-to-machine and remove-from-Ripul mean
-    /// nothing to a plan.
+    /// One chat's row, as the Sessions panel and the recent rows (`RipulSessionsPresentation.recent`)
+    /// both draw it, so the two cannot drift apart.
+    @ViewBuilder
+    private func sessionRow(_ session: UnifiedSession, families: SessionFamilies) -> some View {
+        // The chats put away under this one: its row speaks for them.
+        let putAway = families.heads[session.id]?.putAway ?? []
+        VStack(alignment: .leading, spacing: 0) {
+            UnifiedSessionRow(
+                sessionStore: sessionStore,
+                session: session,
+                cachedLastActive: ([session] + putAway).compactMap { lastActiveBySessionId[$0.id] }.max(),
+                // Spinner runs while navigating — keyed on navigatingToSessionId
+                // (cleared after slide animation) rather than openingUnifiedSessionId
+                // (cleared before onSelect fires, too early for the sweep + animation).
+                // Guard the navigating clauses on a non-nil navigatingToSessionId:
+                // session.ripulSession?.id is nil for un-imported rows, and a bare
+                // `nil == nil` would pin the spinner ON for every such row at rest.
+                isOpening: openingUnifiedSessionId == session.id
+                    || (navigationStore.navigatingToSessionId != nil
+                        && (navigationStore.navigatingToSessionId == session.ripulSession?.id
+                            || navigationStore.navigatingToSessionId == session.id)),
+                isArchiving: archivingUnifiedSessionId == session.id,
+                isDeleting: deletingUnifiedSessionId == session.id,
+                isDeletingFromHost: deletingUnifiedSessionId == session.id && deletingFromHost,
+                machineIcon: session.machineName.flatMap { machineIcons[$0] },
+                // A started chat says where it is working only when that
+                // differs from the chat it sits under.
+                hideProjectName: activeProjectFilter != nil || families.sharesFolder.contains(session.id),
+                hideBranch: families.sharesBranch.contains(session.id),
+                isSelectMode: isSelecting,
+                isSelected: selectedSessionIds.contains(session.id),
+                isGroupChat: isGroupChat(session),
+                isTeamShared: !teamSharedKeys.isEmpty && session.matchKeys.contains(where: teamSharedKeys.contains),
+                familyDepth: families.depth[session.id] ?? 0,
+                startedChats: families.heads[session.id]?.started ?? 0,
+                startedChatsClosed: families.heads[session.id]?.isClosed ?? false,
+                startedChatsNeedLooking: families.heads[session.id]?.needsLooking ?? false,
+                startedChatsPutAway: putAway,
+                onToggleStartedChats: {
+                    if families.heads[session.id]?.isClosed == true {
+                        closedFamilies.subtract([session.id, session.metadataKey])
+                    } else {
+                        closedFamilies.insert(session.id)
+                        closedFamilies.insert(session.metadataKey)
+                    }
+                },
+                onSessionAction: { action in
+                    handleSessionAction(action, session: session)
+                },
+                attention: .some(attention(for: session)),
+                unreadMentionCount: listIsSeen
+                    ? PendingQuestionStore.shared.unreadMentionCount(anyOf: attentionKeys(for: session)) : 0
+            )
+        }
+    }
+
+    /// `RipulSessionsPresentation.recent`: the list's first conversations, in its
+    /// order, drawn by its own rows with their context menu. A conversation is a
+    /// chat by itself or one that has started others, and an open one brings its
+    /// started chats and its fold, grouped as the list groups them, so opening it
+    /// makes room for them (`SessionFamilies.recentRows`). Invitations are left
+    /// out. Stacked, for the scrolling screen they sit on.
+    private func recentRows(families: SessionFamilies, limit: Int, autoSort: Bool) -> some View {
+        GlassRichList(
+            items: families.recentRows(conversations: limit, leaving: { $0.id.hasPrefix(Self.invitePrefix) }),
+            emptyState: nil,
+            identifierPrefix: "GlassSessionsList.recent",
+            layout: .stack,
+            activity: activity(for:),
+            onTap: { session in
+                if let fold = families.fold(ofRow: session.id) {
+                    toggle(fold)
+                } else {
+                    onOpenUnifiedSession(session)
+                }
+            },
+            row: { session in
+                if let fold = SessionFamilies.foldDrawn(by: session) {
+                    SessionFamilyFoldButton(fold: fold) { families.fold(ofRow: session.id).map(toggle) }
+                } else {
+                    sessionRow(session, families: families)
+                }
+            },
+            swipe: { _ in EmptyView() },
+            rowMenu: { session in
+                if families.fold(ofRow: session.id) == nil {
+                    sessionContextMenu(session, families: families)
+                }
+            }
+        )
+        .groupedRows({ families.groupSlice(ofRow: $0.id) }, joinsNext: { families.isJoinedToFold($0.id) })
+        .unhighlightedRows { $0.id.hasPrefix(SessionFamilies.foldRowPrefix) }
+        .modifier(AdaptiveSessionRowDensity())
+        // Each row keeps one height. When `autoSort` is true, rows reorder live
+        // by recency just like the full Agents list; when false, the order is
+        // held while shown.
+        .environment(\.sessionRowsKeepOneHeight, true)
+        .onAppear {
+            if autoSort {
+                if heldSessionOrder != nil { heldSessionOrder = nil }
+                if heldRecentChatIds != nil { heldRecentChatIds = nil }
+            } else if heldSessionOrder == nil {
+                holdRecentOrder()
+            }
+        }
+        // More or fewer rows (Home's stepper): the held chats are counted again when order is held.
+        .onChange(of: limit) { _, _ in if !autoSort { holdRecentOrder() } }
+        .onChange(of: autoSort) { _, autoSort in
+            if autoSort {
+                heldSessionOrder = nil
+                heldRecentChatIds = nil
+            } else {
+                holdRecentOrder()
+            }
+        }
+        .onChange(of: unifiedSessions.isEmpty) { _, empty in if !empty, !autoSort { holdRecentOrder() } }
+        .onChange(of: sessionListScenePhase) { _, phase in if phase == .active, !autoSort { holdRecentOrder() } }
+    }
+
+    /// The list's order now, held: chats keep their places, and one new to the list goes after them.
+    private func holdRecentOrder() {
+        let families = unifiedSessions.isEmpty ? nil : arrangedFamilies(heldOrder: nil)
+        let order = families?.all.map(\.id)
+        if heldSessionOrder != order { heldSessionOrder = order }
+        let chats = families.flatMap(recentChatIds(in:))
+        if heldRecentChatIds != chats { heldRecentChatIds = chats }
+    }
+
+    #if DEBUG
+    /// `-ripul.debug.recentArrangesAll YES`: Home's rows arrange every chat as
+    /// they did before, to measure what arranging only theirs saves.
+    private static let recentArrangesAll = UserDefaults.standard.bool(forKey: "ripul.debug.recentArrangesAll")
+    #else
+    private static let recentArrangesAll = false
+    #endif
+
+    /// The first conversations' chats, as `SessionFamilies.recentRows` counts them.
+    private func recentChatIds(in families: SessionFamilies) -> Set<String>? {
+        guard case .recent(let limit, let autoSort) = presentation, !autoSort else { return nil }
+        var ids = Set<String>()
+        var conversations = 0
+        for row in families.visible where !row.id.hasPrefix(Self.invitePrefix) && (families.depth[row.id] ?? 0) == 0 {
+            if conversations == limit { break }
+            conversations += 1
+            ids.insert(row.id)
+            for chat in families.under[row.id] ?? [] { ids.insert(chat.id) }
+        }
+        return ids
+    }
+
+    /// Session actions for the row's context menu.
     @ViewBuilder
     private func sessionContextMenu(_ session: UnifiedSession, families: SessionFamilies) -> some View {
         if supportsMultipleWindows, let open = workspace?.openWindow {
@@ -957,6 +1094,12 @@ public struct GlassSessionsList: View {
             }
             .uiKitIdentifier("GlassSessionsList.contextMenu.renameButton")
         }
+        Button {
+            iconPickerSession = session
+        } label: {
+            Label("Set Icon…", systemImage: "photo.on.rectangle")
+        }
+        .uiKitIdentifier("GlassSessionsList.contextMenu.setIconButton")
         if cloudFeatures {
         Button {
             taggingSession = session
@@ -1128,11 +1271,8 @@ public struct GlassSessionsList: View {
     }
 
     /// Quick-start shortcuts for the panel's default machine, while the panel is
-    /// collapsed. `GlassSectionPanel` puts them on the header row, the machine
-    /// names truncating to make room (or left out in a narrow window), so the
-    /// closed panel is one row like each machine row with its pill. They take
-    /// their own row beneath the header only when they can't fit beside the
-    /// title at all: a long user-sized set of circles, or a very narrow window.
+    /// collapsed. The header first reduces the launch label to its icon, then
+    /// replaces machine names with icons, keeping the closed panel on one row.
     ///
     /// The panel renders this only when collapsed, so no `machinesExpanded`
     /// check is needed here.
@@ -1254,14 +1394,17 @@ public struct GlassSessionsList: View {
     /// The filter shows only when there is something to choose between.
     private var showsFilterMenu: Bool { hasGroupChats || availableProjects.count > 1 || !availableTags.isEmpty }
 
-    /// What is waiting on you, beside the panel's title: a count that is also
-    /// the filter for it. Tapping it shows only those chats, and it fills, with
-    /// a tick, while it does. Select's size, at the other end of the row.
+    /// What is waiting on you, beside the panel's title: a count that opens the
+    /// Waiting on You screen, to answer each one without opening its chat
+    /// (WaitingOnYou.swift; Peter, 30 October 2026: "a question mark icon on the
+    /// agent's screen will pop that screen"). Held, it also filters the list to
+    /// those chats, and it fills, with a tick, while it does; a tap then ends
+    /// the filter. Select's size, at the other end of the row.
     private var attentionChip: some View {
         let store = PendingQuestionStore.shared
-        let count = store.questions.count
+        let count = store.waiting.count
         return Button {
-            needsAnswerOnly.toggle()
+            if needsAnswerOnly { needsAnswerOnly = false } else { WaitingOnYouCentre.shared.open() }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: needsAnswerOnly ? "checkmark.circle.fill" : "questionmark.bubble")
@@ -1279,7 +1422,15 @@ public struct GlassSessionsList: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .contextMenu {
+            Button { WaitingOnYouCentre.shared.open() } label: { Label("Answer Them", systemImage: "rectangle.stack") }
+            Button { needsAnswerOnly.toggle() } label: {
+                Label(needsAnswerOnly ? "Show All Chats" : "Show Only These Chats",
+                      systemImage: needsAnswerOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            }
+        }
         .accessibilityAddTraits(needsAnswerOnly ? .isSelected : [])
+        .accessibilityHint(needsAnswerOnly ? "Shows all chats again" : "Opens Waiting on You")
         .uiKitIdentifier("GlassSessionsList.needsAnswerFilter")
     }
 
@@ -1361,9 +1512,103 @@ public struct GlassSessionsList: View {
     /// with a chat an agent started under the chat that started it. A search or
     /// a filter shows every match, since a match may be a folded chat.
     private var sessionFamilies: SessionFamilies {
+        // Nobody can see the list (a tab behind another, a chat over it): its
+        // last arrangement stands until it is shown. It was arranged again
+        // whenever anything around it was drawn again, a Mac's details or a
+        // question changing, 14-33 times a minute at up to 34 ms on Peter's Duo
+        // with about 300 chats (5 November 2026).
+        // A chat joining or leaving still counts: the list also names its chats
+        // to the host (open the chat about X).
+        if !listIsSeen, let kept = arrangementWhileHidden.families,
+           arrangementWhileHidden.chatCount == unifiedSessions.count { return kept }
+        let recencyRev = followsRecency
+            ? sessionStore.recencyRevision
+            : (arrangementWhileHidden.key?.recencyRevision ?? sessionStore.recencyRevisionUnobserved)
+        let key = ArrangementKey(
+            chatCount: unifiedSessions.count,
+            sessionsRevision: visibility?.sessionsRevision ?? -1,
+            recencyRevision: recencyRev,
+            phasesRevision: sessionStore.phasesRevision,
+            pinnedKeys: sessionStore.pinnedChatKeys,
+            questionsRevision: PendingQuestionStore.shared.questionsRevision,
+            openFamilies: openFamilies,
+            closedFamilies: closedFamilies,
+            placements: placements,
+            heldOrder: heldSessionOrder,
+            heldRecent: heldRecentChatIds,
+            searchText: searchText,
+            needsAnswerOnly: needsAnswerOnly,
+            groupFilter: activeGroupFilter,
+            projectFilter: activeProjectFilter,
+            tagFilter: activeTagFilter,
+            inviteCount: listedInvites.count,
+            isRecent: isRecentPresentation
+        )
+        if key.sessionsRevision >= 0, let kept = arrangementWhileHidden.families,
+           arrangementWhileHidden.key == key {
+            return kept
+        }
+        // Timed for the perf journal's `timed:` (docs/main-thread.md): its cost
+        // grows with the account's chats.
+        let families = MainThreadSampler.time(isRecentPresentation ? "list.arrange.recent" : "list.arrange") {
+            arrangedFamilies(heldOrder: heldSessionOrder)
+        }
+        arrangementWhileHidden.families = families
+        arrangementWhileHidden.chatCount = unifiedSessions.count
+        arrangementWhileHidden.key = key
+        return families
+    }
+
+    private struct ArrangementKey: Equatable {
+        var chatCount: Int
+        var sessionsRevision: Int
+        var recencyRevision: Int
+        var phasesRevision: Int
+        var pinnedKeys: Set<String>
+        var questionsRevision: Int
+        var openFamilies: Set<String>
+        var closedFamilies: Set<String>
+        var placements: [String: String]
+        var heldOrder: [String]?
+        var heldRecent: Set<String>?
+        var searchText: String
+        var needsAnswerOnly: Bool
+        var groupFilter: Bool
+        var projectFilter: String?
+        var tagFilter: String?
+        var inviteCount: Int
+        var isRecent: Bool
+    }
+
+    /// The last arrangement, for while the list cannot be seen or when the list
+    /// re-renders with its arrangement inputs unchanged. A reference, so
+    /// keeping it from the body changes no state.
+    private final class KeptArrangement {
+        var families: SessionFamilies?
+        var chatCount = 0
+        var key: ArrangementKey?
+    }
+    @State private var arrangementWhileHidden = KeptArrangement()
+
+    private var isRecentPresentation: Bool {
+        if case .recent = presentation { return true }
+        return false
+    }
+
+    private func arrangedFamilies(heldOrder: [String]?) -> SessionFamilies {
         // Invitations use the same recency ordering as chats. Keeping them in
         // this layout also preserves pinned rows and keeps chat families together.
-        let base = matchingSessions + visibleInviteRows
+        var base = matchingSessions + visibleInviteRows
+        if isRecentPresentation {
+            // Home's rows are the most recent chats alone. Pinned ones, which
+            // lead the full list, took them whatever their age (Peter,
+            // 5 November 2026: old pinned chats filled Jump back in).
+            base = base.filter { !sessionStore.isPinned(anyOf: $0.readStateKeys) }
+        }
+        // Home's rows, their order held: only the chats they can show.
+        if heldOrder != nil, let held = heldRecentChatIds, isRecentPresentation, !Self.recentArrangesAll {
+            base = base.filter { held.contains($0.id) }
+        }
         let buckets = Dictionary(base.map { ($0.id, sortBucket(for: $0)) }, uniquingKeysWith: max)
         return SessionFamilies.arrange(
             base,
@@ -1373,7 +1618,7 @@ public struct GlassSessionsList: View {
             isPinned: { sessionStore.isPinned(anyOf: $0.readStateKeys) },
             recency: { buckets[$0.id] ?? sortBucket(for: $0) },
             mustShow: { sessionStore.isWorkingOrAsking($0) || attention(for: $0) != nil },
-            heldOrder: heldSessionOrder,
+            heldOrder: heldOrder,
             placedUnder: placement(of:)
         )
     }
@@ -1636,11 +1881,26 @@ public struct GlassSessionsList: View {
     /// cannot scan) the list is never rebuilt to attach one, so the @ never
     /// showed (Alice, 16 October 2026). The live tab list always has it.
     private func attentionKeys(for session: UnifiedSession) -> [String] {
-        session.attentionKeys + hostIndex.hosts(for: session.readStateKeys, in: bridge.sessions)
+        session.attentionKeys + hostIndex.hosts(for: session.readStateKeys, in: tabs)
+    }
+
+    /// The bridge's tabs as far as the list needs them: which there are, and
+    /// what each is paired to and called. Not what they are doing: the web
+    /// reports a streaming chat's size several times a second, and following
+    /// `bridge.sessions` redrew every session list on each report, hidden or
+    /// not, for each row's attention keys (docs/main-thread.md, rule 4).
+    private var tabs: [ChatSession] {
+        _ = bridge.tabIdentityRevision
+        return bridge.tabsUnobserved
     }
 
     private func attention(for session: UnifiedSession) -> PendingAgentQuestion? {
-        PendingQuestionStore.shared.first(anyOf: attentionKeys(for: session))
+        // Not read while nobody can see the list: each row's read made the
+        // list's rows follow every question, so any change to one rebuilt all
+        // of a hidden list's rows (Peter's Duo, 5 November 2026). Read again
+        // when it is shown.
+        guard listIsSeen else { return nil }
+        return PendingQuestionStore.shared.first(anyOf: attentionKeys(for: session))
     }
 
     /// Items waiting on you whose chat has no row here: a chat you were
@@ -1739,7 +1999,7 @@ public struct GlassSessionsList: View {
         // every running chat's heartbeat re-sort (and re-render) the whole
         // list. Subscribe only to changes that can reorder it; rows track their
         // own time labels through per-chat cells.
-        _ = sessionStore.recencyRevision
+        if followsRecency { _ = sessionStore.recencyRevision }
         var best = session.lastUsed
         if let ripul = session.ripulSession {
             if let t = sessionStore.lastActiveTimeByChatId[ripul.id] { best = max(best, t) }
@@ -1751,6 +2011,17 @@ public struct GlassSessionsList: View {
         if let t = lastActiveBySessionId[session.id] { best = max(best, t) }
         if let t = PendingQuestionStore.shared.latestMentionAt(anyOf: attentionKeys(for: session)) { best = max(best, t) }
         return best
+    }
+
+    /// Whether a reorder can show: not while the order is held (Home's Jump
+    /// back in holds it while it is on screen, the list under the pointer) or
+    /// nobody can see the list (a tab behind another, a chat over it). There
+    /// each reorder re-sorted every chat for nothing: 152 runs of this body in
+    /// the late frames of Home's frame-budget test without the scroll holds,
+    /// four lists at a time, Home's and the hidden tabs' (5 November 2026). A
+    /// list shown again re-reads the times as it draws.
+    private var followsRecency: Bool {
+        heldSessionOrder == nil && listIsSeen
     }
 
     /// Quantize effective last active to 30-second buckets for stable sorting.
@@ -1812,7 +2083,7 @@ public struct GlassSessionsList: View {
             // Reserve the buttons and their visual gap inside the List, but
             // count the navigation obstruction separately and only once.
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { actionBarHeight = $0 }
-            .padding(.bottom, actionBarNavigationClearance)
+            .modifier(MeasuredBottomPadding(clearance: actionBarNavigationClearance))
             #endif
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
@@ -1874,20 +2145,23 @@ public struct GlassSessionsList: View {
         // One layout for rendering and host context: folded chats are not
         // drawn, but a host may still be asked to open one by name.
         let families = sessionFamilies
-        let sessions = families.all
-        // A hundred, not the three Siri reads out: a host that resolves "open
-        // the chat about X" can only choose from what it is told about, and at
-        // three it could never reach the fourth row (measured 9 October 2026:
-        // a chat on screen was passed to the agent as unknown). A host that
-        // wants fewer takes a prefix.
-        // An invitation is opened through Join, not the host's chat-id route.
-        let listedSessions = sessions.filter { !$0.id.hasPrefix(Self.invitePrefix) }
-            .prefix(RipulListedSession.limit).map { RipulListedSession(id: $0.id, title: $0.title) }
         // In three parts, each checked by the compiler on its own. As one expression (the
         // panels and some twenty modifiers) the compiler gave it up on one Mac and not on
         // another: "unable to type-check this expression in reasonable time", in WAC's
         // simulator build of 0.7.165 on the MacBook, after it had built on the Mac Studio.
-        presentations(on: lifecycle(on: panels(families: families), listedSessions: listedSessions))
+        if case .recent(let limit, let autoSort) = presentation {
+            presentations(on: recentRows(families: families, limit: limit, autoSort: autoSort))
+        } else {
+            // A hundred, not the three Siri reads out: a host that resolves "open
+            // the chat about X" can only choose from what it is told about, and at
+            // three it could never reach the fourth row (measured 9 October 2026:
+            // a chat on screen was passed to the agent as unknown). A host that
+            // wants fewer takes a prefix.
+            // An invitation is opened through Join, not the host's chat-id route.
+            let listedSessions = families.all.filter { !$0.id.hasPrefix(Self.invitePrefix) }
+                .prefix(RipulListedSession.limit).map { RipulListedSession(id: $0.id, title: $0.title) }
+            presentations(on: lifecycle(on: panels(families: families), listedSessions: listedSessions))
+        }
     }
 
     /// The list in each of its states: nothing yet, connecting, and the panels.
@@ -1929,8 +2203,8 @@ public struct GlassSessionsList: View {
                     .uiKitIdentifier("GlassSessionsList.connecting")
                 }
             } else {
-                VStack(spacing: 16) {
-                    if !chatHostMachines.isEmpty {
+                VStack(spacing: 8) {
+                    if showsMachinesPanel && !chatHostMachines.isEmpty {
                         machinesPanelSection
                             // Served before the greedy Sessions panel below.
                             // Without this the expanded body — now flexible, so
@@ -1941,9 +2215,10 @@ public struct GlassSessionsList: View {
                     }
                     invitesSlot(chats: false)
                     sessionsPanelSection(families: families)
+                        .modifier(AdaptiveSessionRowDensity())
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 8)
                 .padding(.top, 8)
                 // Sessions fills the space below Machines and Invites.
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1955,7 +2230,9 @@ public struct GlassSessionsList: View {
                 // the ceiling and the height it is derived from. The top bar is
                 // a safeAreaInset and the bottom insets below are applied
                 // OUTSIDE this frame, so this is already net of both.
-                .background(SessionsPanelStackHeightReader())
+                .background {
+                    if showsMachinesPanel { SessionsPanelStackHeightReader() }
+                }
                 // The glass reaches the display's curve. Home-indicator and
                 // tab-bar clearance belongs INSIDE the sessions scroller.
                 .padding(.bottom, SessionsPanelLayout.bottomGap)
@@ -1988,8 +2265,10 @@ public struct GlassSessionsList: View {
         #if os(iOS)
         // Measure the unpadded host, not the moving buttons. This also works
         // when a native tab host or a sheet has already consumed the inset.
-        .background(SessionsScrollBoundsReader(bottomBar: bottomBar, gap: 0) {
-            actionBarNavigationClearance = $0
+        // The reader reads the bar itself: read here, every move of the bar
+        // redrew every row of the list.
+        .background(SessionsScrollBoundsReader(gap: 0) { [actionBarNavigationClearance] in
+            actionBarNavigationClearance.set($0)
         })
         #endif
         .animation(.easeInOut(duration: 0.25), value: showOnboarding)
@@ -1999,16 +2278,15 @@ public struct GlassSessionsList: View {
             machinesExpanded = storedMachinesExpanded
             onListedSessionsChanged?(listedSessions)
         }
+        // Fetch from a stable visible ancestor. A zero-height placeholder in
+        // the panel stack still adds VStack spacing on both sides of it.
+        .task {
+            if invitesSection == nil { await inviteManager?.fetchInvites() }
+        }
         .onChange(of: listedSessions) { _, rows in
             onListedSessionsChanged?(rows)
         }
         .onChange(of: machinesExpanded) { _, new in storedMachinesExpanded = new }
-        .onChange(of: closedFamilies) { _, closed in
-            // After the drawer (0.3 s), and only the last of quick toggles.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                if closedFamilies == closed, storedClosedFamilies != closed { storedClosedFamilies = closed }
-            }
-        }
         // Drop a stale query when the list shrinks below the search threshold.
         // This used to be a `Color.clear.onAppear { searchText = "" }` sitting
         // in the panel body — a state write during body evaluation, which is
@@ -2016,7 +2294,7 @@ public struct GlassSessionsList: View {
         .onChange(of: unifiedSessions.count) { _, count in
             if count <= 12 && !searchText.isEmpty { searchText = "" }
         }
-        .onChange(of: bridge.sessions.count) { _, _ in quickLaunchLoading = nil }
+        .onChange(of: tabs.count) { _, _ in quickLaunchLoading = nil }
         // Read membership when the list becomes visible or returns to the
         // foreground. Row count changes do not invalidate membership.
         .task(id: listCanBeSeen && sessionListScenePhase == .active) {
@@ -2074,6 +2352,17 @@ public struct GlassSessionsList: View {
 
     private func presentations<Content: View>(on content: Content) -> some View {
         makeColdAlert(on: content)
+        .onChange(of: closedFamilies) { _, closed in
+            // After the drawer (0.3 s), and only the last of quick toggles.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                if closedFamilies == closed, storedClosedFamilies != closed { storedClosedFamilies = closed }
+            }
+        }
+        // A family opened or closed in the other list showing it (Home's and the
+        // Agents screen's are both mounted), so the two agree.
+        .onChange(of: storedClosedFamilies) { _, stored in
+            if closedFamilies != stored { closedFamilies = stored }
+        }
         .confirmationDialog(
             archivingFamily.map { "Archive “\($0.session.title)”?" } ?? "",
             isPresented: Binding(get: { archivingFamily != nil }, set: { if !$0 { archivingFamily = nil } }),
@@ -2123,11 +2412,11 @@ public struct GlassSessionsList: View {
             Text("You will need a new invitation to join again.")
         }
         .ripulSheet(isPresented: Binding(
-            get: { presentedPlan != nil },
-            set: { if !$0 { presentedPlan = nil } }
+            get: { presentedContent != nil },
+            set: { if !$0 { presentedContent = nil } }
         )) {
-            if let plan = presentedPlan {
-                PlanSheetView(content: plan.content, fileName: plan.fileName)
+            if let content = presentedContent {
+                SessionContentSheet(content: content.content, fileName: content.fileName)
             }
         }
         .ripulSheet(item: $placingSession) { session in
@@ -2151,6 +2440,14 @@ public struct GlassSessionsList: View {
                 }
             }
         }
+        .ripulSheet(item: $iconPickerSession) { session in
+            SessionIconPicker(
+                sessionTitle: session.title,
+                currentIcon: sessionStore.customIcon(anyOf: session.readStateKeys)
+            ) { newIcon in
+                bridge.setSessionIcon(newIcon, session)
+            }
+        }
     }
 
     /// Distinct tags the user has used, ordered by the most-recently-active
@@ -2158,9 +2455,8 @@ public struct GlassSessionsList: View {
     private var recentTags: [String] {
         var recencyByTag: [String: Date] = [:]
         for s in unifiedSessions {
-            // Machine-written plan link tags are identity, not labels — keep
-            // them out of the filter menu and the editor's picker.
-            for tag in s.tags where !PlanTagConvention.isPlanTag(tag) {
+            // Legacy internal tags are not user labels.
+            for tag in s.tags where !SessionTagVisibility.isInternal(tag) {
                 if let existing = recencyByTag[tag] {
                     recencyByTag[tag] = max(existing, s.lastUsed)
                 } else {
@@ -2180,7 +2476,7 @@ public struct GlassSessionsList: View {
         case .showContent:
             let content = action.data["content"] ?? ""
             let title = action.data["title"] ?? "Content"
-            presentedPlan = (content: content, fileName: title)
+            presentedContent = (content: content, fileName: title)
         case .focusSession:
             onOpenUnifiedSession(session)
         case .postToWeb:

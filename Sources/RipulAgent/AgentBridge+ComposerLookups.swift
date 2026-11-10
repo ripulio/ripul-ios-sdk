@@ -66,6 +66,28 @@ extension AgentBridge {
         return dict["error"] as? String ?? "Invitation failed"
     }
 
+    /// Make a room (docs/plans/rooms.md): a chat with no model, kept by Ripul's
+    /// server, where people talk and ask agents by name. Returns the room's tab
+    /// id, ready to focus, or throws with words for a person.
+    public func createRoom(title: String) async throws -> String {
+        let reply = await callPage("__ripulCreateRoom", [title], .orElse("{ success: false, error: 'Rooms are unavailable' }"))
+        if let reason = reply.failure(detached: "Ripul isn't ready yet") { throw RoomCreationError(message: reason) }
+        guard let dict = reply.dictionary else { throw RoomCreationError(message: "Unexpected response") }
+        if dict["success"] as? Bool == true, let chatId = dict["chatId"] as? String, !chatId.isEmpty { return chatId }
+        throw RoomCreationError(message: dict["error"] as? String ?? "The room could not be made.")
+    }
+
+    /// The icon a chat offered under @ Chats wears: the one given it in the chat
+    /// list (`SessionListStore.customIcon`), else its provider's, as its row there shows.
+    public func chatSuggestionIcon(_ suggestion: [String: Any]) -> String? {
+        let sessionId = suggestion["sessionId"] as? String
+        let keys: [String?] = [suggestion["chatId"] as? String, sessionId,
+                               sessionId?.split(separator: ":").last.map(String.init)]
+        if let custom = sessionList.customIcon(anyOf: keys) { return custom }
+        guard let provider = suggestion["provider"] as? String, !provider.isEmpty else { return nil }
+        return ProviderConstants.icon(for: provider, providerLabel: nil)
+    }
+
     /// Query the web view for autocomplete suggestions for a given category and query string.
     /// Used by the native @ picker in NativeChatInput.
     /// Returns an array of dictionaries representing standard suggestions.
@@ -73,4 +95,10 @@ extension AgentBridge {
         let reply = await callPage("__ripulQueryAutocomplete", [category, query], .orElse("{ suggestions: [] }"))
         return reply.dictionary?["suggestions"] as? [[String: Any]] ?? []
     }
+}
+
+/// Why a room could not be made, in words for a person (`AgentBridge.createRoom`).
+public struct RoomCreationError: LocalizedError {
+    public let message: String
+    public var errorDescription: String? { message }
 }

@@ -5,6 +5,76 @@ import SwiftUI
 
 @MainActor
 final class ThermalWorkTests: XCTestCase {
+    func testPersistedAddReordersThinkingPlaceholderAndReindexesUpdates() {
+        let store = NativeChatMessageStore()
+        store.applyBackfill([["messageId": "later", "content": "Later", "timestamp": 20.0]], chatId: "chat")
+        store.applyUpdate(["messageId": "earlier", "chatId": "chat", "timestamp": 30.0,
+                           "thinking": ["content": "Early thought", "isStreaming": true]])
+        _ = store.consumeDirtyRowIds()
+        store.applyAdd(["messageId": "earlier", "chatId": "chat", "content": "Earlier", "timestamp": 10.0])
+        XCTAssertEqual(store.messages.map(\.id), ["earlier", "later"])
+        XCTAssertNil(store.consumeDirtyRowIds())
+        store.applyUpdate(["messageId": "later", "thinking": ["content": "Later thought", "isStreaming": true]])
+        XCTAssertEqual(store.messages[0].thinking, "Early thought")
+        XCTAssertEqual(store.messages[1].thinking, "Later thought")
+        XCTAssertEqual(store.rows, NativeChatMessageStore.buildRows(from: store.messages, previousRows: store.rows))
+    }
+
+    func testPatchForPreviousChatCannotPopulateNewEmptyChat() {
+        let store = NativeChatMessageStore()
+        store.applyBackfill([], chatId: "shared_new")
+        store.applyPatch([["messageId": "old", "content": "Old chat", "timestamp": 1.0]], chatId: "remote-open_old")
+        XCTAssertEqual(store.currentChatId, "shared_new")
+        XCTAssertTrue(store.messages.isEmpty)
+        store.applyPatch([["messageId": "new", "content": "New chat", "timestamp": 2.0]], chatId: "shared_new")
+        XCTAssertEqual(store.messages.map(\.id), ["new"])
+    }
+
+    func testToolThinkingFastPathRebuildsGroupWhenChatIdentityChanges() {
+        let store = NativeChatMessageStore()
+        var tool: [String: Any] = ["messageId": "tool", "chatId": "shared_local", "method": "Bash",
+                                   "timestamp": 1.0, "thinking": ["content": "Working", "isStreaming": true]]
+        store.applyBackfill([tool], chatId: "shared_local")
+        _ = store.consumeDirtyRowIds()
+        tool["chatId"] = "cli_host"
+        store.applyPatch([tool], chatId: "shared_local")
+        XCTAssertEqual(store.rows, NativeChatMessageStore.buildRows(from: store.messages, previousRows: store.rows))
+        guard case .toolGroup(let group) = store.rows.last else { return XCTFail("Expected tool group") }
+        XCTAssertEqual(group.chatId, "cli_host")
+        XCTAssertTrue(store.consumeDirtyRowIds()?.contains(store.rows.last!.id) == true)
+    }
+
+    func testTerminalStatusesCannotRestartThinkingFromLateDeltas() {
+        for status in ["complete", "completed", "success", "error", "failed", "cancelled", "canceled", "stopped", "done", "killed", "ended", "orphaned"] {
+            let store = NativeChatMessageStore()
+            store.applyBackfill([["messageId": "m", "status": status, "timestamp": 1.0,
+                                  "thinking": ["content": "Retained", "isStreaming": true]]], chatId: "chat")
+            XCTAssertFalse(store.messages[0].isThinkingStreaming, status)
+            store.applyUpdate(["messageId": "m", "thinking": ["content": "Late text", "isStreaming": true]])
+            XCTAssertFalse(store.messages[0].isThinkingStreaming, status)
+            XCTAssertEqual(store.messages[0].thinking, "Late text")
+        }
+    }
+
+    func testDirtyIDsAccumulateThroughReorderRemovalAndRepeatedPatches() {
+        let store = NativeChatMessageStore()
+        store.applyBackfill([
+            ["messageId": "a", "content": "A", "timestamp": 1.0],
+            ["messageId": "b", "content": "B", "timestamp": 2.0],
+            ["messageId": "c", "content": "C", "timestamp": 3.0],
+        ], chatId: "chat")
+        _ = store.consumeDirtyRowIds()
+        store.applyPatch([["messageId": "a", "content": "A2", "timestamp": 1.0]], chatId: "chat")
+        store.applyPatch([["messageId": "b", "content": "B2", "timestamp": 2.0]], chatId: "chat")
+        XCTAssertEqual(store.consumeDirtyRowIds(), ["a", "b"])
+        store.applyPatch([["messageId": "c", "content": "C2", "timestamp": 0.5]], removedIds: ["b"], chatId: "chat")
+        XCTAssertEqual(store.messages.map(\.id), ["c", "a"])
+        XCTAssertNil(store.consumeDirtyRowIds(), "Reordered/removed rows require a full revision scan")
+        store.applyUpdate(["messageId": "a", "thinking": ["content": "Correct index", "isStreaming": true]])
+        XCTAssertEqual(store.messages[1].thinking, "Correct index")
+        XCTAssertEqual(store.rows, NativeChatMessageStore.buildRows(from: store.messages, previousRows: store.rows))
+    }
+
     private final class Cache: RipulSessionCache {
         let userDefaults = UserDefaults(suiteName: "io.ripul.thermal-tests.\(UUID())")!
         var values: [String: Any] = [:]
@@ -375,7 +445,7 @@ final class ThermalWorkTests: XCTestCase {
     }
 
     @MainActor
-    func testScrollRestorationEmitsOnlyOnChatSwitchOrToggleAndKeepsRowIdsStable() {
+    func testScrollRestorationEmitsOnlyOnToggleAndKeepsRowIdsStable() {
         let store = NativeChatMessageStore()
         var restoredPositions: [NativeChatScrollPosition] = []
         let sub = store.scrollCommands.sink { cmd in
@@ -414,14 +484,15 @@ final class ThermalWorkTests: XCTestCase {
             ],
         ]
 
-        // 1. Initial backfill for empty store emits .restore
+        // 1. Entering a chat opens it at its end: the page's saved place is not restored.
         store.applyBackfill(
             initialEntries,
             chatId: "chat-1",
             scrollPosition: ["rowId": "turn-1", "offset": 18.0, "following": false]
         )
-        XCTAssertEqual(restoredPositions.count, 1)
-        XCTAssertEqual(restoredPositions.first?.offset, 18.0)
+        XCTAssertEqual(restoredPositions.count, 0, "Entering a chat must not restore its saved place")
+        XCTAssertNil(store.pendingScrollRestoration)
+        XCTAssertEqual(store.lastScrollSnapshot?.following, true)
         XCTAssertEqual(store.rows.map(\.id), ["toolGroup:tool-2", "turn-1"])
 
         // 2. Identical backfill or mid-session catch-up backfill on the same chat does NOT emit .restore,
@@ -432,7 +503,7 @@ final class ThermalWorkTests: XCTestCase {
             chatId: "chat-1",
             scrollPosition: ["rowId": "turn-1", "offset": 18.0, "following": false]
         )
-        XCTAssertEqual(restoredPositions.count, 1, "No-op backfill must not re-emit .restore")
+        XCTAssertEqual(restoredPositions.count, 0, "No-op backfill must not emit .restore")
 
         let catchUpEntries: [[String: Any]] = [
             [
@@ -469,7 +540,7 @@ final class ThermalWorkTests: XCTestCase {
             chatId: "chat-1",
             scrollPosition: ["rowId": "turn-1", "offset": 99.0, "following": false]
         )
-        XCTAssertEqual(restoredPositions.count, 1, "Mid-session catch-up backfill must not emit .restore")
+        XCTAssertEqual(restoredPositions.count, 0, "Mid-session catch-up backfill must not emit .restore")
         XCTAssertEqual(
             store.rows.map(\.id),
             ["toolGroup:tool-2", "turn-1"],
@@ -484,36 +555,48 @@ final class ThermalWorkTests: XCTestCase {
             chatId: "chat-1",
             scrollPosition: ["rowId": "turn-1", "offset": 42.0, "following": false]
         )
-        XCTAssertEqual(restoredPositions.count, 2)
+        XCTAssertEqual(restoredPositions.count, 1)
         XCTAssertEqual(restoredPositions.last?.offset, 42.0)
 
-        // 4. Cold chat switch: initial switch-time backfill arrives empty with scrollPosition,
-        //    then hydration backfill arrives non-empty without scrollPosition — kept across empty
-        //    and consumed once on first non-empty row build.
+        // 4. Cold chat switch: the switch-time backfill arrives empty with the page's saved
+        //    place, then the hydration backfill arrives with rows. Entering it opens at its end,
+        //    so neither restores.
         store.applyBackfill(
             [],
             chatId: "chat-cold",
             scrollPosition: ["rowId": "turn-1", "offset": 31.0, "following": false]
         )
-        XCTAssertEqual(restoredPositions.count, 2, "Empty cold-chat backfill must hold scrollPosition until rows exist")
-        XCTAssertEqual(store.pendingScrollRestoration?.offset, 31.0)
-
-        store.applyBackfill(
+        XCTAssertNil(store.pendingScrollRestoration, "Entering a cold chat must not keep its saved place")
+        let hydratedCold: [[String: Any]] = [
             [
-                [
-                    "messageId": "turn-1",
-                    "chatId": "chat-cold",
-                    "role": "assistant",
-                    "method": "llmRequest",
-                    "content": "Hydrated cold chat reply.",
-                    "timestamp": 5_000.0,
-                ],
+                "messageId": "turn-1",
+                "chatId": "chat-cold",
+                "role": "assistant",
+                "method": "llmRequest",
+                "content": "Hydrated cold chat reply.",
+                "timestamp": 5_000.0,
             ],
-            chatId: "chat-cold",
+        ]
+        store.applyBackfill(hydratedCold, chatId: "chat-cold", scrollPosition: nil)
+        XCTAssertEqual(restoredPositions.count, 1, "Hydrating an entered chat must not restore a place")
+
+        // 5. Turning Native Chat on over a chat still loading: the web chat's place is kept
+        //    across the empty backfill and restored once on the first non-empty one.
+        store.markAwaitingWebToggleRestore()
+        store.applyBackfill(
+            [],
+            chatId: "chat-toggle",
+            scrollPosition: ["rowId": "turn-1", "offset": 31.0, "following": false]
+        )
+        XCTAssertEqual(restoredPositions.count, 1, "An empty toggle backfill must hold the place until rows exist")
+        XCTAssertEqual(store.pendingScrollRestoration?.offset, 31.0)
+        store.applyBackfill(
+            hydratedCold.map { entry in entry.merging(["chatId": "chat-toggle"]) { _, new in new } },
+            chatId: "chat-toggle",
             scrollPosition: nil
         )
-        XCTAssertEqual(restoredPositions.count, 3, "First non-empty hydration backfill must emit held scrollPosition")
-        XCTAssertEqual(restoredPositions.last?.chatId, "chat-cold")
+        XCTAssertEqual(restoredPositions.count, 2, "First non-empty backfill after the toggle must restore the held place")
+        XCTAssertEqual(restoredPositions.last?.chatId, "chat-toggle")
         XCTAssertEqual(restoredPositions.last?.offset, 31.0)
         XCTAssertEqual(
             store.pendingScrollRestoration?.offset,
@@ -521,7 +604,7 @@ final class ThermalWorkTests: XCTestCase {
             "pendingScrollRestoration remains available in store until NativeChatView consumes it on mount"
         )
 
-        // 5. Splitting an existing toolGroup (either when the second tool call gains thinking or when a
+        // 6. Splitting an existing toolGroup (either when the second tool call gains thinking or when a
         //    mid-list message lands between the two tool calls by timestamp) must never produce duplicate row IDs.
         store.applyBackfill(
             [
@@ -1108,5 +1191,390 @@ final class ThermalWorkTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(floorAfterEviction, 2, "Evicted row revision must not regress below its pre-eviction revision")
         registry.setValue(true, forRow: "many-group-0", component: "note.isExpanded", default: false, affectsHeight: true)
         XCTAssertGreaterThan(registry.revision(forRow: "many-group-0"), floorAfterEviction, "Re-mutating an evicted row must strictly advance its revision")
+    }
+
+    func testAuthoritativeThinkingSettleAndDirtyRowIds() {
+        let store = NativeChatMessageStore()
+        store.applyBackfill([
+            ["messageId": "m1", "chatId": "chat-1", "role": "user", "content": "Hello", "timestamp": 1000.0],
+            ["messageId": "m2", "chatId": "chat-1", "role": "assistant", "content": "", "thinking": ["content": "Step 1", "isStreaming": true], "timestamp": 2000.0],
+        ], chatId: "chat-1")
+        _ = store.consumeDirtyRowIds()
+        XCTAssertTrue(store.messages[1].isThinkingStreaming)
+        XCTAssertEqual(store.messages[1].thinking, "Step 1")
+
+        // Streaming thinking delta updates in-place and records dirty thinking row ID
+        store.applyUpdate(["messageId": "m2", "thinking": ["content": "Step 1 + 2", "isStreaming": true]])
+        XCTAssertEqual(store.consumeDirtyRowIds(), ["m2"])
+        XCTAssertEqual(store.messages[1].thinking, "Step 1 + 2")
+        XCTAssertTrue(store.messages[1].isThinkingStreaming)
+
+        // Newer message being added alone does NOT settle m2's streaming thinking (only authoritative state does)
+        store.applyPatch([
+            ["messageId": "m3", "chatId": "chat-1", "role": "assistant", "content": "Working on it", "timestamp": 3000.0],
+        ], chatId: "chat-1")
+        XCTAssertTrue(store.messages[1].isThinkingStreaming)
+        XCTAssertEqual(store.consumeDirtyRowIds(), ["m3"])
+
+        // Content delta on m3 uses in-place fast path and reports only m3 dirty
+        store.applyPatch([
+            ["messageId": "m3", "chatId": "chat-1", "role": "assistant", "content": "Working on it...", "timestamp": 3000.0],
+        ], chatId: "chat-1")
+        XCTAssertEqual(store.consumeDirtyRowIds(), ["m3"])
+
+        // Authoritative terminal status on m2 settles isThinkingStreaming while preserving accumulated thinking text
+        store.applyPatch([
+            ["messageId": "m2", "chatId": "chat-1", "role": "assistant", "content": "", "status": "complete", "timestamp": 2000.0],
+        ], chatId: "chat-1")
+        XCTAssertFalse(store.messages[1].isThinkingStreaming)
+        XCTAssertEqual(store.messages[1].thinking, "Step 1 + 2")
+        XCTAssertEqual(store.consumeDirtyRowIds(), ["m2"])
+
+        // Turn-end signal settleStreaming(chatId:) settles any remaining streaming thinking in that chat
+        store.applyUpdate(["messageId": "m3", "thinking": ["content": "Finalizing", "isStreaming": true]])
+        _ = store.consumeDirtyRowIds()
+        XCTAssertTrue(store.messages[2].isThinkingStreaming)
+        store.settleStreaming(chatId: "other-chat")
+        XCTAssertTrue(store.messages[2].isThinkingStreaming, "settleStreaming for another chat must not settle chat-1")
+        store.settleStreaming(chatId: "chat-1")
+        XCTAssertFalse(store.messages[2].isThinkingStreaming)
+        XCTAssertEqual(store.messages[2].thinking, "Finalizing")
+        XCTAssertEqual(store.consumeDirtyRowIds(), ["m3"])
+    }
+
+    @MainActor
+    func testMarkerFramesSentinelStabilityAndCoherenceValidation() {
+        let store = NativeChatMessageStore()
+        store.applyBackfill([
+            ["messageId": "u1", "chatId": "c1", "role": "user", "content": "Hello", "timestamp": 1000.0],
+            ["messageId": "t1", "chatId": "c1", "role": "assistant", "content": "", "thinking": ["content": "Thinking", "isStreaming": true], "timestamp": 1500.0],
+            ["messageId": "a1", "chatId": "c1", "role": "assistant", "content": "Part 1", "timestamp": 2000.0],
+        ], chatId: "c1")
+        _ = store.consumeDirtyRowIds()
+
+        let band = NativeChatWindowBand(rows: [])
+        let coordinator = band.coordinator
+        coordinator.windowEnabled = true
+        coordinator.useMarkerFrames = true
+
+        // 1. Initial mount is a structure change (disabled -> enabled) and sets serial = 1
+        coordinator.updateWindowRows(store.rows)
+        XCTAssertTrue(band.snapshot.enabled)
+        XCTAssertEqual(band.snapshot.serial, 1)
+        XCTAssertEqual(band.snapshot.rows.map(\.id), ["u1", "t1", "a1"])
+
+        // 2. Pure data delta (streaming text into a1 without changing mounted row IDs or fillers)
+        //    must update snapshot.rows while keeping snapshot.serial == 1.
+        store.applyPatch([
+            ["messageId": "a1", "chatId": "c1", "role": "assistant", "content": "Part 1 + Part 2", "timestamp": 2000.0],
+        ], chatId: "c1")
+        coordinator.updateWindowRows(store.rows, dirtyRowIDs: store.consumeDirtyRowIds())
+        XCTAssertEqual(band.snapshot.serial, 1, "Pure data delta inside unchanged band must not bump sentinel serial when markerFrames is enabled")
+        if case .assistant(let msg) = band.snapshot.rows[2] {
+            XCTAssertEqual(msg.content, "Part 1 + Part 2")
+        } else {
+            XCTFail("Expected updated assistant row")
+        }
+
+        // 3. Adding a new row changes band membership and MUST bump snapshot.serial
+        store.applyPatch([
+            ["messageId": "a2", "chatId": "c1", "role": "assistant", "content": "Follow-up", "timestamp": 3000.0],
+        ], chatId: "c1")
+        coordinator.updateWindowRows(store.rows, dirtyRowIDs: store.consumeDirtyRowIds())
+        XCTAssertEqual(band.snapshot.serial, 2, "Band membership change must increment sentinel serial")
+
+        // 4. Coherent-pass verification for marker frames:
+        //    4 rows (u1: 40pt, t1 folded thinking: 28pt narrow capsule width 120, a1: 80pt, a2: 50pt)
+        //    with 10pt VStack spacing -> total height = 40 + 10 + 28 + 10 + 80 + 10 + 50 = 228pt.
+        let containerFrames: [String: CGRect] = [
+            "__rows": CGRect(x: 0, y: 12, width: 320, height: 228),
+            "__content": CGRect(x: 0, y: 0, width: 320, height: 240),
+            "__window:2": .zero,
+        ]
+        let coherentMarkers: [String: CGRect] = [
+            "u1": CGRect(x: 0, y: 12, width: 320, height: 40),
+            "t1": CGRect(x: 0, y: 62, width: 120, height: 28), // folded thinking lozenge is narrower than 320
+            "a1": CGRect(x: 0, y: 100, width: 320, height: 80),
+            "a2": CGRect(x: 0, y: 190, width: 320, height: 50),
+        ]
+        XCTAssertTrue(
+            coordinator.areMarkerFramesCoherent(frames: coherentMarkers, allFrames: containerFrames),
+            "Contiguous 10pt-spaced markers matching __rows bounds (including narrow folded thinking) must be coherent"
+        )
+
+        // Unshifted subsequent marker after a1 grew by +20pt (__rows height is 248, but a2 is still at y=190) must be rejected
+        let containerAfterGrowth: [String: CGRect] = [
+            "__rows": CGRect(x: 0, y: 12, width: 320, height: 248),
+            "__content": CGRect(x: 0, y: 0, width: 320, height: 260),
+            "__window:2": .zero,
+        ]
+        var partiallyUpdatedMarkers = coherentMarkers
+        partiallyUpdatedMarkers["a1"] = CGRect(x: 0, y: 100, width: 320, height: 100)
+        XCTAssertFalse(
+            coordinator.areMarkerFramesCoherent(frames: partiallyUpdatedMarkers, allFrames: containerAfterGrowth),
+            "Marker pass where a1 grew but a2 has not yet shifted down must be rejected as incoherent"
+        )
+
+        // Stale width on a full-width row after container resized from 320 -> 390 must be rejected
+        let resizedContainer: [String: CGRect] = [
+            "__rows": CGRect(x: 0, y: 12, width: 390, height: 228),
+            "__content": CGRect(x: 0, y: 0, width: 390, height: 240),
+            "__window:2": .zero,
+        ]
+        XCTAssertFalse(
+            coordinator.areMarkerFramesCoherent(frames: coherentMarkers, allFrames: resizedContainer),
+            "Stale pre-resize marker widths must be rejected when __rows width has changed"
+        )
+
+        // When thinkingMode == .none, t1 renders EmptyView (no slot, no marker, 0 height and 0 spacing):
+        // total height = 40 + 10 + 80 + 10 + 50 = 190pt.
+        let containerWithHiddenThinking: [String: CGRect] = [
+            "__rows": CGRect(x: 0, y: 12, width: 320, height: 190),
+            "__content": CGRect(x: 0, y: 0, width: 320, height: 202),
+            "__window:2": .zero,
+        ]
+        let markersWithHiddenThinking: [String: CGRect] = [
+            "u1": CGRect(x: 0, y: 12, width: 320, height: 40),
+            "a1": CGRect(x: 0, y: 62, width: 320, height: 80),
+            "a2": CGRect(x: 0, y: 152, width: 320, height: 50),
+        ]
+        XCTAssertTrue(
+            coordinator.areMarkerFramesCoherent(frames: markersWithHiddenThinking, allFrames: containerWithHiddenThinking),
+            "Zero-slot EmptyView row must be accepted when remaining markers account for the exact __rows height"
+        )
+    }
+
+    @MainActor
+    func testToolGroupSplitAndPlaceholderReorderNeverProduceDuplicateRowIDs() {
+        let store = NativeChatMessageStore()
+        let band = NativeChatWindowBand(rows: [])
+        let coordinator = band.coordinator
+        coordinator.windowEnabled = true
+        coordinator.useMarkerFrames = true
+
+        // Scenario A: call-2 arrives first, then call-1 arrives via update-before-add placeholder
+        // at a later arrival timestamp (30.0) and is then corrected to its earlier persisted
+        // timestamp (10.0), merging into [call-1, call-2] with group.id == "call-2".
+        // When call-2 subsequently gets thinking (or an assistant message lands between them),
+        // the group splits into [call-1] and [call-2] — neither may steal the other's group ID.
+        store.applyBackfill([
+            ["messageId": "call-2", "chatId": "c1", "role": "assistant", "content": "", "method": "Bash", "timestamp": 20.0],
+        ], chatId: "c1")
+        coordinator.updateWindowRows(store.rows, dirtyRowIDs: store.consumeDirtyRowIds())
+        XCTAssertEqual(store.rows.map(\.id), ["toolGroup:call-2"])
+
+        store.applyUpdate([
+            "messageId": "call-1",
+            "chatId": "c1",
+            "timestamp": 30.0,
+            "thinking": ["content": "", "isStreaming": false],
+        ])
+        coordinator.updateWindowRows(store.rows, dirtyRowIDs: store.consumeDirtyRowIds())
+
+        store.applyAdd([
+            "messageId": "call-1",
+            "chatId": "c1",
+            "role": "assistant",
+            "content": "",
+            "method": "Bash",
+            "timestamp": 10.0,
+        ])
+        coordinator.updateWindowRows(store.rows, dirtyRowIDs: store.consumeDirtyRowIds())
+        XCTAssertEqual(store.rows.map(\.id), ["toolGroup:call-2"])
+
+        // Now call-2 receives a thinking delta, splitting [call-1, call-2] into [call-1], thinking:call-2, [call-2]
+        store.applyUpdate([
+            "messageId": "call-2",
+            "chatId": "c1",
+            "timestamp": 20.0,
+            "thinking": ["content": "Reasoning before second tool", "isStreaming": true],
+        ])
+        let rowIDsAfterThinkingSplit = store.rows.map(\.id)
+        XCTAssertEqual(Set(rowIDsAfterThinkingSplit).count, rowIDsAfterThinkingSplit.count, "Split tool groups must have unique row IDs")
+        XCTAssertEqual(rowIDsAfterThinkingSplit, ["toolGroup:call-1", "thinking:call-2", "toolGroup:call-2"])
+        coordinator.updateWindowRows(store.rows, dirtyRowIDs: store.consumeDirtyRowIds())
+        XCTAssertEqual(band.snapshot.rows.map(\.id), ["toolGroup:call-1", "thinking:call-2", "toolGroup:call-2"])
+
+        // Scenario B: call-1 has thinking at timestamp 20.0, call-2 is a tool row at timestamp 30.0
+        // sharing group "call-1" ([call-1, call-2]), then call-2's persisted add corrects its timestamp
+        // to 10.0 (before call-1), so call-1's thinking peer splits [call-2] and [call-1].
+        let store2 = NativeChatMessageStore()
+        store2.applyBackfill([
+            [
+                "messageId": "call-1",
+                "chatId": "c2",
+                "role": "assistant",
+                "content": "",
+                "method": "Bash",
+                "thinking": ["content": "First thought", "isStreaming": false],
+                "timestamp": 20.0,
+            ],
+            [
+                "messageId": "call-2",
+                "chatId": "c2",
+                "role": "assistant",
+                "content": "",
+                "method": "Read",
+                "timestamp": 30.0,
+            ],
+        ], chatId: "c2")
+        coordinator.updateWindowRows(store2.rows, dirtyRowIDs: store2.consumeDirtyRowIds())
+        XCTAssertEqual(store2.rows.map(\.id), ["thinking:call-1", "toolGroup:call-1"])
+
+        store2.applyAdd([
+            "messageId": "call-2",
+            "chatId": "c2",
+            "role": "assistant",
+            "content": "",
+            "method": "Read",
+            "timestamp": 10.0,
+        ])
+        let reorderedIDs = store2.rows.map(\.id)
+        XCTAssertEqual(Set(reorderedIDs).count, reorderedIDs.count, "Reordered tool groups split by thinking peer must have unique row IDs")
+        XCTAssertEqual(reorderedIDs, ["toolGroup:call-2", "thinking:call-1", "toolGroup:call-1"])
+        coordinator.updateWindowRows(store2.rows, dirtyRowIDs: store2.consumeDirtyRowIds())
+        XCTAssertEqual(band.snapshot.rows.map(\.id), ["toolGroup:call-2", "thinking:call-1", "toolGroup:call-1"])
+    }
+
+    @MainActor
+    func testUpdateWindowRowsDropsDuplicateRowIDsDefensivelyWithoutCrashing() {
+        let band = NativeChatWindowBand(rows: [])
+        let coordinator = band.coordinator
+        coordinator.windowEnabled = true
+        coordinator.useMarkerFrames = true
+
+        let msg1 = NativeChatMessage(id: "dup-id", chatId: "c1", role: .assistant, content: "First", timestamp: 1000)
+        let msg2 = NativeChatMessage(id: "dup-id", chatId: "c1", role: .assistant, content: "Second duplicate", timestamp: 2000)
+        let msg3 = NativeChatMessage(id: "unique-id", chatId: "c1", role: .assistant, content: "Third", timestamp: 3000)
+
+        coordinator.updateWindowRows([.assistant(msg1), .assistant(msg2), .assistant(msg3)])
+        XCTAssertEqual(band.snapshot.rows.map(\.id), ["dup-id", "unique-id"])
+        if case .assistant(let kept) = band.snapshot.rows.first {
+            XCTAssertEqual(kept.content, "First", "First occurrence must be retained when dropping later duplicates")
+        } else {
+            XCTFail("Expected assistant row")
+        }
+    }
+
+    @MainActor
+    func testIncrementalRowsSwitchProducesIdenticalRowsInBothModes() {
+        let defaults = UserDefaults.standard
+        let optionKey = NativeChatPerformance.key(.incrementalRows)
+        let allKey = NativeChatPerformance.allKey
+        let savedOption = defaults.object(forKey: optionKey)
+        let savedAll = defaults.object(forKey: allKey)
+        defer {
+            if let savedOption { defaults.set(savedOption, forKey: optionKey) } else { defaults.removeObject(forKey: optionKey) }
+            if let savedAll { defaults.set(savedAll, forKey: allKey) } else { defaults.removeObject(forKey: allKey) }
+        }
+
+        func runSequence(incremental: Bool) -> (
+            stepRows: [[NativeChatRow]],
+            stepBandRows: [[NativeChatRow]],
+            stepHeights: [[CGFloat]],
+            stepPrefixes: [[CGFloat]],
+            dirtyAfterContentPatch: Set<String>?,
+            lastChangedAfterContentPatch: Set<String>?
+        ) {
+            defaults.removeObject(forKey: allKey)
+            defaults.set(incremental, forKey: optionKey)
+            XCTAssertEqual(NativeChatPerformance.isEnabled(.incrementalRows), incremental)
+
+            let store = NativeChatMessageStore()
+            let band = NativeChatWindowBand(rows: [])
+            let coordinator = band.coordinator
+            coordinator.windowEnabled = true
+            coordinator.store = store
+            var model = NativeChatWindowModel(layout: .init(width: 390, scale: 3))
+
+            var stepRows: [[NativeChatRow]] = []
+            var stepBandRows: [[NativeChatRow]] = []
+            var stepHeights: [[CGFloat]] = []
+            var stepPrefixes: [[CGFloat]] = []
+
+            func recordStep() {
+                coordinator.updateWindowRows(store.rows)
+                model.update(coordinator.windowModel.descriptors)
+                stepRows.append(store.rows)
+                stepBandRows.append(band.snapshot.rows)
+                stepHeights.append(model.heights)
+                stepPrefixes.append(model.prefix)
+            }
+
+            // Step 1: initial backfill + measure first two rows so medians & lastMeasured are populated
+            store.applyBackfill([
+                ["messageId": "u1", "chatId": "c1", "role": "user", "content": "Run checks", "timestamp": 10.0],
+                ["messageId": "call-1", "chatId": "c1", "role": "assistant", "content": "", "method": "Bash", "timestamp": 20.0],
+                ["messageId": "a1", "chatId": "c1", "role": "assistant", "content": "Starting", "timestamp": 40.0],
+            ], chatId: "c1")
+            recordStep()
+            let initialDescriptors = model.descriptors
+            _ = model.measure([
+                (model.key(for: initialDescriptors[0]), 64),
+                (model.key(for: initialDescriptors[1]), 42),
+                (model.key(for: initialDescriptors[2]), 118),
+            ])
+
+            // Step 2: content-only streaming patch on a1 (changes revision -> falls back to lastMeasured)
+            store.applyPatch([
+                ["messageId": "a1", "chatId": "c1", "role": "assistant", "content": "Starting checks...", "timestamp": 40.0],
+            ], chatId: "c1")
+            let lastChangedAfterContentPatch = store.lastChangedRowIds
+            let dirtyAfterContentPatch = store.consumeDirtyRowIds()
+            coordinator.updateWindowRows(store.rows, dirtyRowIDs: dirtyAfterContentPatch)
+            model.update(coordinator.windowModel.descriptors)
+            stepRows.append(store.rows)
+            stepBandRows.append(band.snapshot.rows)
+            stepHeights.append(model.heights)
+            stepPrefixes.append(model.prefix)
+
+            // Step 3: update-before-add placeholder call-2, then persisted add with corrected timestamp
+            store.applyUpdate([
+                "messageId": "call-2",
+                "chatId": "c1",
+                "timestamp": 50.0,
+                "thinking": ["content": "Planning second tool", "isStreaming": true],
+            ])
+            recordStep()
+
+            store.applyAdd([
+                "messageId": "call-2",
+                "chatId": "c1",
+                "role": "assistant",
+                "content": "",
+                "method": "Read",
+                "timestamp": 25.0,
+            ])
+            recordStep()
+
+            // Step 4: patch adding call-3 into the group and streaming more prose into a1
+            store.applyPatch([
+                ["messageId": "call-3", "chatId": "c1", "role": "assistant", "content": "", "method": "Grep", "timestamp": 30.0],
+                ["messageId": "a1", "chatId": "c1", "role": "assistant", "content": "Starting checks... done.", "status": "complete", "timestamp": 40.0],
+            ], chatId: "c1")
+            recordStep()
+
+            // Step 5: settle streaming at end of turn
+            store.settleStreaming(chatId: "c1")
+            recordStep()
+
+            return (stepRows, stepBandRows, stepHeights, stepPrefixes, dirtyAfterContentPatch, lastChangedAfterContentPatch)
+        }
+
+        let incResult = runSequence(incremental: true)
+        let fullResult = runSequence(incremental: false)
+
+        XCTAssertEqual(incResult.dirtyAfterContentPatch, ["a1"])
+        XCTAssertEqual(incResult.lastChangedAfterContentPatch, ["a1"])
+        XCTAssertNil(fullResult.dirtyAfterContentPatch, "consumeDirtyRowIds must return nil when incrementalRows is off")
+        XCTAssertNil(fullResult.lastChangedAfterContentPatch, "lastChangedRowIds must be nil when incrementalRows is off")
+
+        XCTAssertEqual(incResult.stepRows.count, fullResult.stepRows.count)
+        for idx in incResult.stepRows.indices {
+            XCTAssertEqual(incResult.stepRows[idx], fullResult.stepRows[idx], "store.rows mismatch at step \(idx)")
+            XCTAssertEqual(incResult.stepBandRows[idx], fullResult.stepBandRows[idx], "windowBand.snapshot.rows mismatch at step \(idx)")
+            XCTAssertEqual(incResult.stepHeights[idx], fullResult.stepHeights[idx], "windowModel.heights mismatch at step \(idx)")
+            XCTAssertEqual(incResult.stepPrefixes[idx], fullResult.stepPrefixes[idx], "windowModel.prefix mismatch at step \(idx)")
+        }
     }
 }

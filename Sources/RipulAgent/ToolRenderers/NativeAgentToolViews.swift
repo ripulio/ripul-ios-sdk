@@ -161,9 +161,19 @@ struct NativeToolProse: View {
             Group {
                 if rawToggle && isRaw { Text(text).font(.ripul(.callout, family: .code)) }
                 else {
-                    Markdown(text)
+                    NativeChatMarkdownBody(content: text)
                         .environment(\.openURL, OpenURLAction { url in
                             guard NativeToolNarrative.allowsLink(url) else { return .discarded }
+                            if RipulSecureConnection.open(url) { return .handled }
+                            if let scheme = url.scheme?.lowercased(), ["http", "https", "mailto", "tel"].contains(scheme) {
+                                #if os(iOS)
+                                UIApplication.shared.open(url)
+                                return .handled
+                                #elseif os(macOS)
+                                NSWorkspace.shared.open(url)
+                                return .handled
+                                #endif
+                            }
                             openURL(url)
                             return .handled
                         })
@@ -377,6 +387,58 @@ struct NativeAgentListToolView: View {
             NativeToolParameters(args: content.args)
             NativeToolResultView(content: content)
         }
+    }
+}
+
+struct NativeChatSessionsToolView: View {
+    let content: NativeToolContent
+
+    var body: some View {
+        let items = NativeChatSessionListResolver.extractItems(from: content)
+        let explicitTitle = content.call.agentComms?.title ?? (content.string("title").isEmpty ? nil : content.string("title"))
+        let isPresent = content.kind == .chatPresent
+
+        VStack(alignment: .leading, spacing: 12) {
+            if !isPresent {
+                let query = content.string("query")
+                if !query.isEmpty {
+                    Label(query, systemImage: "magnifyingglass")
+                        .font(.ripul(.subheadline, weight: .medium))
+                }
+                if let status = content.call.agentComms?.status {
+                    NativeAgentStatusLine(status: status, live: content.running)
+                }
+            }
+
+            NativeChatSessionListView(
+                items: items,
+                title: isPresent ? explicitTitle : nil,
+                emptyText: content.running
+                    ? (isPresent ? "Loading chats…" : "Searching chats…")
+                    : (isPresent ? "No chats to display" : "No matching chats"),
+                framed: isPresent
+            )
+
+            if let caption = content.call.agentComms?.caption, !caption.isEmpty {
+                Text(caption)
+                    .font(.ripul(.caption))
+                    .foregroundStyle(.ripul(.textSecondary))
+            }
+
+            DisclosureGroup("Details") {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let rows = content.call.agentComms?.details, !rows.isEmpty {
+                        NativeAgentDetailRows(rows: rows)
+                    }
+                    if !content.args.isEmpty {
+                        NativeToolValueView(value: .object(content.args))
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("NativeTool.chatSessions")
     }
 }
 

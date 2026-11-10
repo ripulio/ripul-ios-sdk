@@ -115,7 +115,10 @@ public final class LiveStreamEncoder: @unchecked Sendable {
             kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_H264_High_AutoLevel,
             kVTCompressionPropertyKey_ExpectedFrameRate: fps,
             kVTCompressionPropertyKey_AverageBitRate: bitrate,
-            kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 4,
+            // Keyframes when asked (a viewer joining, or one whose decoder lost
+            // its place), else rarely: the connection loses nothing, and on a
+            // slow link each one is a burst that queues for a second.
+            kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 20,
             // Written into the stream, so a viewer shows the colours the
             // senders capture in (sRGB) instead of guessing. Untagged, a
             // viewer's guess differed from the stills shown over the video, and
@@ -185,6 +188,14 @@ public final class LiveStreamEncoder: @unchecked Sendable {
             VTCompressionSessionCompleteFrames(
                 session, untilPresentationTimeStamp: CMTime(value: CMTimeValue(micros), timescale: 1_000_000))
         }
+    }
+
+    /// Changes the bitrate while encoding, from the next picture on: no new
+    /// session and no keyframe, so a sender can follow its link several
+    /// times a second.
+    public func setBitrate(_ bitrate: Int) {
+        guard let session else { return }
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
     }
 
     public func invalidate() {

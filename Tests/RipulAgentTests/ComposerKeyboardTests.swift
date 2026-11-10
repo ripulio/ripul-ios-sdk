@@ -128,5 +128,22 @@ final class ComposerKeyboardTests: XCTestCase {
             XCTAssertNotNil(try command([], in: input))
         }
     }
+
+    func testSuggestionListMaxHeightClampsBelowTopSafeAreaAndHeaderOnSmallScreens() {
+        let topChrome = WindowTopChromeClearance(top: 59, safeTop: 59)
+        // With plenty of room (keyboard down on a tall screen), keep the full 280pt cap.
+        XCTAssertEqual(
+            NativeChatInput.suggestionListMaxHeight(composerTopY: 600, topChrome: topChrome, reservedHeight: 36),
+            280
+        )
+        // On a small screen with the keyboard up, composerTopY is much closer to the
+        // top bar (59 + 48 = 107pt, plus 8pt gap = 115pt).
+        // Available for scroll list = 315 - 115 - 4 - 36 = 160pt (< 280pt).
+        let clamped = NativeChatInput.suggestionListMaxHeight(composerTopY: 315, topChrome: topChrome, reservedHeight: 36)
+        XCTAssertEqual(clamped, 160)
+        // Overlay total height = 36 (toggle row) + 160 (scroll list) = 196pt.
+        // Overlay top = 315 - 4 - 196 = 115pt >= 107pt (top safe area + 48pt top bar).
+        XCTAssertGreaterThanOrEqual(315 - 4 - (36 + clamped), topChrome.contentClearance(below: 48))
+    }
 }
 #endif

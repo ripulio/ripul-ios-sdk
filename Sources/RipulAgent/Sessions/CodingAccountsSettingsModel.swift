@@ -18,15 +18,76 @@ import SwiftUI
     @Published private(set) var machines: [RemoteMachine] = []
     @Published private(set) var snapshots: [String: Snapshot] = [:]
     @Published private(set) var loading = true
+    @Published private var pendingLinks: [String: CodingAccountPendingLink] = [:]
+    private static let pendingLinksKey = "ripul.codingAccountPendingLinks.v1"
+    private var pendingLinksRevision = 0
     private var refreshing = false
 
     init(provider: CodingAccountProvider, bridge: AgentBridge) {
         self.provider = provider
         self.bridge = bridge
+        if let data = bridge.sessionCache?.data(forKey: Self.pendingLinksKey),
+           let saved = try? JSONDecoder().decode([String: CodingAccountPendingLink].self, from: data) {
+            pendingLinks = saved
+        }
     }
 
     var groups: [CodingAccountGroup] {
-        CodingAccountGroup.make(machines.flatMap { snapshots[$0.id]?.entries ?? [] })
+        CodingAccountGroup.make(linkedEntries).filter { !$0.isUnidentified }
+    }
+
+    var unfinishedAccounts: [CodingAccountEntry] { linkedEntries.filter(\.isUnidentified) }
+
+    private var linkedEntries: [CodingAccountEntry] {
+        machines.flatMap { snapshots[$0.id]?.entries ?? [] }.map { entry in
+            var entry = entry
+            if entry.normalizedEmail == nil {
+                entry.pendingLink = pendingLinks[linkKey(machineId: entry.machineId, localId: entry.localId)]
+            }
+            return entry
+        }
+    }
+
+    func rememberAddition(_ account: CodingAccountGroup, machineId: String, localId: String) {
+        guard let email = account.email else { return }
+        pendingLinks[linkKey(machineId: machineId, localId: localId)] =
+            CodingAccountPendingLink(accountId: account.id, name: account.name, email: email)
+        pendingLinksRevision += 1
+        savePendingLinks()
+    }
+
+    private func linkKey(machineId: String, localId: String) -> String {
+        "\(provider.rawValue)/\(machineId)/\(localId)"
+    }
+
+    private func savePendingLinks() {
+        // Other provider screens share this cache; replace only our provider.
+        var saved: [String: CodingAccountPendingLink] = [:]
+        if let data = bridge.sessionCache?.data(forKey: Self.pendingLinksKey) {
+            saved = (try? JSONDecoder().decode([String: CodingAccountPendingLink].self, from: data)) ?? [:]
+        }
+        let prefix = "\(provider.rawValue)/"
+        saved = saved.filter { !$0.key.hasPrefix(prefix) }
+        saved.merge(pendingLinks.filter { $0.key.hasPrefix(prefix) }) { _, new in new }
+        if let data = try? JSONEncoder().encode(saved) {
+            bridge.sessionCache?.set(data, forKey: Self.pendingLinksKey)
+        }
+    }
+
+    private func reconcilePendingLinks(_ entries: [CodingAccountEntry], machineId: String, revision: Int) {
+        // A list request started before profile creation can return afterward.
+        // It must not erase the new link just because its snapshot is older.
+        guard revision == pendingLinksRevision else { return }
+        let prefix = "\(provider.rawValue)/\(machineId)/"
+        let awaitingIdentity = Set(entries.filter { $0.normalizedEmail == nil }.map {
+            linkKey(machineId: machineId, localId: $0.localId)
+        })
+        let remaining = pendingLinks.filter { !$0.key.hasPrefix(prefix) || awaitingIdentity.contains($0.key) }
+        if remaining != pendingLinks {
+            pendingLinks = remaining
+            pendingLinksRevision += 1
+            savePendingLinks()
+        }
     }
 
     var pollInterval: UInt64 {
@@ -55,6 +116,7 @@ import SwiftUI
     }
 
     private func refresh(_ machine: RemoteMachine) async {
+        let linksRevision = pendingLinksRevision
         var snapshot = snapshots[machine.id] ?? Snapshot()
         guard !snapshot.loading, !snapshot.requesting else { return }
         snapshot.loading = true
@@ -64,8 +126,9 @@ import SwiftUI
         case .claude:
             let result = await bridge.fetchClaudeAccounts(machineId: machine.id)
             if result.error == nil {
-                snapshot.entries = result.accounts.map {
-                    var entry = entry(machine, id: $0.slug, name: $0.name, email: $0.email, plan: $0.plan,
+                // Claude Code's own folder with nothing signed in is no account, and no unfinished sign-in.
+                snapshot.entries = result.accounts.filter { !$0.isEmptyDefault }.map {
+                    var entry = entry(machine, id: $0.slug, name: $0.displayName, email: $0.email, plan: $0.plan,
                                       usage: $0.usage, active: $0.slug == result.active,
                                       needsLogin: !$0.loggedIn || $0.signInEnded || $0.usage?.error != nil)
                     entry.signInEndsAt = $0.signInEndsAt
@@ -82,8 +145,8 @@ import SwiftUI
         case .antigravity:
             let result = await bridge.fetchAntigravityAccounts(machineId: machine.id, direct: isDirect(machine))
             if result.error == nil {
-                snapshot.entries = result.accounts.map {
-                    entry(machine, id: $0.slug, name: $0.name, email: $0.email, plan: $0.plan,
+                snapshot.entries = result.accounts.filter { !$0.isEmptyDefault }.map {
+                    entry(machine, id: $0.slug, name: $0.displayName, email: $0.email, plan: $0.plan,
                           usage: $0.usage, active: $0.slug == result.active,
                           needsLogin: !$0.loggedIn || $0.usage?.error != nil)
                 }
@@ -92,8 +155,49 @@ import SwiftUI
         }
         snapshot.loading = false
         snapshot.loaded = true
+        if snapshot.error == nil { reconcilePendingLinks(snapshot.entries, machineId: machine.id, revision: linksRevision) }
         // A cancelled screen task must not strand the next refresh as busy.
         snapshots[machine.id] = snapshot
+    }
+
+    /// What renaming an account did, by computer name.
+    struct RenameOutcome {
+        var renamed: [String] = []
+        /// Its Ripul predates renaming.
+        var needsUpdate: [String] = []
+        /// Offline, or the rename did not go through.
+        var notReached: [String] = []
+    }
+
+    /// Renames a Claude account everywhere: each of its profiles, on every
+    /// computer that holds it, takes the name. Only the label changes; the
+    /// sign-ins stay where they are. An offline computer keeps its old name.
+    func renameAccount(_ account: CodingAccountGroup, to name: String) async -> RenameOutcome {
+        var outcome = RenameOutcome()
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard provider == .claude, !name.isEmpty else { return outcome }
+        for machine in machines where account.machineIds.contains(machine.id) {
+            guard machine.isOnline else { outcome.notReached.append(machine.displayName); continue }
+            var renamed: Set<String> = []
+            var needsUpdate = false
+            for entry in account.accounts(on: machine.id) {
+                let result = await bridge.renameClaudeAccount(machineId: machine.id, slug: entry.localId, name: name)
+                if result.ok { renamed.insert(entry.localId) } else { needsUpdate = needsUpdate || result.needsUpdate }
+            }
+            // Show the new name now; the next listing confirms it.
+            if !renamed.isEmpty, var snapshot = snapshots[machine.id] {
+                snapshot.entries = snapshot.entries.map { entry in
+                    var entry = entry
+                    if renamed.contains(entry.localId) { entry.name = name }
+                    return entry
+                }
+                snapshots[machine.id] = snapshot
+            }
+            if renamed.count == account.accounts(on: machine.id).count { outcome.renamed.append(machine.displayName) }
+            else if needsUpdate { outcome.needsUpdate.append(machine.displayName) }
+            else { outcome.notReached.append(machine.displayName) }
+        }
+        return outcome
     }
 
     func switchAccount(_ account: CodingAccountEntry, on machine: RemoteMachine) async {

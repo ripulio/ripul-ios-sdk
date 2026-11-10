@@ -44,6 +44,7 @@ public enum RipulAccountScopedCache {
     public static let keys: [String] = [
         "ripulCachedMachines",                  // RemoteMachine.cacheKey
         "ripulMachineIcons",                    // RemoteMachine.iconsKey
+        "ripulSessionIcons",                    // SessionReadLedger.sessionIconsKey
         "ripulDisabledMachineIds",              // RemoteMachine.disabledKey
         "ripulDefaultMachineId",                // GlassSessionsList / SessionListMenu
         "ripulCachedRemoteActions",             // RemoteActionDescriptor.cacheKey

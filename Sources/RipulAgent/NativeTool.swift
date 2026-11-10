@@ -14,6 +14,20 @@ import Foundation
 //               `docs/plans/automation-macros/`), synthesized from data rather
 //               than hand-coded. Named `run_macro_<slug>`.
 
+/// What a tool does with the app. A person can share their device with
+/// someone else's chat for reading, and then only tools that say they read are
+/// shared, those that read the screen only if the person chose that too
+/// (`docs/sharing-a-device.md`). A tool that says nothing is taken to change
+/// things, and is never shared.
+public enum NativeToolAccess: String, Sendable {
+    /// Taps, types, saves, sends, deletes or otherwise changes something. The default.
+    case changes
+    /// Reads the app's own data, and changes nothing at all: not even a local draft, a setting or a cache.
+    case reads
+    /// Reads what is on the screen, and changes nothing.
+    case readsScreen = "screen"
+}
+
 public protocol NativeTool {
     /// Tool identifier using snake_case. Prefix drives agent behaviour (see above).
     var name: String { get }
@@ -27,12 +41,17 @@ public protocol NativeTool {
     /// Timeout in seconds for this tool. `0` means no timeout (wait indefinitely).
     /// Default is `30`. Override per-tool for slower operations.
     var timeout: TimeInterval { get }
+    /// Whether the tool only reads. Default `.changes`. Say `.reads` or
+    /// `.readsScreen` only when every action the tool takes leaves the app as it
+    /// was: one action that deletes or changes anything makes the whole tool `.changes`.
+    var access: NativeToolAccess { get }
     func execute(args: [String: Any]) async throws -> Any
 }
 
 public extension NativeTool {
     var outputSchema: [String: Any]? { nil }
     var timeout: TimeInterval { 30 }
+    var access: NativeToolAccess { .changes }
 
     /// MCP-formatted definition sent to the agent during discovery.
     var definition: [String: Any] {
@@ -45,6 +64,7 @@ public extension NativeTool {
             def["outputSchema"] = outputSchema
         }
         def["timeout"] = Int(timeout * 1000) // milliseconds for JS
+        def["access"] = access.rawValue
         return def
     }
 

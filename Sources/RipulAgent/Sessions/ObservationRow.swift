@@ -105,9 +105,33 @@ public struct ObservationRow: View {
         .uiKitIdentifier("ObservationRow")
     }
 
+    /// What it says first (the detail, in Markdown, drawn as the chat draws a
+    /// message), then its files and outcome, then where it came from.
     @ViewBuilder
     private var detail: some View {
         VStack(alignment: .leading, spacing: 5) {
+            if !o.detail.isEmpty {
+                NativeChatMarkdownBody(content: o.detail)
+                    .equatable()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .uiKitIdentifier("ObservationRow.detail")
+            }
+            if !o.files.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(o.files.enumerated()), id: \.offset) { _, file in
+                        Text(file)
+                            .font(.ripul(.caption, family: .code))
+                            .foregroundStyle(.ripul(.textSecondary))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .textSelection(.enabled)
+                .uiKitIdentifier("ObservationRow.files")
+            }
+            if let resolution = o.resolution {
+                Text("\(o.statusLabel): \(resolution)").ripulText()
+                    .font(.ripul(.caption))
+            }
             Text(o.repoKey)
                 .font(.ripul(.caption))
                 .foregroundStyle(.ripul(.textSecondary))
@@ -119,23 +143,7 @@ public struct ObservationRow: View {
                     .foregroundStyle(.ripul(.textSecondary))
                     .uiKitIdentifier("ObservationRow.move")
             }
-            if !o.detail.isEmpty {
-                Text(o.detail).ripulText()
-                    .font(.ripul(.subheadline))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            if !o.files.isEmpty {
-                Text(o.files.joined(separator: ", "))
-                    .font(.ripul(.caption, family: .code))
-                    .foregroundStyle(.ripul(.textSecondary))
-                    .textSelection(.enabled)
-            }
             raisedLine
-            if let resolution = o.resolution {
-                Text("\(o.statusLabel): \(resolution)").ripulText()
-                    .font(.ripul(.caption))
-            }
             ForEach(o.sightings, id: \.chatId) { s in
                 Text("Seen again by \(chatName(s.chatId, s.chatTitle))\(s.note.map { ": \($0)" } ?? "")")
                     .font(.ripul(.caption))

@@ -28,6 +28,27 @@ public struct CmsClientConfig {
     /// bell's read records are kept under when the member lookup has none.
     public var userName: String?
     public var userEmail: String?
+    /// The address the host app's site key allows (one of its `allowedOrigins`),
+    /// e.g. WAC Next's `https://wac-next.app`, presented as the `Origin` when the
+    /// key is checked. A native app has no page of its own, so without it the
+    /// check presents the Ripul portal host (`RipulDomain.demoURL`), and only a
+    /// key that allows that host loads.
+    public var origin: String?
+    /// Anonymous visitor mode only (a `visitorSiteKey` and no portal
+    /// credentials): send the publishable key as `X-Site-Key`, with `origin` as
+    /// the `Origin`, instead of the site-key session token. The worker runs
+    /// queries, views and mutations for that header itself, only those marked
+    /// `exposedToSiteKey`, with row rules held to the site key; it refuses a
+    /// session token on those routes. Off by default.
+    public var visitorSendsSiteKey: Bool
+    /// A member signed in with the site's own identity provider (the site key's
+    /// `portalAuth` 'clerk', e.g. WAC's business accounts at clerk.wac.rocks): a
+    /// fresh JWT from that provider, sent as the Bearer. The worker checks it
+    /// against the key's JWKS and runs every query as that member, as it does
+    /// for the site's own web pages. With a `visitorSiteKey`, the loader loads as
+    /// a member, as with `portalCredentialProvider`. nil (no token yet, or signed
+    /// out) fails the request rather than falling back to another identity.
+    public var portalTokenProvider: (() async -> String?)?
 
     public init(
         getToken: @escaping () async -> String?,
@@ -35,7 +56,10 @@ public struct CmsClientConfig {
         siteKeyId: String? = nil,
         portalCredentialProvider: (() async -> [String: String]?)? = nil,
         userName: String? = nil,
-        userEmail: String? = nil
+        userEmail: String? = nil,
+        origin: String? = nil,
+        visitorSendsSiteKey: Bool = false,
+        portalTokenProvider: (() async -> String?)? = nil
     ) {
         self.getToken = getToken
         self.baseUrl = baseUrl
@@ -43,6 +67,9 @@ public struct CmsClientConfig {
         self.portalCredentialProvider = portalCredentialProvider
         self.userName = userName
         self.userEmail = userEmail
+        self.origin = origin
+        self.visitorSendsSiteKey = visitorSendsSiteKey
+        self.portalTokenProvider = portalTokenProvider
     }
 }
 
@@ -66,6 +93,8 @@ public final class CmsClient {
     private let config: CmsClientConfig
     public var userName: String? { config.userName.flatMap { $0.isEmpty ? nil : $0 } }
     public var userEmail: String? { config.userEmail.flatMap { $0.isEmpty ? nil : $0 } }
+    /// The host app's own origin for site-key checks (`CmsClientConfig.origin`).
+    public var origin: String? { config.origin.flatMap { $0.isEmpty ? nil : $0 } }
 
     /// Site key threaded into query runs for RLS scoping. Without one, a
     /// Clerk-authed run has no site-key context and owner/site-scoped RLS
@@ -81,10 +110,24 @@ public final class CmsClient {
     /// the token's site key).
     public var visitorSessionToken: String?
 
+    /// Visitor mode with `CmsClientConfig.visitorSendsSiteKey`: the publishable
+    /// key sent as `X-Site-Key` (with the `Origin`) in place of any token.
+    public var visitorSiteKeyHeader: String?
+
+    /// Whether the loader should use `visitorSiteKeyHeader` for an anonymous visitor.
+    public var visitorSendsSiteKey: Bool { config.visitorSendsSiteKey }
+
     /// Publishable key of the resolved site key — blocks that embed the web
     /// app in portal mode (agentChat) inherit it, matching the web block's
     /// "empty siteKey = inherit portal" rule.
     public var siteKeyPublishable: String?
+
+    /// A site that signs people in by an emailed code (`CmsSiteSignIn`): the
+    /// session of a signed-in member of the site, sent as the Bearer in place of
+    /// the visitor's token. The loader sets it only while the person is one of
+    /// the site's members; a signed-in guest's queries run as a visitor, and the
+    /// booking blocks send the guest's session themselves.
+    public var siteSessionToken: (() async -> String?)?
 
     public init(config: CmsClientConfig) {
         self.config = config
@@ -96,6 +139,18 @@ public final class CmsClient {
     /// instead of anonymous visitor mode.
     public var hasPortalCredentials: Bool {
         config.portalCredentialProvider != nil
+    }
+
+    /// True when the host app signs its member in with the site's own identity
+    /// provider (`CmsClientConfig.portalTokenProvider`).
+    public var hasPortalToken: Bool {
+        config.portalTokenProvider != nil
+    }
+
+    /// The caller is one of the site's members, by either the host app's
+    /// credentials or the site's own sign-in: the loader loads as that member.
+    public var signsInAsMember: Bool {
+        hasPortalCredentials || hasPortalToken
     }
 
     /// Site keys linked to the caller's org — used to resolve the RLS
@@ -218,6 +273,23 @@ public final class CmsClient {
         mutationSlug: String,
         params: [String: CmsJSON]? = nil
     ) async throws -> Int {
+        try await runSavedMutationResult(cmsId: cmsId, mutationSlug: mutationSlug, params: params).affectedRows
+    }
+
+    /// A mutation run's result: the rows it changed, and a `warning` when it
+    /// succeeded but a follow-up call (an endpoint's `then` step) didn't.
+    public struct MutationRunResult {
+        public var affectedRows: Int
+        public var warning: String?
+        /// The run's `result` (an endpoint mutation's answer), for a creatable choice.
+        public var result: CmsJSON? = nil
+    }
+
+    public func runSavedMutationResult(
+        cmsId: String,
+        mutationSlug: String,
+        params: [String: CmsJSON]? = nil
+    ) async throws -> MutationRunResult {
         var body: [String: CmsJSON] = [:]
         if let siteKeyId {
             body["siteKeyId"] = .string(siteKeyId)
@@ -234,12 +306,16 @@ public final class CmsClient {
             var ok: Bool
             var affectedRows: Int?
             var error: String?
+            var warning: String?
+            var result: CmsJSON?
         }
         let response = try JSONDecoder().decode(RunResponse.self, from: data)
         guard response.ok else {
             throw CmsClientError.queryFailed(response.error ?? "Mutation failed")
         }
-        return response.affectedRows ?? 0
+        return MutationRunResult(affectedRows: response.affectedRows ?? 0,
+                                 warning: response.warning.flatMap { $0.isEmpty ? nil : $0 },
+                                 result: response.result)
     }
 
     /// Raw JSON call to an llm-proxy route a block owns (billing, files…),
@@ -261,8 +337,77 @@ public final class CmsClient {
         component.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? component
     }
 
+    // MARK: - Views
+
+    /// Run a saved view (`POST …/views/:slug/run`), read as it streams: the
+    /// base rows first, then each source's results as they finish. `keys`
+    /// asks only for those rows' per-row sources (rows that came back
+    /// `later`). A server that answers in one piece is read the same way.
+    public func runView(cmsId: String, viewSlug: String, params: [String: CmsJSON]? = nil,
+                        keys: [String]? = nil) -> AsyncThrowingStream<CmsJSON, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var body: [String: CmsJSON] = [:]
+                    if let siteKeyId { body["siteKeyId"] = .string(siteKeyId) }
+                    if let params, !params.isEmpty { body["params"] = .object(params) }
+                    if let keys { body["keys"] = .array(keys.map(CmsJSON.string)) }
+                    var request = try await makeRequest(
+                        path: "/v1/cms-definitions/\(encode(cmsId))/views/\(encode(viewSlug))/run",
+                        method: "POST", body: body)
+                    request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let http = response as? HTTPURLResponse
+                    if let http, !(200..<300).contains(http.statusCode) {
+                        var data = Data()
+                        for try await byte in bytes { data.append(byte); if data.count > 65_536 { break } }
+                        // A failed base answers with its status and one JSON
+                        // error line (`{"type":"error","error":…}`, or the
+                        // whole answer's `{ok:false,error}`): pass it on as an
+                        // event so its message shows, not the raw status.
+                        let text = String(data: data, encoding: .utf8) ?? ""
+                        if let line = text.split(separator: "\n").first,
+                           let json = try? JSONDecoder().decode(CmsJSON.self, from: Data(line.utf8)),
+                           let message = json.objectValue?.string("error") {
+                            continuation.yield(.object(["type": .string("error"), "error": .string(message)]))
+                            continuation.finish()
+                            return
+                        }
+                        throw CmsClientError.http(http.statusCode, text)
+                    }
+                    let streamed = http?.value(forHTTPHeaderField: "Content-Type")?.contains("ndjson") ?? false
+                    if streamed {
+                        for try await line in bytes.lines {
+                            let text = line.trimmingCharacters(in: .whitespaces)
+                            guard !text.isEmpty,
+                                  let json = try? JSONDecoder().decode(CmsJSON.self, from: Data(text.utf8)) else { continue }
+                            continuation.yield(json)
+                        }
+                    } else {
+                        var data = Data()
+                        for try await byte in bytes { data.append(byte) }
+                        continuation.yield(try JSONDecoder().decode(CmsJSON.self, from: data))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    // MARK: - Requests
+
     private func request(path: String, method: String, body: [String: CmsJSON]?,
                          rawBody: Data? = nil, contentType: String? = nil) async throws -> Data {
+        let request = try await makeRequest(path: path, method: method, body: body, rawBody: rawBody, contentType: contentType)
+        return try await send(request)
+    }
+
+    /// A request with the caller's credentials and body.
+    private func makeRequest(path: String, method: String, body: [String: CmsJSON]?,
+                             rawBody: Data? = nil, contentType: String? = nil) async throws -> URLRequest {
         let urlString = config.baseUrl + path
         guard let url = URL(string: urlString) else {
             throw CmsClientError.badURL(urlString)
@@ -271,14 +416,24 @@ public final class CmsClient {
         request.httpMethod = method
 
         // Credential precedence: opaque portal headers (host-app auth, no
-        // Bearer at all) → site-key session token → Clerk JWT. Opaque wins
-        // when configured because the caller's identity IS the host app's
-        // user — a session/Clerk token would run as someone else.
+        // Bearer at all) → the site's own sign-in → site-key session token →
+        // Clerk JWT. A member's credential wins when configured because the
+        // caller's identity IS that member — a session/Clerk token would run
+        // as someone else.
         if let provider = config.portalCredentialProvider,
            let headers = await provider(), !headers.isEmpty {
             for (name, value) in headers {
                 request.setValue(value, forHTTPHeaderField: name)
             }
+        } else if let provider = config.portalTokenProvider {
+            // Never another identity in its place: no token means signed out.
+            guard let token = await provider(), !token.isEmpty else { throw CmsClientError.noToken }
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        } else if let provider = siteSessionToken, let token = await provider(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        } else if let key = visitorSiteKeyHeader, !key.isEmpty {
+            request.setValue(key, forHTTPHeaderField: "X-Site-Key")
+            request.setValue(origin ?? RipulDomain.demoURL, forHTTPHeaderField: "Origin")
         } else if let visitor = visitorSessionToken, !visitor.isEmpty {
             request.setValue("Bearer \(visitor)", forHTTPHeaderField: "Authorization")
         } else if let clerk = await config.getToken(), !clerk.isEmpty {
@@ -287,6 +442,9 @@ public final class CmsClient {
             throw CmsClientError.noToken
         }
 
+        // What this build draws, so the server can later serve a fallback to a build without it.
+        request.setValue(CmsBlockRegistry.capabilities.joined(separator: ","), forHTTPHeaderField: CmsPrimitives.capabilitiesHeader)
+
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
@@ -294,8 +452,20 @@ public final class CmsClient {
             request.setValue(contentType ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
             request.httpBody = rawBody
         }
+        return request
+    }
+
+    private func send(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            // A refusal is JSON with an `error`: keep that message whole, as
+            // `{"error": …}`, so a long one is not cut into invalid JSON and
+            // shown raw. Anything else is cut to 500 characters.
+            if let message = (try? JSONDecoder().decode([String: CmsJSON].self, from: data))?.string("error"),
+               let encoded = try? JSONEncoder().encode(["error": message]),
+               let text = String(data: encoded, encoding: .utf8) {
+                throw CmsClientError.http(http.statusCode, text)
+            }
             let bodyText = String(data: data.prefix(500), encoding: .utf8) ?? ""
             throw CmsClientError.http(http.statusCode, bodyText)
         }

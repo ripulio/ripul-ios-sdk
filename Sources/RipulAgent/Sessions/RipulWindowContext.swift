@@ -18,6 +18,9 @@ public final class RipulWindowContext: ObservableObject {
     @Published public var openWindow: ((String?) -> Void)?
     #if os(iOS)
     public weak var window: UIWindow?
+    /// The window's right side, given to the chat's simulator or browser when a
+    /// wide window docks one (`RipulPreviewDockLayout`).
+    @MainActor public private(set) lazy var previewDock = PreviewDockState()
     #endif
 
     /// Record the selected session and window title, publishing only what

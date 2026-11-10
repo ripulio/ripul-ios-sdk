@@ -184,6 +184,7 @@ public final class NativeChatRowStateRegistry {
         if var existing = stripStores[key] {
             clock &+= 1
             existing.access = clock
+            existing.store.latestGroup = group
             // If the group updated while the row was unmounted (`!isPresented`),
             // synchronize before returning so pass-1 layout sees the latest tools
             // without publishing on an actively mounted view body.
@@ -218,27 +219,16 @@ public final class NativeChatRowStateRegistry {
     }
 
     static func syncToolStripStore(_ store: NativeToolStripStore, with group: NativeChatToolGroup) {
-        let toolsPayload: [[String: Any]] = group.tools.map { tool in
-            var dict: [String: Any] = [
-                "id": tool.id,
-                "label": tool.label,
-                "count": tool.count,
-            ]
-            if let r = tool.rendererName { dict["rendererName"] = r }
-            if let s = tool.symbol { dict["symbol"] = s }
-            if let st = tool.status { dict["status"] = st }
-            if let da = tool.defaultAction {
-                dict["defaultAction"] = ["id": da.id, "title": da.title]
-            }
-            return dict
-        }
-        store.receive([
-            "ownerId": "native-chat",
-            "chatId": group.chatId,
-            "groupId": group.id,
-            "updatedAt": group.updatedAt,
-            "tools": toolsPayload,
-        ])
+        store.latestGroup = group
+        store.receive(
+            NativeToolStripSnapshot(
+                ownerId: "native-chat",
+                chatId: group.chatId,
+                groupId: group.id,
+                updatedAt: group.updatedAt,
+                tools: group.tools
+            )
+        )
     }
 
     #if os(iOS)

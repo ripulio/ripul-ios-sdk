@@ -1,7 +1,12 @@
 import SwiftUI
 
 private enum RelativeTimeTicker {
-    static let shared = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// The run loop's default mode, not common: no tick while a scroll is
+    /// tracked or coasting, and the labels catch up when it rests. On common
+    /// modes every row under a minute old drew its label again each second
+    /// under a scrolling finger, a dropped frame a second on Peter's Duo
+    /// (5 November 2026).
+    static let shared = Timer.publish(every: 1, on: .main, in: .default).autoconnect()
 }
 
 /// Shows seconds for the first minute, then rounds to minutes.

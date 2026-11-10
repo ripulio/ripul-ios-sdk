@@ -63,8 +63,42 @@ public final class RipulSessionListModel {
     // MARK: - Published (view observes these)
 
     public private(set) var unifiedSessions: [UnifiedSession] {
-        didSet { refreshActiveRow() }
+        didSet {
+            unifiedSessionsRevision &+= 1
+            refreshActiveRow()
+            unifiedSessionsUnobserved = unifiedSessions
+            let summary = ChatsSummary(unifiedSessions)
+            if summary != chatsSummary { chatsSummary = summary }
+            let ids = Set(unifiedSessions.map(\.id))
+            if ids != unifiedSessionIds {
+                unifiedSessionIds = ids
+                unifiedSessionIdsRevision &+= 1
+            }
+        }
     }
+    @ObservationIgnored public private(set) var unifiedSessionsRevision = 0
+    /// `unifiedSessions`, read without following it: for a list nobody can see
+    /// (a tab behind another, a chat over it), which follows
+    /// `unifiedSessionIdsRevision` instead. A Mac reports a changed chat up to
+    /// ten times a minute while agents work, and each report re-arranged every
+    /// list's chats, hidden ones too: up to 345 ms each on Peter's Duo
+    /// (5 November 2026; docs/main-thread.md, rule 5).
+    @ObservationIgnored public private(set) var unifiedSessionsUnobserved: [UnifiedSession] = []
+    /// Moves when a chat joins or leaves the list, not when one changes or moves.
+    public private(set) var unifiedSessionIdsRevision = 0
+    #if DEBUG
+    /// The list published again as it is, as a Mac's report of a changed chat
+    /// publishes it: `SyntheticAgentActivity` (the app's Debug builds) uses it to
+    /// measure what each report costs the screens that follow the list.
+    public func debugRepublish() { unifiedSessions = unifiedSessions }
+    #endif
+
+    /// How many chats there are and which are running on which Mac, published
+    /// only when that changes. Home read `unifiedSessions` for these, and so
+    /// redrew every one of its sections on each change a Mac reported, up to
+    /// ten times a minute (5 November 2026; docs/main-thread.md, rule 4).
+    public private(set) var chatsSummary = ChatsSummary([])
+    @ObservationIgnored private var unifiedSessionIds: Set<String> = []
     /// The row for the chat on screen, and the project path recorded for it.
     ///
     /// The chat screen's header needs one row, but finding it by reading
@@ -95,29 +129,70 @@ public final class RipulSessionListModel {
         set {
             let key = newValue.map(MachineDisplayKey.init)
             if key != publishedMachinesKey {
+                #if DEBUG
+                MachineDisplayKey.countChanges(from: publishedMachinesKey, to: key)
+                #endif
                 publishedMachinesKey = key
                 machinesRevision &+= 1
+                machinesRevisionUnobserved &+= 1
             }
             storedMachines = newValue
         }
     }
     /// The tracked part of `machines`: moves only when a displayed field changes.
     private var machinesRevision = 0
+    @ObservationIgnored public private(set) var machinesRevisionUnobserved = 0
     @ObservationIgnored private var storedMachines: [RemoteMachine] = []
     @ObservationIgnored private var publishedMachinesKey: [MachineDisplayKey] = []
 
     /// Everything about a machine a view can show: all fields except the raw
-    /// heartbeat timestamp, plus the online state derived from it.
+    /// heartbeat timestamp, the registration time, the build and the alerts'
+    /// details, plus the online state derived from the heartbeat.
     private struct MachineDisplayKey: Equatable {
-        let machineId, displayName, userId, roomId, registeredAt: String
+        #if DEBUG
+        /// Which field moved, counted for the perf journal (`machines.<field>`):
+        /// a Mac's details were published again on most 30 s polls on Peter's
+        /// Duo, each redrawing Home and both session lists (130 ms, 5 November
+        /// 2026), with nothing on screen seen to change.
+        static func countChanges(from old: [MachineDisplayKey], to new: [MachineDisplayKey]) {
+            let before = Dictionary(old.map { ($0.machineId, $0) }, uniquingKeysWith: { a, _ in a })
+            if old.count != new.count { MainThreadSampler.count("machines.count") }
+            for machine in new {
+                guard let was = before[machine.machineId] else { MainThreadSampler.count("machines.added"); continue }
+                if was.isOnline != machine.isOnline { MainThreadSampler.count("machines.isOnline") }
+                if was.displayName != machine.displayName { MainThreadSampler.count("machines.displayName") }
+                if was.teamName != machine.teamName || was.teamRole != machine.teamRole || was.shared != machine.shared {
+                    MainThreadSampler.count("machines.team")
+                }
+                if was.alerts != machine.alerts { MainThreadSampler.count("machines.alerts") }
+                let keys = Set((was.meta ?? [:]).keys).union((machine.meta ?? [:]).keys)
+                for key in keys where was.meta?[key] != machine.meta?[key] { MainThreadSampler.count("machines.meta.\(key)") }
+            }
+        }
+        #endif
+
+        let machineId, displayName, userId, roomId: String
         let meta: [String: String]?
+        /// Each alert as a badge or a row names it. Its detail and when it
+        /// was raised change as the Mac checks again (the free space left, say)
+        /// and only the alerts sheet shows them, read when it opens: compared
+        /// whole, the alerts published the Macs about once a minute on Peter's
+        /// Duo, 100 ms of Home, the lists and the chat screen drawn again.
+        let alerts: [String]
         let teamId, teamName, teamRole: String?
         let shared: Bool?
         let isOnline: Bool
+        /// What the registry changes without anything on screen changing: when
+        /// the Mac last registered (each re-registration) and its build. On
+        /// Peter's Duo those were what published the Macs again every few
+        /// minutes (5 November 2026). No view reads either. The alerts are
+        /// compared as `alerts`, without what only their sheet shows.
+        private static let unshownMeta: Set<String> = ["build", "alerts"]
         init(_ machine: RemoteMachine) {
             machineId = machine.machineId; displayName = machine.displayName
-            userId = machine.userId; roomId = machine.roomId; registeredAt = machine.registeredAt
-            meta = machine.meta
+            userId = machine.userId; roomId = machine.roomId
+            meta = machine.meta?.filter { !Self.unshownMeta.contains($0.key) }
+            alerts = machine.alerts.map { "\($0.id)|\($0.severity.rawValue)|\($0.title)" }
             teamId = machine.teamId; teamName = machine.teamName; teamRole = machine.teamRole
             shared = machine.shared
             isOnline = machine.isOnline
@@ -364,6 +439,8 @@ public final class RipulSessionListModel {
         let cached = UnifiedSession.loadCached(cache: cache)
         let openCount = cached.filter(\.cachedIsOpen).count
         self.unifiedSessions = cached
+        unifiedSessionsUnobserved = cached  // didSet does not run in init
+        chatsSummary = ChatsSummary(cached)
         log("debug_timeline \(elapsed()) init: \(cached.count) cached sessions (\(openCount) cachedIsOpen), bridge.sessions=\(bridge.sessions.count)")
 
         // Restore the last remote scan per machine. The unified list is derived
@@ -414,7 +491,11 @@ public final class RipulSessionListModel {
             .sink { [weak self] _ in
                 // Live agent activity changes sessions every few hundred ms; a
                 // rebuild mid-swipe re-rendered the whole shell (51-53ms hitches).
-                // Nothing on screen needs it until the slide settles.
+                // Nothing on screen needs it until the slide settles. Still a
+                // stopgap (docs/main-thread.md, rule 8): a size report no longer
+                // costs anything here, but a real change to one tab (someone
+                // typing in a group) republishes every row of every list, where
+                // it should change that chat's row only.
                 ChatSlideProbe.afterSlide("sessionModel.sessionsChanged") { [weak self] in
                     guard let self else { return }
                     // bridge.sessions changed. The light rematch only updates the
@@ -444,13 +525,15 @@ public final class RipulSessionListModel {
             }
 
         // Persist last-active timestamps whenever they change.
-        // Throttled to avoid excessive writes during rapid tool calls.
+        // Throttled to avoid excessive writes during rapid tool calls. Encoded
+        // and written off the main thread (`persistTimes`), so it no longer
+        // waits for a slide or scroll to rest: the hold that kept the two saves
+        // (42 and 81 KB on the main thread, 90 ms under the finger on an iPhone
+        // Duo) out of a scroll is gone with the cost (5 November 2026).
         lastActiveTimeCancellable = bridge.sessionList.lastActiveTimeSubject
             .removeDuplicates()
             .throttle(for: .seconds(2), scheduler: DispatchQueue.main, latest: true)
-            .sink { [weak self] dict in
-                self?.saveLastActiveTimes(dict)
-            }
+            .sink { [weak self] dict in self?.saveLastActiveTimes(dict) }
 
         // Also save when app goes to background — the throttle might not
         // have flushed yet when the system kills the process.
@@ -607,6 +690,7 @@ public final class RipulSessionListModel {
                 sessionPlacements = facts.placedUnder
                 cache.set(facts.placedUnder, forKey: Self.sessionPlacementsCacheKey)
                 rebuildUnifiedSessions()
+                if let icons = facts.icons { bridge.applyServerSessionIcons(icons, rows: unifiedSessionsUnobserved) }
             }
         }
         factsTask = task
@@ -646,13 +730,23 @@ public final class RipulSessionListModel {
 
     private func saveLastActiveTimes(_ dict: [String: Date]) {
         // Save the raw chatId-keyed dict for bridge restore.
-        if savedLastActiveTimes != dict, let data = try? JSONEncoder().encode(dict) {
-            cache.set(data, forKey: Self.lastActiveTimeCacheKey)
+        if savedLastActiveTimes != dict {
+            Self.persistTimes(dict, forKey: Self.lastActiveTimeCacheKey, cache: cache)
             savedLastActiveTimes = dict
         }
         // Also resolve to sessionId-keyed cache for cold start (when
         // ripulSession is nil and matchKeys may not overlap with chatIds).
         resolveAndSaveBySessionId()
+    }
+
+    /// Encoded and written off the main thread, in order with the row cache's
+    /// writes: 42 and 81 KB on Peter's iPhone Duo, which held the main thread
+    /// 56-93 ms every couple of seconds while agents worked (5 November 2026;
+    /// docs/main-thread.md, rule 1).
+    nonisolated private static func persistTimes(_ times: [String: Date], forKey key: String, cache: RipulSessionCache) {
+        cacheWriteQueue.async {
+            if let data = try? JSONEncoder().encode(times) { cache.set(data, forKey: key) }
+        }
     }
 
     /// Map chatId timestamps → UnifiedSession.id timestamps using the
@@ -676,9 +770,7 @@ public final class RipulSessionListModel {
         }
         guard updated != lastActiveBySessionId else { return }
         lastActive.mergeLive(updated)
-        if let data = try? JSONEncoder().encode(updated) {
-            cache.set(data, forKey: Self.lastActiveBySessionIdCacheKey)
-        }
+        Self.persistTimes(updated, forKey: Self.lastActiveBySessionIdCacheKey, cache: cache)
     }
 
     deinit {
@@ -2384,6 +2476,11 @@ public final class RipulSessionListModel {
     /// cache was never written (so every launch started from an empty list).
     /// A successful machines fetch that returned none IS the settled answer:
     /// the local tab list is the whole truth for that account.
+    /// The chat list has said everything it will for now, so an empty list
+    /// means no chats rather than chats still on their way (the host app's Home
+    /// asks before it offers "Start your first chat").
+    public var hasSettledChats: Bool { remoteScanSettled }
+
     private var remoteScanSettled: Bool {
         // No machine that could answer a scan — none known, or every known one
         // offline or disabled — means the tab list is the whole truth right
@@ -2516,7 +2613,13 @@ public final class RipulSessionListModel {
             let elapsed = Date().timeIntervalSince(started)
             await MainActor.run {
                 guard let self, generation == self.rebuildGeneration else { return }
-                self.applyRebuiltRows(rows)
+                // Applied mid-scroll, the rows redrew the session lists and Home under the
+                // finger (a list beside the chat on the open Duo, 50-98 ms; 9 November 2026).
+                // They land when the scroll or slide rests; a newer rebuild replaces them.
+                ChatSlideProbe.afterSlide("sessionModel.rebuiltRows") { [weak self] in
+                    guard let self, generation == self.rebuildGeneration else { return }
+                    self.applyRebuiltRows(rows)
+                }
                 self.rebuildCount += 1
                 self.rebuildElapsed += elapsed
                 ChatSlideProbe.mark(String(format: "sessionModel.rebuild(bg) %.0fms rows=%d", elapsed * 1000, rows.count))
@@ -2852,6 +2955,13 @@ public final class RipulSessionListModel {
         } catch {
             return false
         }
+    }
+
+    /// Preferences live outside the roster; follow its revision so a local
+    /// enable/disable refreshes those controls even though the machine is equal.
+    public func isMachineDisabled(_ machine: RemoteMachine) -> Bool {
+        _ = machinesRevision
+        return machine.isDisabled(cache: cache)
     }
 
     func toggleMachineDisabled(_ machine: RemoteMachine) {

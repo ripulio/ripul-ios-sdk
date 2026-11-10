@@ -43,19 +43,51 @@ extension View {
     }
 }
 
-/// Claude Code-style working status for the chat composer: a cycling ASCII
-/// star glyph (`✢ ✳ ✶ ✻ ✽`), a character-by-character typewriter reveal when
-/// the phrase changes, and a dimmer monospaced shimmer so it never looks like
-/// text the user typed into the input.
+private struct ComposerWorkingTintKey: EnvironmentKey {
+    static let defaultValue: Color? = nil
+}
+
+extension EnvironmentValues {
+    /// The colour of the open chat's icon in the session list and the title
+    /// pill (its model's, else its CLI's), for the composer's working star.
+    /// nil where the chat is not known: the star then takes the status text's.
+    var composerWorkingTint: Color? {
+        get { self[ComposerWorkingTintKey.self] }
+        set { self[ComposerWorkingTintKey.self] = newValue }
+    }
+}
+
+/// Claude Code-style working status for the chat composer: what the agent is
+/// doing in the composer's own font, written out character by character when
+/// the phrase changes, shimmering so it never looks like text the user typed
+/// into the input, and after it a cycling ASCII star (`✢ ✳ ✶ ✻ ✽`) in the
+/// colour of the chat's icon (`composerWorkingTint`). A phrase the agent wrote
+/// (its composer goal) is italic and in the star's colour; the stand-in
+/// "Waiting on agent…" stays dim.
+///
+/// The star cycles in the render server (`RenderServerGlyphCycle`): it was a
+/// `@State` index moved every 150 ms for the whole turn, each move a SwiftUI
+/// update, a text layout and a commit of the composer. The reveal is the only
+/// SwiftUI tick left, and it ends when the phrase is written out.
 struct ComposerWaitingStatusLabel: View {
     var text: String?
     var base: Color
     var highlight: Color
+    /// The composer's type: the size and weight of its text and placeholder.
+    var fontSize: CGFloat
+    var weight: Font.Weight = .regular
 
-    private static let frames = ["✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳"]
-    @State private var frameIndex = 0
+    /// `✳` is an emoji too: drawn in the text family, which has no glyph for it,
+    /// it fell back to the emoji font's green tile. The text presentation
+    /// selector (U+FE0E) asks for the plain one.
+    private static let frames = ["✢", "✳\u{FE0E}", "✶", "✻", "✽", "✻", "✶", "✳\u{FE0E}"]
+    /// Characters written per tick of the reveal, and the tick: the speed it
+    /// always had (one per 18 ms) at half the updates.
+    private static let revealChunk = 2
+    private static let revealTick: UInt64 = 36_000_000
     @State private var revealedCount = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.composerWorkingTint) private var tint
 
     private var cleanPhrase: String {
         let raw = (text?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "Waiting on agent"
@@ -66,46 +98,65 @@ struct ComposerWaitingStatusLabel: View {
         return trimmed.isEmpty ? "Waiting on agent" : trimmed
     }
 
+    private var isStill: Bool { reduceMotion || PerfSwitch.isOff("shimmer") }
+
+    /// The agent wrote the phrase, rather than the stand-in being shown.
+    private var isAgentUpdate: Bool {
+        !(text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
     private var displayedText: String {
         let target = cleanPhrase
-        if reduceMotion || PerfSwitch.isOff("shimmer") {
-            return "✶ \(target)…"
+        if isStill {
+            return "\(target)…"
         }
-        let glyph = Self.frames[frameIndex % Self.frames.count]
         let count = min(revealedCount, target.count)
         let prefix = String(target.prefix(count))
         let suffix = count < target.count ? "▌" : "…"
-        return "\(glyph) \(prefix)\(suffix)"
+        return "\(prefix)\(suffix)"
     }
 
     var body: some View {
-        Text(displayedText).ripulText()
-            .font(.ripul(size: 13.5, weight: .regular, family: .code))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .ripulShimmer(base: base, highlight: highlight, duration: 2.2)
-            .task(id: cleanPhrase) {
-                let targetCount = cleanPhrase.count
-                if reduceMotion || PerfSwitch.isOff("shimmer") {
-                    revealedCount = targetCount
-                    return
-                }
-                revealedCount = 0
-                var step = 0
-                while !Task.isCancelled && revealedCount < targetCount {
-                    try? await Task.sleep(nanoseconds: 18_000_000)
-                    guard !Task.isCancelled else { return }
-                    revealedCount += 1
-                    step += 1
-                    if step % 8 == 0 {
-                        frameIndex = (frameIndex + 1) % Self.frames.count
+        let font = Font.ripul(size: fontSize, weight: weight) // theme-mapping: the composer's own type, not code (Peter, 1 November 2026)
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            // The agent's own words in the star's colour (Peter, 2 November 2026).
+            let agentTint = isAgentUpdate ? tint : nil
+            // Its colour on the Text itself: `ripulText()` there gave it the theme's
+            // text colour wherever a theme names one, over the shimmer's (Peter saw the
+            // agent's phrase italic but not in the star's colour, 2 November 2026).
+            Text(displayedText).italic(isAgentUpdate).foregroundStyle(agentTint ?? base)
+                .font(font)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .ripulShimmer(base: agentTint ?? base, highlight: agentTint == nil ? highlight : .ripul(.text), // theme-mapping: the agent's phrase in the star's colour, its sweep the text colour (Peter, 2 November 2026)
+                              duration: 2.2)
+            // A space, then the star, outside the phrase: a long phrase
+            // truncates and the star stays. The star's slot is the text's own,
+            // so it sits on the text's line.
+            Group {
+                Text(" ").ripulText()
+                Text("✶").ripulText()
+                    .hidden()
+                    .overlay {
+                        RenderServerGlyphCycle(glyphs: Self.frames, fontSize: fontSize, weight: weight,
+                                               color: tint ?? base, animates: !isStill)
                     }
-                }
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    guard !Task.isCancelled else { return }
-                    frameIndex = (frameIndex + 1) % Self.frames.count
-                }
             }
+            .font(font)
+            .fixedSize()
+        }
+        .task(id: cleanPhrase) {
+            let targetCount = cleanPhrase.count
+            if isStill {
+                revealedCount = targetCount
+                return
+            }
+            revealedCount = 0
+            while !Task.isCancelled && revealedCount < targetCount {
+                try? await Task.sleep(nanoseconds: Self.revealTick)
+                guard !Task.isCancelled else { return }
+                revealedCount = min(targetCount, revealedCount + Self.revealChunk)
+            }
+        }
     }
 }

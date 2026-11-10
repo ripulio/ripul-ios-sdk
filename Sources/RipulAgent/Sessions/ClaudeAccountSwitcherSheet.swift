@@ -12,35 +12,58 @@ import SwiftUI
 /// would just 401 every session.
 ///
 /// Each profile keeps its own OAuth credential (Keychain namespaced per
-/// CLAUDE_CONFIG_DIR), so adding an account never disturbs the active one.
+/// CLAUDE_CONFIG_DIR), so adding an account never disturbs a signed-in one in
+/// use; on a Mac with none, the Mac makes the new one its account
+/// (`makeMacDefaultIfUnsigned` on its page). Claude Code's own folder is not
+/// listed until it holds a sign-in, and then under that account's email
+/// (`CodingAccountDefaultFolder`).
 public struct ClaudeAccountSwitcherSheet: View {
     let machine: RemoteMachine
     let bridge: AgentBridge
     var chatId: String? = nil
     var startsAddingAccount = false
+    var suggestedAccountName: String?
+    var suggestedAccountEmail: String?
+    var onAccountAdded: ((ClaudeAccountProfile) -> Void)?
     /// Fires after a successful switch so the caller can refresh its label.
     var onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @State private var signIn: ClaudeAccountSignInRequest?
     @State private var refreshToken = UUID()
+    /// The profile this sheet's Add Computer set up, signed in for the
+    /// suggested account rather than the one it last had.
+    @State private var addedSlug: String?
 
-    public init(machine: RemoteMachine, bridge: AgentBridge, chatId: String? = nil, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil, startsAddingAccount: Bool = false) {
+    public init(machine: RemoteMachine, bridge: AgentBridge, chatId: String? = nil, onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil, startsAddingAccount: Bool = false,
+                suggestedAccountName: String? = nil, suggestedAccountEmail: String? = nil,
+                onAccountAdded: ((ClaudeAccountProfile) -> Void)? = nil) {
         self.machine = machine
         self.bridge = bridge
         self.chatId = chatId
         self.onSwitched = onSwitched
         self.startsAddingAccount = startsAddingAccount
+        self.suggestedAccountName = suggestedAccountName
+        self.suggestedAccountEmail = suggestedAccountEmail
+        self.onAccountAdded = onAccountAdded
     }
 
     public var body: some View {
         NavigationStack {
             List {
+                if let suggestedAccountName {
+                    CodingAccountAddComputerHint(name: suggestedAccountName, email: suggestedAccountEmail, machineName: machine.displayName)
+                }
                 ClaudeAccountSection(machine: machine, bridge: bridge, chatId: chatId,
                     onSignIn: { signIn = ClaudeAccountSignInRequest(machine: machine, profile: $0) },
-                    onSwitched: onSwitched, refreshToken: refreshToken, startsAddingAccount: startsAddingAccount)
+                    onSwitched: onSwitched, refreshToken: refreshToken, startsAddingAccount: startsAddingAccount,
+                    suggestedAccountName: suggestedAccountName, suggestedAccountEmail: suggestedAccountEmail,
+                    onAccountAdded: { profile in
+                        addedSlug = profile.slug
+                        onAccountAdded?(profile)
+                    })
             }.ripulThemedList()
-                .navigationTitle(chatId == nil ? "Claude accounts" : "Chat account")
+                .navigationTitle(suggestedAccountName != nil ? "Add Computer" : chatId == nil ? "Claude accounts" : "Chat account")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
@@ -56,9 +79,12 @@ public struct ClaudeAccountSwitcherSheet: View {
         .ripulSheet(.page, detents: [.medium, .large])
         .dismissesKeyboardOnTapAway()
         .ripulSheet(item: $signIn, onDismiss: { refreshToken = UUID() }) { request in
+            // Adding a computer to an account expects that account; signing a
+            // profile in again expects the one it had.
             HostSignInSheet(machine: request.machine, bridge: bridge,
-                profile: request.profile.slug, profileName: request.profile.name,
-                startSignInImmediately: request.profile.loggedIn || request.profile.signInEnded)
+                profile: request.profile.slug, profileName: request.profile.displayName,
+                startSignInImmediately: suggestedAccountName != nil || request.profile.loggedIn || request.profile.signInEnded,
+                expectedEmail: request.profile.slug == addedSlug ? suggestedAccountEmail : request.profile.email)
         }
     }
 }
@@ -79,12 +105,18 @@ struct ClaudeAccountSection: View {
     var onSwitched: ((ClaudeAccountProfile?) -> Void)? = nil
     var refreshToken: UUID? = nil
     var startsAddingAccount = false
+    var suggestedAccountName: String?
+    var suggestedAccountEmail: String?
+    var onAccountAdded: ((ClaudeAccountProfile) -> Void)?
     @State private var openedAddAccount = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
 
     @State private var accounts: [ClaudeAccountProfile] = []
     @State private var active: String = "default"
     @State private var followsDefault = true
+    /// A listing has come back, so an empty one means the Mac has no account.
+    @State private var loaded = false
     @State private var loading = false
     @State private var error: String?
     @State private var switchingTo: String?
@@ -103,7 +135,15 @@ struct ClaudeAccountSection: View {
                 if chatId != nil && !accounts.isEmpty {
                     Button { Task { await selectAccount("__machine_default__") } } label: {
                         HStack {
-                            Label("Use Mac default", systemImage: "desktopcomputer")
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Same as this Mac")
+                                    // While the chat follows the Mac, the listing's active account is the Mac's.
+                                    if followsDefault, let using = accounts.first(where: { $0.slug == active }), !using.isEmptyDefault {
+                                        Text(using.displayName).font(.ripul(.caption)).foregroundStyle(.ripul(.textSecondary))
+                                    }
+                                }
+                            } icon: { Image(systemName: "desktopcomputer") }
                             Spacer()
                             if followsDefault { Image(systemName: "checkmark.circle.fill") }
                         }
@@ -111,7 +151,14 @@ struct ClaudeAccountSection: View {
                     .disabled(loading || switchingTo != nil)
                     .uiKitIdentifier("ClaudeAccountSwitcherSheet.useDefault")
                 }
-                ForEach(accounts) { account in accountRow(account) }
+                if chatId == nil, loaded, error == nil,
+                   let notice = CodingAccountDefaultFolder.macNotice(listed: listedAccounts.map { ($0.slug, $0.loggedIn) },
+                                                                     active: active, agent: "Claude") {
+                    Text(notice).font(.ripul(.caption)).foregroundStyle(.ripul(.warning))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .uiKitIdentifier("ClaudeAccountSwitcherSheet.notice")
+                }
+                ForEach(listedAccounts) { account in accountRow(account) }
                 if let error, !error.isEmpty {
                     Text(error).font(.ripul(.caption)).foregroundStyle(.ripul(.warning))
                     Button("Retry") { Task { await refresh() } }
@@ -142,6 +189,19 @@ struct ClaudeAccountSection: View {
                         .disabled(loading || switchingTo != nil)
                         .uiKitIdentifier("ClaudeAccountSwitcherSheet.addAccount")
                 }
+                Button {
+                    openURL(CodingAccountProvider.claude.billingAndAccountURL())
+                } label: {
+                    HStack {
+                        Label(CodingAccountProvider.claude.billingAndAccountTitle, systemImage: "creditcard")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
+                    }
+                }
+                .buttonStyle(.borderless)
+                .uiKitIdentifier("ClaudeAccountSwitcherSheet.billing")
             }
         } header: { RipulSectionHeader {
             HStack {
@@ -152,7 +212,7 @@ struct ClaudeAccountSection: View {
         } } footer: { RipulSectionFooter {
             if machine.isOnline {
                 Text(chatId == nil
-                    ? "Chats using the Mac default switch after their current reply. Chats with their own account keep it."
+                    ? "Chats on this Mac use the Active account, and switch after their current reply. Chats given their own account keep it."
                     : "Applies only to this chat, after the current reply finishes. Conversation history is kept.")
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -160,7 +220,15 @@ struct ClaudeAccountSection: View {
         .task(id: refreshToken) {
             if startsAddingAccount && !openedAddAccount {
                 openedAddAccount = true
+                newName = suggestedAccountName ?? ""
                 addingAccount = true
+                if suggestedAccountName != nil {
+                    await refresh()
+                    if error != nil { return }
+                    await createAndSignIn(name: newName)
+                    // Keep a failed creation visible with its prefilled retry form.
+                    if error != nil { return }
+                }
             }
             repeat {
                 await refresh()
@@ -169,7 +237,7 @@ struct ClaudeAccountSection: View {
         }
         .onChange(of: scenePhase) { phase in if phase == .active { Task { await refresh() } } }
         .confirmationDialog(
-            "Remove \(deleteCandidate?.name ?? "account")?",
+            "Remove \(deleteCandidate?.displayName ?? "account")?",
             isPresented: Binding(
                 get: { deleteCandidate != nil },
                 set: { if !$0 { deleteCandidate = nil } }
@@ -198,10 +266,10 @@ struct ClaudeAccountSection: View {
             : isActive ? .active
             : .switchTo({ Task { await selectAccount(account.slug) } })
         let ends = ClaudeSignInEnd.text(endsAt: account.signInEndsAt, ended: account.signInEnded)
-        let detail = [account.email ?? (account.loggedIn ? "Signed in" : ends == nil ? "Not signed in" : nil),
-                      ends?.text,
-                      account.isDefault ? "This Mac's login" : nil].compactMap { $0 }.joined(separator: " · ")
-        CodingAccountRow(name: account.name, detail: detail, isActive: isActive,
+        let detail = [CodingAccountDefaultFolder.detail(title: account.displayName, email: account.email,
+                                                        loggedIn: account.loggedIn, saysSignInEnd: ends != nil),
+                      ends?.text].compactMap { $0 }.joined(separator: " · ")
+        CodingAccountRow(name: account.displayName, detail: detail, isActive: isActive,
             usage: account.usage, plan: account.plan, showsUsage: account.loggedIn,
             action: action, disabled: loading || switchingTo != nil,
             identifier: "ClaudeAccountSwitcherSheet.accountRow.\(account.slug)")
@@ -209,6 +277,9 @@ struct ClaudeAccountSection: View {
         .contextMenu { MenuIcons {
             if account.loggedIn {
                 Button("Sign in again", systemImage: "arrow.clockwise") { onSignIn(account) }
+            }
+            Button(CodingAccountProvider.claude.billingAndAccountTitle, systemImage: "arrow.up.right.square") {
+                openURL(CodingAccountProvider.claude.billingAndAccountURL(email: account.email))
             }
             if !account.isDefault {
                 Button("Remove", systemImage: "trash", role: .destructive) { deleteCandidate = account }
@@ -244,7 +315,22 @@ struct ClaudeAccountSection: View {
     }
 
     private func createAndSignIn(name: String) async {
-        guard !name.isEmpty else { return }
+        guard !name.isEmpty, !loading, switchingTo == nil else { return }
+        // A retry of Add Computer continues its earlier setup instead of
+        // creating another same-named profile on the destination Mac: one that
+        // never finished signing in, or one that signed in to another account
+        // than this one (the browser's, not the one chosen).
+        if suggestedAccountName != nil,
+           let existing = accounts.first(where: { profile in
+               guard !profile.isDefault, profile.name == name else { return false }
+               if profile.email == nil { return !profile.loggedIn }
+               return CodingAccountEmail.isDifferentAccount(expected: suggestedAccountEmail, signedIn: profile.email)
+           }) {
+            addingAccount = false
+            onAccountAdded?(existing)
+            onSignIn(existing)
+            return
+        }
         loading = true
         let result = await bridge.createClaudeAccount(machineId: machine.machineId, name: name)
         loading = false
@@ -255,6 +341,7 @@ struct ClaudeAccountSection: View {
                 slug: slug, name: result.name ?? name, email: nil, loggedIn: false, isDefault: false
             )
             accounts.append(profile)
+            onAccountAdded?(profile)
             onSignIn(profile)
         } else {
             error = result.error ?? "Could not create the account"
@@ -281,7 +368,10 @@ struct ClaudeAccountSection: View {
         error = nil
         defer { loading = false }
         let result = await bridge.fetchClaudeAccounts(machineId: machine.machineId, chatId: chatId)
-        if result.error == nil { accounts = result.accounts; active = result.active; followsDefault = result.followsDefault }
+        if result.error == nil { accounts = result.accounts; active = result.active; followsDefault = result.followsDefault; loaded = true }
         error = result.error
     }
+
+    /// Every profile but Claude Code's own folder while nothing is signed in there.
+    private var listedAccounts: [ClaudeAccountProfile] { accounts.filter { !$0.isEmptyDefault } }
 }

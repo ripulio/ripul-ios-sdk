@@ -49,6 +49,7 @@ private func textAssignments(prefix: String? = nil) -> [[String: Any]] {
 /// Discovery: which scopes exist and what is currently overridden on each.
 public struct RipulListThemeScopesTool: NativeTool {
     public var name: String { "list_theme_scopes" }
+    public var access: NativeToolAccess { .reads }
     public var description: String {
         "List the theme scopes that can be styled live (disclosure panels and field capsules), "
         + "with their View-Explorer id, label, assigned named style, and whether they carry "
@@ -85,6 +86,7 @@ public struct RipulListThemeScopesTool: NativeTool {
 /// so an agent can read a value before changing it, rather than guessing the baseline.
 public struct RipulGetThemeStyleTool: NativeTool {
     public var name: String { "get_theme_style" }
+    public var access: NativeToolAccess { .reads }
     public var description: String {
         "Read a theme scope's currently RESOLVED knob values (what it renders with right now) "
         + "and the per-scope overrides applied on top. Use list_theme_scopes for valid ids."

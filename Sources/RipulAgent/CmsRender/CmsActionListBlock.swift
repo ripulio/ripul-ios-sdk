@@ -5,8 +5,10 @@ import SwiftUI
 /// about, ticked off by hand or seen done on the grid, removed, messaged.
 ///
 /// Semantics mirrored: `actionFromRow`; the status and remove mutations (with
-/// company_id); the grid check (`gridRange`, `gridShowsDone`, a put-back item
-/// left alone) that ticks off and logs "seen on the shifts" (`gridFixNote`)
+/// company_id); the grid check (`gridRange`, `gridPutRight`: done on the shifts
+/// and saved since the to-do was added; a put-back item left alone; one check at
+/// a time) that ticks off and logs "seen on the shifts" (`gridFixNote`: from what
+/// the reconcile saw to what the shift says now)
 /// and records its variance (`varianceOnDone`, `varianceFromGrid`); a tick by
 /// hand records the variance a reconcile found; putting back takes it off;
 /// `suggestedMessage` and "Mark as sent" into the activity log; "Run today's
@@ -30,6 +32,7 @@ struct CmsActionListBlockView: View {
     @State private var undo: Action?
     @State private var messageFor: Action?
     @State private var lastChecked = ""
+    @State private var gridChecking = false
 
     struct Action: Identifiable, Equatable {
         var id: String
@@ -121,6 +124,131 @@ struct CmsActionListBlockView: View {
             return abs(worked - (a.plannedHours ?? 0)) <= 0.25 + 1e-9
         }
         return !theirs.isEmpty && theirs.allSatisfy { !str($0["clocked_out_at"]).isEmpty }
+    }
+
+    /// A stored UTC time, with or without a zone on the end (D1 and BigQuery DATETIME carry none).
+    private static func utcDate(_ raw: String) -> Date? {
+        guard !raw.isEmpty else { return nil }
+        let zoned = raw.range(of: #"([zZ]|[+-]\d\d:?\d\d)$"#, options: .regularExpression) != nil
+        let iso = zoned ? raw : raw.replacingOccurrences(of: " ", with: "T") + "Z"
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: iso) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: iso)
+    }
+    private static func utcDate(_ v: CmsJSON?) -> Date? { utcDate(str(v)) }
+
+    /// When a shift was last saved: its last edit, else when its wac out was saved, else its first save.
+    static func shiftSavedAt(_ s: [String: CmsJSON]) -> Date? {
+        utcDate(s["shift_saved_at"]) ?? utcDate(s["wac_out_saved_at"]) ?? utcDate(s["shift_created_at"])
+    }
+
+    /// How long a shift saved in wac can take to reach the portal (`SHIFT_DATA_LAG_MS`).
+    static let shiftDataLag: TimeInterval = 3600
+
+    /// `changedSinceAdded`: whether the person's shifts that day were saved since the to-do was
+    /// added (less the lag). A to-do whose shifts already read this way when the reconcile looked
+    /// was not put right on them. Nil when that can't be told.
+    static func changedSinceAdded(_ a: Action, _ shifts: [[String: CmsJSON]]) -> Bool? {
+        guard let added = utcDate(a.createdAt) else { return nil }
+        let theirs = shifts.filter { shiftDay($0) == a.date && isThisPerson(a, $0) }
+        if theirs.isEmpty { return false }
+        let saved = theirs.compactMap(shiftSavedAt)
+        if saved.isEmpty { return nil }
+        return saved.contains { $0 > added.addingTimeInterval(-shiftDataLag) }
+    }
+
+    /// `gridPutRight`: done on the shifts, and changed since the to-do was added.
+    static func gridPutRight(_ a: Action, _ shifts: [[String: CmsJSON]]) -> Bool {
+        gridShowsDone(a, shifts) == true && changedSinceAdded(a, shifts) != false
+    }
+
+    /// `reportedTimes`: the wac in and wac out a reconcile saw, read from the to-do's detail. A time
+    /// it doesn't give is left out, and so is one it gives twice (two shifts that day).
+    static func reportedTimes(_ detail: String) -> (in: String?, out: String?, noIn: Bool, noOut: Bool) {
+        let d = detail.lowercased()
+        func groups(_ m: NSTextCheckingResult, in s: String) -> [String] {
+            (1..<m.numberOfRanges).compactMap { Range(m.range(at: $0), in: s).map { String(s[$0]) } }
+        }
+        func one(_ pattern: String) -> [String]? {
+            guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+            let all = re.matches(in: d, range: NSRange(d.startIndex..., in: d))
+            return all.count == 1 ? groups(all[0], in: d) : nil
+        }
+        func hhmm(_ t: String) -> String { t.count == 4 ? "0" + t : t }
+        // "wac 09:30–15:00", but not "wac 09:02–13:57 and 17:30–19:30" (two shifts).
+        var span: [String]?
+        if let clauseRe = try? NSRegularExpression(pattern: #"\bwac (\d{1,2}:\d{2}[^·]*)"#),
+           let m = clauseRe.firstMatch(in: d, range: NSRange(d.startIndex..., in: d)),
+           let r = Range(m.range(at: 1), in: d),
+           let rangeRe = try? NSRegularExpression(pattern: #"(\d{1,2}:\d{2}) ?[–-] ?(\d{1,2}:\d{2})"#) {
+            let clause = String(d[r])
+            let ranges = rangeRe.matches(in: clause, range: NSRange(clause.startIndex..., in: clause))
+            if ranges.count == 1 { span = groups(ranges[0], in: clause) }
+        }
+        let wacIn = one(#"\bwac in (?:at )?(\d{1,2}:\d{2})"#)?.first ?? span?.first
+        let wacOut = one(#"\bwac out (?:at )?(\d{1,2}:\d{2})"#)?.first ?? (span?.count == 2 ? span?[1] : nil)
+        return (
+            wacIn.map(hhmm), wacOut.map(hhmm),
+            d.range(of: #"\bno wac in\b"#, options: .regularExpression) != nil,
+            d.range(of: #"\bno wac out\b"#, options: .regularExpression) != nil
+        )
+    }
+
+    /// "18:45", the wall-clock time in the site's zone of a stored UTC time.
+    private static func localTime(_ v: CmsJSON?, timeZone: String = "Europe/London") -> String {
+        guard let d = utcDate(v) else { return "" }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_GB")
+        f.timeZone = TimeZone(identifier: timeZone)
+        f.dateFormat = "HH:mm"
+        return f.string(from: d)
+    }
+
+    /// "8h 30m": hours as hours and minutes.
+    private static func hoursLabel(_ hours: Double) -> String {
+        let minutes = Int((hours * 60).rounded())
+        return "\(minutes / 60)h" + (minutes % 60 != 0 ? " \(minutes % 60)m" : "")
+    }
+
+    /// `gridFixNote`: what changed, from what the reconcile saw (none for a missing wac out or wac
+    /// in, else the times in the to-do's detail) to what the shift says now; the shift now; and when
+    /// the change was saved, which the activity entry is dated by.
+    static func gridFixNote(_ a: Action, _ shifts: [[String: CmsJSON]]) -> (text: String, detail: String, at: String) {
+        let theirs = shifts.filter { shiftDay($0) == a.date && isThisPerson(a, $0) }
+        let day = shortDay(a.date)
+        let who = a.person.isEmpty ? (a.employeeCode.isEmpty ? "Their" : a.employeeCode) : a.person
+        let at = theirs.compactMap(shiftSavedAt).max().map { ISO8601DateFormatter().string(from: $0) } ?? ""
+        let now = theirs.compactMap { s -> String? in
+            let i = localTime(s["clocked_in_at"]), o = localTime(s["clocked_out_at"])
+            return !i.isEmpty && !o.isEmpty ? "\(i)–\(o)" : (i.isEmpty ? nil : "\(i), no wac out yet")
+        }.joined(separator: " and ")
+        // A shift first saved after the reconcile looked was added afterwards, as a whole.
+        let created = theirs.compactMap { utcDate($0["shift_created_at"]) }
+        let addedLater = utcDate(a.createdAt).map { added in
+            !created.isEmpty && created.allSatisfy { $0 > added.addingTimeInterval(-shiftDataLag) }
+        } ?? false
+        let detail = now.isEmpty ? "" : (addedLater ? "Shift added later: \(now)" : "Shift now \(now)")
+
+        // One shift that day: its times against the ones the reconcile saw.
+        let single = theirs.count == 1 ? theirs[0] : nil
+        let nowIn = single.map { localTime($0["clocked_in_at"]) } ?? ""
+        let nowOut = single.map { localTime($0["clocked_out_at"]) } ?? ""
+        let seen = reportedTimes(a.detail)
+        var changes: [(what: String, from: String, to: String)] = []
+        func change(_ what: String, _ from: String, _ to: String) { if !to.isEmpty && from != to { changes.append((what, from, to)) } }
+        if a.kind == "wac_in" || seen.noIn { change("wac in", "none", nowIn) } else if let i = seen.in { change("wac in", i, nowIn) }
+        if a.kind == "wac_out" || seen.noOut { change("wac out", "none", nowOut) } else if let o = seen.out { change("wac out", o, nowOut) }
+        if let first = changes.first {
+            let more = changes.dropFirst().map { ", and \($0.what) from \($0.from) to \($0.to)" }.joined()
+            return ("\(who)'s \(first.what) for \(day) changed from \(first.from) to \(first.to)\(more)", detail, at)
+        }
+        if a.kind == "hours" && !theirs.isEmpty {
+            let worked = theirs.reduce(0) { $0 + (num($1["hours_worked"]) ?? 0) }
+            return ("\(who)'s hours for \(day) changed to \(hoursLabel(worked))", detail, at)
+        }
+        return ("\(who)'s shift for \(day) changed", detail, at)
     }
 
     static func gridRange(_ actions: [Action]) -> (from: String, to: String)? {
@@ -237,12 +365,12 @@ struct CmsActionListBlockView: View {
         runtime.invalidate(querySlug)
     }
 
-    private func log(_ a: Action, kind: String, text value: String, detail: String = "", by: String = "") async {
+    private func log(_ a: Action, kind: String, text value: String, detail: String = "", by: String = "", at: String = "") async {
         guard !account.isEmpty else { return }
         _ = await mutate("logMutationSlug", [
             "company_id": typed(account), "kind": typed(kind), "person": typed(a.person), "employee_code": typed(a.employeeCode),
             "shift_date": typed(a.date.isEmpty ? nil : a.date, "date"), "text": typed(value), "detail": typed(detail),
-            "by": typed(by), "action_id": typed(a.id), "at": typed(""),
+            "by": typed(by), "action_id": typed(a.id), "at": typed(at),
         ])
         if !text("logQuerySlug").isEmpty { runtime.invalidate(text("logQuerySlug")) }
     }
@@ -288,25 +416,19 @@ struct CmsActionListBlockView: View {
     /// The grid check: a missing wac out or wac in (or hours) since put right.
     private func checkGrid(_ list: [Action]) async {
         let shiftsSlug = text("shiftsQuerySlug")
-        guard !shiftsSlug.isEmpty, !runtime.isDesignMode, let range = Self.gridRange(list) else { return }
+        guard !shiftsSlug.isEmpty, !runtime.isDesignMode, !gridChecking, let range = Self.gridRange(list) else { return }
+        gridChecking = true
+        defer { gridChecking = false }
         guard let result = try? await runtime.client.runSavedQuery(cmsId: runtime.cmsId, querySlug: shiftsSlug, params: [
             "shift_from": typed(range.from, "date"), "shift_to": typed(range.to, "date"), "all_employees": typed("1"),
             "employee_code": .object(["values": .array([]), "type": .string("string"), "mode": .string("multi")]),
             "company_id": typed(account), "company_prefix": typed(accountPrefix),
         ]) else { return }
         let shifts = result.rows
-        for a in list where a.status == "open" && a.doneHow != "reopened" && Self.gridShowsDone(a, shifts) == true {
+        for a in list where a.status == "open" && a.doneHow != "reopened" && Self.gridPutRight(a, shifts) {
             await setStatus(a, "done", how: "grid")
-            let who = a.person.isEmpty ? (a.employeeCode.isEmpty ? "Their" : a.employeeCode) : a.person
-            let note: String = {
-                switch a.kind {
-                case "wac_out": return "\(who)'s wac out for \(Self.shortDay(a.date)) was added"
-                case "wac_in": return "\(who)'s wac in for \(Self.shortDay(a.date)) was added"
-                case "hours": return "\(who)'s hours for \(Self.shortDay(a.date)) were changed"
-                default: return "\(who)'s shift for \(Self.shortDay(a.date)) was changed"
-                }
-            }()
-            await log(a, kind: "shift_changed", text: note, by: "Seen on the shifts")
+            let note = Self.gridFixNote(a, shifts)
+            await log(a, kind: "shift_changed", text: note.text, detail: note.detail, by: "Seen on the shifts", at: note.at)
             if let v = Self.varianceOnDone(a, how: "grid", shifts: shifts) { await recordVariance(a, v, how: "grid") }
         }
     }

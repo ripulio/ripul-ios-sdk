@@ -22,6 +22,26 @@ import Combine
 /// list model, `showsTitleLozenge: false` when the screen's unified top bar owns
 /// the title (the list then reserves only the 52pt top spacer, exactly like the
 /// native app's SessionListScreen), and optionally `chooseMode:` / `showingSidebar:`.
+/// What a `RipulSessionsView` shows.
+public enum RipulSessionsPresentation: Equatable, Hashable {
+    /// The whole list, as the Agents screen shows it: Machines, invitations,
+    /// and the Sessions panel with its search, filter and selection.
+    case full
+    /// The first `limit` conversations of the same list, in its order and drawn
+    /// by its own rows, each with its context menu: for a screen that shows a
+    /// few chats among other things and scrolls them itself (Ripul's Home,
+    /// Peter, 2 November 2026: a reduced Agents list, not a new one). Only the
+    /// most recent: pinned chats are left out, since they keep their own place
+    /// at the top of the full list (Peter, 5 November 2026). A chat
+    /// that has started others counts as one, and opening it shows its started
+    /// chats and fold under it, so the rows grow to fit them. No panels, search,
+    /// selection, invitations or older chats; the rows stack rather than
+    /// scroll. A tap hands the row to
+    /// `onPickUnifiedSession`, and the view answers none of the open, window
+    /// or move requests, which stay with the full list on the Agents screen.
+    case recent(limit: Int, autoSort: Bool = true)
+}
+
 @available(iOS 26.0, macOS 26.0, *)
 public struct RipulSessionsView: View {
     @Environment(\.ripulWindowContext) private var workspace
@@ -49,6 +69,7 @@ public struct RipulSessionsView: View {
     private let showsTitleLozenge: Bool
     private let showingSidebar: Binding<Bool>?
     private let quickActionsEnabled: Bool
+    private let showsMachinesPanel: Bool
     /// Embedded mode reserves 52pt at the top for the host screen's floating
     /// unified bar. Pass `false` only where no floating bar covers the list.
     /// The shared agent workspace has a list header even with docked metadata.
@@ -57,18 +78,55 @@ public struct RipulSessionsView: View {
     /// selected. False wherever the chat takes the list's place (an iPhone, a
     /// picker sheet): the mark would only be in the way on the way back.
     private let highlightsActiveSession: Bool
+    /// The whole list, or a few of its first rows (`RipulSessionsPresentation`).
+    private let presentation: RipulSessionsPresentation
     /// Pick mode: when set, tapping a session hands back its IDENTITY without
     /// opening it — no tab creation, no remote history import, no focus
     /// change. This is the sessions list as a picker (the link-to-plan sheet).
     /// `ripul://choose` keeps the open path: it needs an openable tab back.
 
+    @Environment(\.screenIsShown) private var screenIsShown
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+
+    /// The model's chats, followed only while someone can see this list. A Mac
+    /// reports a changed chat up to ten times a minute while agents work, and
+    /// every list took each report and arranged all its chats again, behind
+    /// another tab or under a chat as well: 20-50 runs a minute, up to 345 ms
+    /// each, on Peter's Duo (5 November 2026). A list nobody can see follows only
+    /// chats joining or leaving, and takes the rest when it is shown again.
+    private var chats: [UnifiedSession] {
+        let seen = listIsSeen
+        var rows = seen ? model.unifiedSessions : model.unifiedSessionsUnobserved
+        #if DEBUG
+        if SyntheticSessionRows.count > 0 {
+            rows += seen ? SyntheticSessionRows.shared.rows : SyntheticSessionRows.shared.rowsUnobserved
+        }
+        #endif
+        return rows
+    }
+
+    /// Someone can see this list: its screen is shown and nothing covers it.
+    private var listIsSeen: Bool {
+        #if DEBUG
+        if RipulSessionsView.hiddenListsFollow { return true }
+        #endif
+        return screenIsShown && listCanBeSeen
+    }
+
+    #if DEBUG
+    /// `-ripul.debug.hiddenListsFollow YES`: hidden lists follow every change
+    /// as they did before, to measure what idling them saves.
+    private static let hiddenListsFollow = UserDefaults.standard.bool(forKey: "ripul.debug.hiddenListsFollow")
+    #endif
+
     @Environment(\.newChatAction) private var newChatAction
     private var createNewChat: ((String?) -> Void)? { newChatAction.map { action in { action($0) } } }
-    @Environment(\.ripulBottomBarFrame) private var bottomBar
     /// How far the bottom notice must rise to clear the host's tab bar (or
     /// the home indicator). The workspace column ignores the vertical safe
     /// area, so a plain bottom inset would put the notice under the bar.
-    @State private var noticeBottomClearance: CGFloat = 0
+    /// Read only by the notice's padding: as this view's own state, each new
+    /// measurement redrew the list under it.
+    @State private var noticeBottomClearance = MeasuredClearance()
     @State private var searchText = ""
     @State private var renamingSession: ChatSession?
     @State private var renameText = ""
@@ -78,6 +136,7 @@ public struct RipulSessionsView: View {
     /// Host-defined quick actions per machine — owned here (the app's deleted
     /// twin kept them in the list). Seeded from cache, refreshed on row expand.
     @State private var remoteActionsByMachine: [String: [RemoteActionDescriptor]] = [:]
+    @State private var visibility = SessionListVisibility()
 
     public init(
         bridge: AgentBridge,
@@ -94,10 +153,12 @@ public struct RipulSessionsView: View {
         showsTitleLozenge: Bool = true,
         showingSidebar: Binding<Bool>? = nil,
         quickActionsEnabled: Bool = false,
+        showsMachinesPanel: Bool = true,
         reservesTopBarSpace: Bool = true,
         highlightsActiveSession: Bool = false,
         onListedSessionsChanged: (([RipulListedSession]) -> Void)? = nil,
-        onPickUnifiedSession: ((UnifiedSession) -> Void)? = nil
+        onPickUnifiedSession: ((UnifiedSession) -> Void)? = nil,
+        presentation: RipulSessionsPresentation = .full
     ) {
         let actions = RipulSessionsViewActions()
         actions.update(onSelectSession: onSelectSession, onDismiss: onDismiss,
@@ -108,7 +169,9 @@ public struct RipulSessionsView: View {
                   allowRipulAgents: allowRipulAgents, inviteManager: inviteManager, model: model,
                   chooseMode: chooseMode, showsTitleLozenge: showsTitleLozenge,
                   showingSidebar: showingSidebar, quickActionsEnabled: quickActionsEnabled,
-                  reservesTopBarSpace: reservesTopBarSpace, highlightsActiveSession: highlightsActiveSession)
+                  showsMachinesPanel: showsMachinesPanel,
+                  reservesTopBarSpace: reservesTopBarSpace, highlightsActiveSession: highlightsActiveSession,
+                  presentation: presentation)
     }
 
     /// For a host that re-renders often (the agent screen, on every list/chat
@@ -128,9 +191,12 @@ public struct RipulSessionsView: View {
         showsTitleLozenge: Bool = true,
         showingSidebar: Binding<Bool>? = nil,
         quickActionsEnabled: Bool = false,
+        showsMachinesPanel: Bool = true,
         reservesTopBarSpace: Bool = true,
-        highlightsActiveSession: Bool = false
+        highlightsActiveSession: Bool = false,
+        presentation: RipulSessionsPresentation = .full
     ) {
+        self.presentation = presentation
         self.bridge = bridge
         self.cache = cache
         self.modelRef = model
@@ -142,7 +208,8 @@ public struct RipulSessionsView: View {
         self.chooseMode = chooseMode
         self.showsTitleLozenge = showsTitleLozenge
         self.showingSidebar = showingSidebar
-        self.quickActionsEnabled = quickActionsEnabled
+        self.quickActionsEnabled = quickActionsEnabled && showsMachinesPanel
+        self.showsMachinesPanel = showsMachinesPanel
         self.reservesTopBarSpace = reservesTopBarSpace
         self.highlightsActiveSession = highlightsActiveSession
         _modelOwner = StateObject(wrappedValue: UnobservedOwner(model ?? RipulSessionListModel(
@@ -208,6 +275,7 @@ public struct RipulSessionsView: View {
         guard let wanted = RipulOpenSessionRequest.pendingSessionId else { return }
         guard onPickUnifiedSession == nil else {
             RipulOpenSessionRequest.pendingSessionId = nil
+            RipulOpenSessionRequest.pendingFallbackSession = nil
             RipulOpenSessionRequest.finished(wanted, tabId: nil)
             return
         }
@@ -218,6 +286,7 @@ public struct RipulSessionsView: View {
         guard let session = candidates.first(where: { $0.id == wanted })
             ?? candidates.first(where: { $0.matchKeys.contains(wanted) })
             ?? candidates.first(where: { $0.attentionKeys.contains(wanted) })
+            ?? RipulOpenSessionRequest.pendingFallbackSession
         else {
             rescanForMissingRequest(wanted)
             return
@@ -229,6 +298,7 @@ public struct RipulSessionsView: View {
               model.usesDirectConnections || session.machineName == nil || model.hasCompletedAuthRefresh
         else { return }
         RipulOpenSessionRequest.pendingSessionId = nil
+        RipulOpenSessionRequest.pendingFallbackSession = nil
         // An explicit request (Siri, a share link, ripul://open-chat) beats
         // restoring the window's previous selection. Left pending, the launch
         // restore opened afterwards, superseded this open (latest tap wins)
@@ -344,6 +414,191 @@ public struct RipulSessionsView: View {
 
     public var body: some View {
         let _ = ChatSlideProbe.markBody("RipulSessionsView") { Self._printChanges() }
+        if case .recent = presentation {
+            // A few rows on another screen (`RipulSessionsPresentation.recent`): none of
+            // this screen's own work, which stays with the full list: the first load,
+            // open, window and move requests, and the top bar. The rows hold their order
+            // while shown; drawn afresh once the first scan has settled, they take it
+            // from the live list rather than the copy kept from last time.
+            sessionsList
+                .id(model.hasSettledChats)
+                .onAppear {
+                    let icons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
+                    if machineIcons != icons { machineIcons = icons }
+                }
+                .onChange(of: model.machines) { _, machines in
+                    let icons = RemoteMachine.iconsByDisplayName(machines: machines, cache: cache)
+                    if machineIcons != icons { machineIcons = icons }
+                }
+        } else {
+            fullScreenList
+        }
+    }
+
+    /// The list, and everything this screen does around it.
+    private var fullScreenList: some View {
+        sessionsList
+        .task {
+            // Pick mode borrows the HOST's live model — kicking initialLoad
+            // there fires a publish burst on presentation that re-renders the
+            // presenting subtree and knocks the just-presented sheet down
+            // (tap Link -> sheet appears -> immediately falls back).
+            if onPickUnifiedSession == nil {
+                model.initialLoad()
+            }
+            if quickActionsEnabled, remoteActionsByMachine.isEmpty {
+                remoteActionsByMachine = RemoteActionDescriptor.loadAllCached(cache: cache)
+            }
+        }
+        .onReceive(workspace?.$pendingSessionID.eraseToAnyPublisher() ?? Just(nil).eraseToAnyPublisher()) { _ in honorWindowRequest() }
+        // Chats joining or leaving, not each chat's every change.
+        .onChange(of: model.unifiedSessionIdsRevision) { _ in honorWindowRequest() }
+        .onChange(of: bridge.isSessionsReady) { _ in honorOpenSessionRequest(); honorWindowRequest() }
+        .onChange(of: model.hasCompletedAuthRefresh) { _ in honorOpenSessionRequest(); honorWindowRequest() }
+        .onRipulOpenSessionRequest(sessionCount: model.unifiedSessionsUnobserved.count) { honorOpenSessionRequest() }
+        .onReceive(NotificationCenter.default.publisher(for: RipulMoveSessionRequest.notification)) { _ in
+            if let request = RipulMoveSessionRequest.take() {
+                honorMoveSessionRequest(id: request.sessionId, targetMachineId: request.targetMachineId)
+            }
+        }
+        .onAppear {
+            if let request = RipulMoveSessionRequest.take() {
+                honorMoveSessionRequest(id: request.sessionId, targetMachineId: request.targetMachineId)
+            }
+        }
+        .onAppear {
+            let icons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
+            if machineIcons != icons { machineIcons = icons }
+        }
+        .onChange(of: model.machines) { _, machines in
+            let icons = RemoteMachine.iconsByDisplayName(machines: machines, cache: cache)
+            if machineIcons != icons { machineIcons = icons }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: RemoteMachine.iconsDidChangeNotification)) { _ in
+            let icons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
+            if machineIcons != icons { machineIcons = icons }
+        }
+        .ripulTopBarInset {
+            if showsTitleLozenge {
+                // Screen title lozenge — standalone mode. Long-press opens the
+                // DevTools console (ConsoleLogViewer), presented by whoever hosts
+                // this view.
+                Text("Sessions")
+                    .font(.ripul(.caption))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.ripul(.text))
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .modifier(GlassPillModifier())
+                    .simultaneousGesture(
+                        LongPressGesture(minimumDuration: 1.0).onEnded { _ in
+                            NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
+                        }
+                    )
+                    .uiKitIdentifier("RipulSessions.topBar.titleLozenge")
+                    .padding(.top, 4)
+            } else {
+                // Embedded mode — mirrors the native app's SessionListScreen: a
+                // transparent 52pt spacer for the screen's floating unified top
+                // bar, with the choose-mode banner below it when active. The
+                // spacer is dropped where no floating bar covers the list (see
+                // reservesTopBarSpace) — otherwise it reads as a stranded gap.
+                VStack(spacing: 0) {
+                    if reservesTopBarSpace {
+                        Color.clear.frame(height: GlassTopBarLayout.contentReservation)
+                    }
+                    if let chooseMode {
+                        ChooseModeBannerHost(chooseMode: chooseMode)
+                    }
+                }
+            }
+        }
+        // No list-level drag to open the host's sidebar. It used to be a
+        // DragGesture that flipped `showingSidebar` on release: it never
+        // tracked the thumb, and because it recognised first it starved the
+        // host's thumb-tracking edge recognizer (SidebarEdgeSwipeView), which
+        // then never began. It was also attached with no binding at all,
+        // swallowing horizontal drags for nothing. The host owns the edge.
+        .renameSessionAlert(renamingSession: $renamingSession, renameText: $renameText, bridge: bridge)
+        // Keep feedback on the list itself: a competing sheet/presentation
+        // must not turn a failed open into a spinner that simply disappears.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Group {
+                if let error = model.openSessionError ?? model.connectError {
+                    sessionErrorNotice(error)
+                } else if let note = model.infoNotice {
+                    sessionInfoNotice(note)
+                }
+            }
+            .modifier(MeasuredBottomPadding(clearance: noticeBottomClearance))
+        }
+        #if os(iOS)
+        // Measure the whole list, outside the inset, so the notice's own
+        // height never feeds back into the clearance.
+        .background(SessionsScrollBoundsReader { [noticeBottomClearance] in
+            noticeBottomClearance.set($0)
+        })
+        #endif
+        .connectionDiagnosis($errorDetails, subject: errorSubject, bridge: bridge)
+        // Move to Machine reports here, step by step, rather than in the
+        // notice at the foot of the list, where a failed move went unseen.
+        .ripulSheet(isPresented: Binding(
+            get: { model.moveState != nil && !model.moveSheetHidden },
+            set: { if !$0 { model.dismissMoveSheet() } }
+        )) {
+            MoveChatSheetHost(model: model)
+        }
+    }
+
+    private var sessionsList: some View {
+        let seen = listIsSeen
+        let rows = chats
+        visibility.isSeen = seen
+        visibility.sessionsRevision = model.unifiedSessionsRevision
+        let followsRecency: Bool = if case .recent(_, let autoSort) = presentation {
+            autoSort || visibility.renderedRevision == nil
+        } else {
+            true
+        }
+        var hasher = Hasher()
+        hasher.combine(rows.count)
+        hasher.combine(model.unifiedSessionsRevision)
+        hasher.combine(model.machinesRevisionUnobserved)
+        if followsRecency {
+            hasher.combine(bridge.sessionList.recencyRevisionUnobserved)
+        }
+        hasher.combine(bridge.sessionList.phasesRevision)
+        hasher.combine(bridge.sessionList.pinnedChatKeys)
+        hasher.combine(bridge.tabIdentityRevision)
+        hasher.combine(PendingQuestionStore.shared.questionsRevision)
+        hasher.combine(highlightsActiveSession ? bridge.activeSessionId : nil)
+        hasher.combine(presentation)
+        hasher.combine(searchText)
+        hasher.combine(renamingSession?.id)
+        hasher.combine(renameText)
+        hasher.combine(machineIcons)
+        hasher.combine(remoteActionsByMachine.count)
+        hasher.combine(model.isLoadingRemoteSessions)
+        hasher.combine(model.hasSuccessfulMachinesResponse)
+        hasher.combine(model.openingUnifiedSessionId)
+        hasher.combine(model.archivingUnifiedSessionId)
+        hasher.combine(model.deletingUnifiedSessionId)
+        hasher.combine(model.leavingUnifiedSessionId)
+        hasher.combine(model.sessionPlacements)
+        hasher.combine(model.teamSharedKeys)
+        hasher.combine(model.restartingMachineId)
+        hasher.combine(model.restartSucceededId)
+        hasher.combine(model.connectingMachineId)
+        hasher.combine(model.isLoadingOlderSessions)
+        hasher.combine(model.hasMoreOlderSessions)
+        hasher.combine(model.hasLoadedAllOlderSessions)
+        hasher.combine(model.olderSessionsNote)
+        let revision = hasher.finalize()
+        // Not drawn again with the screens around it while nobody can see it,
+        // unless a chat joins or leaves (it names its chats to the host), and
+        // not redrawn on a tab switch when nothing changed while it was hidden.
+        return ListWhileHidden(isShown: seen, chatCount: rows.count, revision: revision, visibility: visibility) {
         // Only this subtree follows the ~2s last-active ticks of a running agent.
         LastActiveReader(model.lastActive) { lastActiveBySessionId in
         GlassSessionsList(
@@ -354,7 +609,7 @@ public struct RipulSessionsView: View {
             machines: model.machines,
             connectingMachineId: model.connectingMachineId,
             callbacks: callbacks,
-            unifiedSessions: model.unifiedSessions,
+            unifiedSessions: rows,
             isLoadingRemoteSessions: model.isLoadingRemoteSessions,
             hasResolvedMachines: model.hasSuccessfulMachinesResponse,
             openingUnifiedSessionId: model.openingUnifiedSessionId,
@@ -400,6 +655,7 @@ public struct RipulSessionsView: View {
                 await model.refresh()
             },
             allowRipulAgents: allowRipulAgents,
+            showsMachinesPanel: showsMachinesPanel,
             onDiscoverActions: quickActionsEnabled ? { machine in
                 Task {
                     let raw = await bridge.discoverRemoteActions(machineId: machine.machineId)
@@ -420,116 +676,15 @@ public struct RipulSessionsView: View {
             emptyStateOverride: emptyStateOverride,
             onListedSessionsChanged: onListedSessionsChanged,
             olderChats: olderChatsRow,
+            presentation: presentation,
+            visibility: visibility,
             searchText: $searchText,
             renamingSession: $renamingSession,
             renameText: $renameText
         )
         }
-        .task {
-            // Pick mode borrows the HOST's live model — kicking initialLoad
-            // there fires a publish burst on presentation that re-renders the
-            // presenting subtree and knocks the just-presented sheet down
-            // (tap Link -> sheet appears -> immediately falls back).
-            if onPickUnifiedSession == nil {
-                model.initialLoad()
-            }
-            if quickActionsEnabled, remoteActionsByMachine.isEmpty {
-                remoteActionsByMachine = RemoteActionDescriptor.loadAllCached(cache: cache)
-            }
         }
-        .onReceive(workspace?.$pendingSessionID.eraseToAnyPublisher() ?? Just(nil).eraseToAnyPublisher()) { _ in honorWindowRequest() }
-        .onChange(of: model.unifiedSessions.map(\.id)) { _ in honorWindowRequest() }
-        .onChange(of: bridge.isSessionsReady) { _ in honorOpenSessionRequest(); honorWindowRequest() }
-        .onChange(of: model.hasCompletedAuthRefresh) { _ in honorOpenSessionRequest(); honorWindowRequest() }
-        .onRipulOpenSessionRequest(sessionCount: model.unifiedSessions.count) { honorOpenSessionRequest() }
-        .onReceive(NotificationCenter.default.publisher(for: RipulMoveSessionRequest.notification)) { _ in
-            if let request = RipulMoveSessionRequest.take() {
-                honorMoveSessionRequest(id: request.sessionId, targetMachineId: request.targetMachineId)
-            }
-        }
-        .onAppear {
-            if let request = RipulMoveSessionRequest.take() {
-                honorMoveSessionRequest(id: request.sessionId, targetMachineId: request.targetMachineId)
-            }
-        }
-        .onAppear { machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache) }
-        .onChange(of: model.machines) { _, machines in
-            machineIcons = RemoteMachine.iconsByDisplayName(machines: machines, cache: cache)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: RemoteMachine.iconsDidChangeNotification)) { _ in
-            machineIcons = RemoteMachine.iconsByDisplayName(machines: model.machines, cache: cache)
-        }
-        .ripulTopBarInset {
-            if showsTitleLozenge {
-                // Screen title lozenge — standalone mode. Long-press opens the
-                // DevTools console (ConsoleLogViewer), presented by whoever hosts
-                // this view.
-                Text("Sessions")
-                    .font(.ripul(.caption))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.ripul(.text))
-                    .lineLimit(1)
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 44)
-                    .modifier(GlassPillModifier())
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 1.0).onEnded { _ in
-                            NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
-                        }
-                    )
-                    .uiKitIdentifier("RipulSessions.topBar.titleLozenge")
-                    .padding(.top, 4)
-            } else {
-                // Embedded mode — mirrors the native app's SessionListScreen: a
-                // transparent 52pt spacer for the screen's floating unified top
-                // bar, with the choose-mode banner below it when active. The
-                // spacer is dropped where no floating bar covers the list (see
-                // reservesTopBarSpace) — otherwise it reads as a stranded gap.
-                VStack(spacing: 0) {
-                    if reservesTopBarSpace {
-                        Color.clear.frame(height: 52)
-                    }
-                    if let chooseMode {
-                        ChooseModeBannerHost(chooseMode: chooseMode)
-                    }
-                }
-            }
-        }
-        // No list-level drag to open the host's sidebar. It used to be a
-        // DragGesture that flipped `showingSidebar` on release: it never
-        // tracked the thumb, and because it recognised first it starved the
-        // host's thumb-tracking edge recognizer (SidebarEdgeSwipeView), which
-        // then never began. It was also attached with no binding at all,
-        // swallowing horizontal drags for nothing. The host owns the edge.
-        .renameSessionAlert(renamingSession: $renamingSession, renameText: $renameText, bridge: bridge)
-        // Keep feedback on the list itself: a competing sheet/presentation
-        // must not turn a failed open into a spinner that simply disappears.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Group {
-                if let error = model.openSessionError ?? model.connectError {
-                    sessionErrorNotice(error)
-                } else if let note = model.infoNotice {
-                    sessionInfoNotice(note)
-                }
-            }
-            .padding(.bottom, noticeBottomClearance)
-        }
-        #if os(iOS)
-        // Measure the whole list, outside the inset, so the notice's own
-        // height never feeds back into the clearance.
-        .background(SessionsScrollBoundsReader(bottomBar: bottomBar) {
-            noticeBottomClearance = $0
-        })
-        #endif
-        .connectionDiagnosis($errorDetails, subject: errorSubject, bridge: bridge)
-        // Move to Machine reports here, step by step, rather than in the
-        // notice at the foot of the list, where a failed move went unseen.
-        .ripulSheet(isPresented: Binding(
-            get: { model.moveState != nil && !model.moveSheetHidden },
-            set: { if !$0 { model.dismissMoveSheet() } }
-        )) {
-            MoveChatSheetHost(model: model)
-        }
+        .equatable()
     }
 
     private func sessionInfoNotice(_ note: String) -> some View {
@@ -666,8 +821,50 @@ extension RipulSessionsView: Equatable {
                 && lhs.showsTitleLozenge == rhs.showsTitleLozenge
                 && (lhs.showingSidebar == nil) == (rhs.showingSidebar == nil)
                 && lhs.quickActionsEnabled == rhs.quickActionsEnabled
+                && lhs.showsMachinesPanel == rhs.showsMachinesPanel
                 && lhs.reservesTopBarSpace == rhs.reservesTopBarSpace
                 && lhs.highlightsActiveSession == rhs.highlightsActiveSession
+                && lhs.presentation == rhs.presentation
+        }
+    }
+}
+
+/// Whether the list's screen is shown, and the revision it last rendered while
+/// shown. Held by reference so `GlassSessionsList` reads `isSeen` without an
+/// `@Environment(\.screenIsShown)` subscription that would bypass
+/// `ListWhileHidden.equatable()` on every tab switch.
+public final class SessionListVisibility {
+    public var isSeen = true
+    public var sessionsRevision = 0
+    public var renderedRevision: Int?
+    public init() {}
+}
+
+/// A session list nobody can see (a tab behind another, a chat over it) is
+/// not drawn again with the screens around it. Whatever redrew them (a Mac's
+/// details, a question, the chat screen behind Home) rebuilt every row of the
+/// hidden Agents list: 528 row redraws in 30 s while Peter scrolled Home's
+/// three rows on his Duo (5 November 2026). It is drawn again when it is
+/// shown (if anything changed while it was hidden), or when a chat joins or
+/// leaves, since it names its chats to the host.
+private struct ListWhileHidden<Content: View>: View, Equatable {
+    let isShown: Bool
+    let chatCount: Int
+    let revision: Int
+    let visibility: SessionListVisibility
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        visibility.renderedRevision = revision
+        return content()
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        MainActor.assumeIsolated {
+            if !rhs.isShown {
+                return lhs.chatCount == rhs.chatCount
+            }
+            return rhs.visibility.renderedRevision == rhs.revision && lhs.chatCount == rhs.chatCount
         }
     }
 }

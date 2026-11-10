@@ -1,0 +1,110 @@
+# WAC Next: the first piece of the WAC native CMS app proof of concept.
+# wac for business (WACBusiness): the business site (business.wac.rocks) as a native app.
+# The .xcodeproj is generated from this file and gitignored: run `xcodegen generate` here.
+# Build into ./build only (the one DerivedData folder sanctioned for these apps; both share it,
+# and the SDK's warm build with it).
+name: WACNext
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  RipulAgent:
+    path: ../..
+targets:
+  WACNext:
+    type: application
+    platform: iOS
+    sources:
+      - WACNext
+    dependencies:
+      - package: RipulAgent
+        product: RipulAgent
+      # The running shift's Live Activity (the SDK's CmsRunningActivityWidget).
+      - target: WACNextWidgets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.WAC.next
+        PRODUCT_NAME: WACNext
+        DEVELOPMENT_TEAM: C7AA358R56
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: WAC Next
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # Always light, as WAC's own app is (its Info.plist sets UIUserInterfaceStyle Light).
+        INFOPLIST_KEY_UIUserInterfaceStyle: Light
+        ENABLE_PREVIEWS: NO
+        INFOPLIST_KEY_NSSupportsLiveActivities: YES
+    # The link a Live Activity opens (wacnext://ripul-page/<slug>, CmsAppController.handle(url:)).
+    info:
+      path: WACNext/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.WAC.next
+            CFBundleURLSchemes: [wacnext]
+  WACBusiness:
+    type: application
+    platform: iOS
+    sources:
+      - WACBusiness
+    dependencies:
+      - package: RipulAgent
+        product: RipulAgent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.WAC.business
+        PRODUCT_NAME: WACBusiness
+        DEVELOPMENT_TEAM: C7AA358R56
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: wac business
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        # Business pages have wide grids and timelines: landscape helps.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        ENABLE_PREVIEWS: NO
+    # wacbusiness://ripul-page/<slug> opens a page (CmsAppController.handle(url:)).
+    info:
+      path: WACBusiness/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.WAC.business
+            CFBundleURLSchemes: [wacbusiness]
+  WACNextWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - WACNextWidgets
+    dependencies:
+      - package: RipulAgent
+        product: RipulLiveActivity
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    info:
+      path: WACNextWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: WAC Next
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.WAC.next.widgets
+        PRODUCT_NAME: WACNextWidgets
+        DEVELOPMENT_TEAM: C7AA358R56
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        APPLICATION_EXTENSION_API_ONLY: YES

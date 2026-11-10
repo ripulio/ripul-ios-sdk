@@ -44,7 +44,10 @@ public final class SessionListStore {
     /// Moves whenever a last-active change could reorder a recency-sorted list:
     /// a new chat, or a chat whose new time passed another chat's. A running
     /// chat already on top advances without touching it.
-    public private(set) var recencyRevision = 0
+    public private(set) var recencyRevision = 0 {
+        didSet { recencyRevisionUnobserved = recencyRevision }
+    }
+    @ObservationIgnored public private(set) var recencyRevisionUnobserved = 0
 
     // MARK: - Storage maps (write API; unobserved — read per chat via `cell`)
 
@@ -67,6 +70,12 @@ public final class SessionListStore {
         keys.contains { pinnedChatKeys.contains(AgentBridge.canonicalChatKey($0)) }
     }
 
+    /// Per-chat user-configured SF Symbol icon (replaces the model/provider
+    /// glyph in `UnifiedSessionRow` when no tool icon is active).
+    @ObservationIgnored public var customIconsByChatId: [String: String] = [:] {
+        didSet { diff(oldValue, customIconsByChatId) { cell, value in cell.customIcon = value } }
+    }
+
     /// Per-chat latest activity event (session-list subtitle while running).
     @ObservationIgnored public var latestActivityByChatId: [String: AgentActivityEvent] = [:] {
         didSet { diff(oldValue, latestActivityByChatId) { cell, value in cell.latestActivity = value } }
@@ -79,7 +88,7 @@ public final class SessionListStore {
             guard oldValue != lastActiveTimeByChatId else { return }
             diff(oldValue, lastActiveTimeByChatId) { cell, value in cell.lastActive = value }
             if !updatesSuppressed {
-                if recencyOrderMayChange(from: oldValue, to: lastActiveTimeByChatId) { recencyRevision &+= 1 }
+                if recencyOrderMayChange(from: oldValue, to: lastActiveTimeByChatId) { recencyMayHaveChanged() }
                 lastActiveTimeSubject.send(lastActiveTimeByChatId)
             }
         }
@@ -110,8 +119,12 @@ public final class SessionListStore {
     /// Per-chat agent turn phase, stored RAW (running / awaitingInput /
     /// completed / failed). The display collapse happens in `turnPhase(for:)`.
     @ObservationIgnored public var sessionPhases: [String: AgentTurnPhase] = [:] {
-        didSet { diff(oldValue, sessionPhases) { cell, value in cell.rawPhase = value } }
+        didSet {
+            if oldValue != sessionPhases { phasesRevision &+= 1 }
+            diff(oldValue, sessionPhases) { cell, value in cell.rawPhase = value }
+        }
     }
+    @ObservationIgnored public private(set) var phasesRevision = 0
 
     /// When the phase above was established. No view reads it.
     @ObservationIgnored public var phaseTimestampByChatId: [String: Date] = [:]
@@ -126,6 +139,20 @@ public final class SessionListStore {
             if cell("cli_\(key)").unread { return true }
         }
         return false
+    }
+
+    /// User-chosen SF Symbol icon for any of the supplied aliases of a session,
+    /// or nil when the row should show its model/provider icon.
+    public func customIcon(anyOf keys: [String?]) -> String? {
+        var found: String?
+        for case let key? in keys where !key.isEmpty {
+            for candidate in SessionReadLedger.iconLookupKeys(for: key) {
+                if let icon = cell(candidate).customIcon, found == nil {
+                    found = icon
+                }
+            }
+        }
+        return found
     }
 
     /// Whether a chat is mid-turn, or has stopped to ask its person something:
@@ -253,6 +280,7 @@ public final class SessionListStore {
 
     private func load(_ cell: SessionActivityCell, _ key: String) {
         cell.unread = unreadChatIds.contains(key)
+        cell.customIcon = customIconsByChatId[key]
         cell.latestActivity = latestActivityByChatId[key]
         cell.lastActive = lastActiveTimeByChatId[key]
         cell.sessionActions = sessionActionsByChatId[key]
@@ -262,21 +290,36 @@ public final class SessionListStore {
         cell.rawPhase = sessionPhases[key]
     }
 
+    /// Not mid-slide or mid-scroll: a list does not move its rows under the
+    /// finger, or under a chat sliding over it, as it holds them under the
+    /// pointer. With several agents working their chats keep overtaking one
+    /// another; a reorder lands when the slide or scroll rests, a burst as one.
+    /// Only a list on screen with its order free follows it (GlassSessionsList's
+    /// `followsRecency`). This hold first stood in for that: each reorder
+    /// redrew every session list, hidden ones too, 70 to 170 ms at a time under
+    /// the finger on an iPhone Duo (5 November 2026).
+    private func recencyMayHaveChanged() {
+        ChatSlideProbe.afterSlide("sessionStore.recency") { [weak self] in self?.recencyRevision &+= 1 }
+    }
+
     private func resyncAllCells() {
         for (key, cell) in cells { load(cell, key) }
         recencyRevision &+= 1
     }
 
-    /// Whether an updated time could reorder the chats: a new key, or one whose
-    /// time crossed another key's. The common case — the running chat, already
-    /// most recent, advancing — reorders nothing.
+    /// Whether an updated time could reorder the chats: a new key, one whose
+    /// 30-second recency bucket changed (which can overtake a chat whose time
+    /// lives only in `UnifiedSession.lastUsed`), or one whose time crossed
+    /// another key's. The common case — the running chat, already most recent,
+    /// advancing within its 30s bucket — reorders nothing.
     private func recencyOrderMayChange(from old: [String: Date], to new: [String: Date]) -> Bool {
         if old.count != new.count { return true }
         for (key, time) in new {
             guard let previous = old[key] else { return true }
             guard previous != time else { continue }
+            if Int(previous.timeIntervalSince1970 / 30) != Int(time.timeIntervalSince1970 / 30) { return true }
             let low = min(previous, time), high = max(previous, time)
-            for (other, otherTime) in new where other != key && otherTime > low && otherTime < high { return true }
+            for (other, otherTime) in new where other != key && otherTime >= low && otherTime <= high { return true }
         }
         return false
     }
@@ -288,6 +331,7 @@ public final class SessionListStore {
 @Observable
 public final class SessionActivityCell {
     public internal(set) var unread = false
+    public internal(set) var customIcon: String?
     public internal(set) var latestActivity: AgentActivityEvent?
     public internal(set) var lastActive: Date?
     public internal(set) var sessionActions: [SessionRowAction]?

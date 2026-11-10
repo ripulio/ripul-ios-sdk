@@ -713,6 +713,188 @@ public final class ScreenSwitcherStore: ObservableObject {
         touch(landing.id)
     }
 
+    // MARK: - Carried to a wide window's edge
+
+    /// Where a card carried sideways during the pull would dock, on each side,
+    /// in the owning window's coordinates.
+    public struct DockTargets: Equatable {
+        public var left: CGRect
+        public var right: CGRect
+        /// The card takes the app with it to that side (a chat, which never
+        /// leaves the app), and the other side is chosen afterwards; otherwise
+        /// the card's screen docks there, beside the app.
+        public var appMoves: Bool
+
+        public init(left: CGRect, right: CGRect, appMoves: Bool = false) {
+            self.left = left
+            self.right = right
+            self.appMoves = appMoves
+        }
+
+        public func rect(for side: DockSide) -> CGRect { side == .left ? left : right }
+        /// The window's width, as far as the targets reach.
+        var width: CGFloat { max(left.maxX, right.maxX) }
+    }
+
+    public enum DockSide: Equatable {
+        case left, right
+        public var opposite: DockSide { self == .left ? .right : .left }
+    }
+
+    /// Asked once as each pull begins from the live screen: where the card
+    /// would dock on each side of the window, or nil where it cannot. A window
+    /// wide enough for two things side by side (an open iPhone Duo, an iPad in
+    /// landscape) docks the screen you are pulling into its left or right, as
+    /// the Duo docks an app carried there from its app switcher (Peter,
+    /// 1 November 2026). Nil leaves the pull exactly as it was: the card stays
+    /// centred whatever the finger does sideways, as on a phone.
+    public var dockTargetsProvider: (() -> DockTargets?)?
+
+    /// The targets for the pull in flight, frozen as it began.
+    @Published public private(set) var dockTargets: DockTargets?
+
+    /// How far sideways the finger has carried the card since the pull began.
+    /// Zero unless the pull can dock.
+    @Published public private(set) var carry: CGFloat = 0
+
+    /// The edge the card is over: letting go docks it there.
+    @Published public private(set) var dockHover: DockSide?
+
+    /// The side the card is landing in, from a release over an edge until the
+    /// host has docked it. No tap is live meanwhile.
+    @Published public private(set) var dockLanding: DockSide?
+
+    /// From the card where the finger left it (0) to filling its side (1).
+    @Published public private(set) var dockLandingProgress: CGFloat = 0
+
+    public var isDocking: Bool { dockLanding != nil }
+
+    /// The finger, in the owning window's coordinates, as the pull's touch
+    /// tracker last saw it. Not published: read as the pull moves.
+    public var fingerLocation: CGPoint?
+
+    /// Raised once the card has landed in its side, with the document it stands
+    /// for and the side. The host docks it, and inside this callback calls
+    /// `completeDock(landingOn:)`. A host that does not gets the board back at
+    /// the grid, card intact.
+    public var onDock: ((String, DockSide) -> Void)?
+
+    /// How near an edge the finger has to come, in points, and how far from it
+    /// it has to go again once in: the floating panels' figures
+    /// (`FloatingPanelDocking`), so the two ways in feel the same.
+    static let dockEdgeReach: CGFloat = 64
+    static let dockEdgeRelease: CGFloat = 140
+
+    /// Whether a carried card is over an edge. In: the card lifted (the pull
+    /// would at least reach the deck), carried a little toward that edge, and
+    /// the finger near it or the card carried a good way across. Out only
+    /// further away, so a finger resting at the boundary doesn't flicker.
+    static func dockSide(fingerX: CGFloat?, carry: CGFloat, width: CGFloat, lifted: Bool,
+                         current: DockSide?) -> DockSide? {
+        guard lifted, width > 0 else { return nil }
+        func over(_ side: DockSide, wasOver: Bool) -> Bool {
+            let toward = side == .right ? carry : -carry
+            // A pull that starts near an edge has not been carried anywhere.
+            guard toward > (wasOver ? 0 : 24) else { return false }
+            let edgeDistance = fingerX.map { side == .right ? width - $0 : $0 } ?? .infinity
+            return wasOver
+                ? edgeDistance < dockEdgeRelease || toward > width * 0.18
+                : edgeDistance < dockEdgeReach || toward > width * 0.28
+        }
+        if let current, over(current, wasOver: true) { return current }
+        if over(.right, wasOver: false) { return .right }
+        if over(.left, wasOver: false) { return .left }
+        return nil
+    }
+
+    /// The pull moved sideways, `translation` points from where it began.
+    public func updateCarry(translation: CGFloat) {
+        guard isDragging, isActive, dockLanding == nil, let dockTargets else { return }
+        // Tracked directly, as the sideways strip is: the vertical ramp eases
+        // because a stalled frame must not jump the card down the screen, but
+        // the carry is the finger saying where the card goes.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { carry = translation }
+        let side = Self.dockSide(fingerX: fingerLocation?.x, carry: translation, width: dockTargets.width,
+                                 lifted: pullTarget >= deckThreshold, current: dockHover)
+        if side != dockHover { dockHover = side }
+    }
+
+    /// Let go over an edge: the card goes to its side, and the host docks it
+    /// once it is there.
+    private func land(in side: DockSide) {
+        endPullMotion()
+        dockHover = nil
+        dockLanding = side
+        settleToken &+= 1
+        let token = settleToken
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.9)) { dockLandingProgress = 1 }
+        let docked = activeDestinationId
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 380_000_000)
+            guard self.settleToken == token, self.dockLanding == side else { return }
+            self.onDock?(docked, side)
+            // A host that did not take it would leave the card parked in a
+            // side with nothing docked under it. Put it back on the grid.
+            if self.dockLanding != nil { self.settle(to: .grid) }
+        }
+    }
+
+    /// Finish a dock the host has accepted.
+    ///
+    /// With a landing document the board stays open on it at the grid, with
+    /// the app beside the dock: the other side is chosen there, as the Duo
+    /// shows its Home Screen beside an app it has just docked. Without one
+    /// the board goes at once, unanimated: what was docked is on screen
+    /// beneath it already, where the card was put.
+    public func completeDock(landingOn landingId: String?) {
+        guard dockLanding != nil else { return }
+        guard let landingId, let landing = document(for: landingId) else {
+            closeImmediately()
+            return
+        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            clearCarry()
+            activeDestinationId = landing.id
+            progress = 1
+            stop = .grid
+            interactiveBase = 1
+            isCommitted = true
+            isDragging = false
+        }
+        activeSnapshot = snapshot(for: landing.id)
+        deckPosition = CGFloat(order.firstIndex(of: landing.id) ?? 0)
+        touch(landing.id)
+    }
+
+    #if DEBUG
+    /// A pull carried to `side` as a finger would make it, for a host's fixture:
+    /// lifted to the grid, the finger 20 points from that edge, let go.
+    /// Nothing happens where the host offers no dock.
+    public func carryToEdgeFixture(_ side: DockSide) {
+        beginInteractive(snapshot: nil)
+        guard let targets = dockTargets else {
+            cancelInteractive()
+            return
+        }
+        updateInteractive(translation: travelDistance)
+        fingerLocation = CGPoint(x: side == .right ? targets.width - 20 : 20, y: targets.right.midY)
+        updateCarry(translation: (side == .right ? 1 : -1) * targets.width * 0.4)
+        endInteractive(translation: travelDistance, velocity: 0)
+    }
+    #endif
+
+    private func clearCarry() {
+        carry = 0
+        dockHover = nil
+        dockLanding = nil
+        dockLandingProgress = 0
+        dockTargets = nil
+    }
+
     /// Fade the whole overview out and unmount. Shared by the quick-launch
     /// dismissal and a fold with nowhere to land.
     private func dismissFlat() {
@@ -727,7 +909,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     }
 
     public func beginInteractive(snapshot: UIImage?) {
-        guard !isOpen, !isBubbling, !isDragging else { return }
+        guard !isOpen, !isBubbling, !isDocking, !isDragging else { return }
         settleToken &+= 1
         // Only capture when starting from the live screen. Resuming the pull
         // FROM the deck must not re-snapshot: the key window is the deck at that
@@ -742,6 +924,13 @@ public final class ScreenSwitcherStore: ObservableObject {
             // Asked here and not per frame: the answer depends on where the
             // host's bubble would sit, and that must not move under a drag.
             bubbleTarget = bubbleTargetProvider?()
+            // Likewise where the card would dock. Only from the live screen:
+            // on the deck a sideways drag pages the cards.
+            dockTargets = dockTargetsProvider?()
+            carry = 0
+            dockHover = nil
+        } else {
+            dockTargets = nil
         }
         interactiveBase = progress
         isActive = true
@@ -770,6 +959,11 @@ public final class ScreenSwitcherStore: ObservableObject {
     public func endInteractive(translation: CGFloat, velocity: CGFloat) {
         guard isDragging, isActive, !isOpen, !isBubbling else { return }
         isDragging = false
+        // Over an edge, the card docks there instead of landing on a stop.
+        if let side = dockHover, onDock != nil, dockTargets != nil {
+            land(in: side)
+            return
+        }
         let target = destination(progress: pullTarget, velocity: velocity)
         if pullHasPresentedStart {
             settle(to: target)
@@ -1178,7 +1372,7 @@ public final class ScreenSwitcherStore: ObservableObject {
     }
 
     public func close() {
-        guard isActive, !isBubbling else { return }
+        guard isActive, !isBubbling, !isDocking else { return }
         settle(to: .screen)
     }
 
@@ -1349,6 +1543,7 @@ public final class ScreenSwitcherStore: ObservableObject {
         deckCardId = nil
         deckCardOffset = 0
         bubbleTarget = nil
+        clearCarry()
     }
 
     /// Invalidates a pending unmount when a new gesture starts before the last
@@ -1387,8 +1582,15 @@ public final class ScreenSwitcherStore: ObservableObject {
         }
         settleToken &+= 1
         let token = settleToken
+        // A card carried sideways and let go anywhere but an edge (or one whose
+        // dock the host did not take) comes back to the middle with the spring.
+        dockHover = nil
+        dockLanding = nil
+        dockTargets = nil
         withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
             progress = progress(of: target)
+            carry = 0
+            dockLandingProgress = 0
         }
         if target == .bubble {
             // Hand off once the fold has visibly landed, not on release: the

@@ -177,6 +177,10 @@ final class NativeToolRendererTests: XCTestCase {
         }
         XCTAssertEqual(NativeToolRendererKind.resolve("functions.mcp__ripul_tools__list_agents"), .agentList)
         XCTAssertEqual(ToolIconMap.symbol(for: "list_agents"), "bubble.left.and.bubble.right")
+        XCTAssertEqual(NativeToolRendererKind.resolve("mcp__ripul_tools__search_chats"), .chatSearch)
+        XCTAssertEqual(ToolIconMap.symbol(for: "mcp__ripul_tools__search_chats"), "bubble.left.and.bubble.right")
+        XCTAssertEqual(NativeToolRendererKind.resolve("mcp__ripul_tools__present_chats"), .chatPresent)
+        XCTAssertEqual(ToolIconMap.symbol(for: "present_chats"), "bubble.left.and.bubble.right")
         XCTAssertEqual(NativeToolRendererKind.resolve("Agent"), .agent, "Claude's own sub-agent tool keeps its panel")
         XCTAssertEqual(NativeAgentRuntime.text(harness: "Claude Code", model: "claude-cli-raw-opus", "on MacBook Pro"), "Claude Code · Opus · on MacBook Pro")
         XCTAssertEqual(NativeAgentRuntime.text(harness: "Codex", model: "codex-shared-cli-raw-default", nil), "Codex", "A default model named after its CLI is not said twice")
@@ -256,5 +260,56 @@ final class NativeToolRendererTests: XCTestCase {
         XCTAssertFalse(NativeToolValueView.isCompactFieldControl(key: "script", item: .string("echo 1\necho 2")))
         XCTAssertFalse(NativeToolValueView.isCompactFieldControl(key: "nested", item: .object(["a": .number(1)])))
         XCTAssertFalse(NativeToolValueView.isCompactFieldControl(key: "summary", item: .string("## Heading\n\nA multi-sentence markdown explanation.")))
+    }
+
+    @MainActor
+    func testPresentChatsAndSearchChatsResolveSessionsAndSummaries() throws {
+        let presentWire: [String: Any] = [
+            "id": "present-1",
+            "toolName": "mcp__ripul_tools__present_chats",
+            "status": "success",
+            "timestamp": 1_726_034_000_000,
+            "arguments": #"{"title":"Related chats","chats":[{"agentId":"cli_abc","note":"Working on masthead"}]}"#,
+            "result": #"{"title":"Related chats","chats":[{"agentId":"cli_abc","title":"Masthead safe area","harness":"claude","model":"claude-cli-raw-opus","status":"running","note":"Working on masthead","currentTask":"Extend purple background"}]}"#,
+            "diagnostics": "{}",
+            "agentComms": [
+                "kind": "present",
+                "verb": "Presented chats",
+                "title": "Related chats",
+                "target": ["name": "Related chats"],
+                "status": ["text": "1 chat", "tone": "ok"],
+                "sessions": [
+                    [
+                        "chatId": "cli_abc",
+                        "agentId": "cli_abc",
+                        "title": "Masthead safe area",
+                        "harness": "claude",
+                        "model": "claude-cli-raw-opus",
+                        "status": "running",
+                        "note": "Working on masthead",
+                        "currentTask": "Extend purple background",
+                    ],
+                ],
+                "details": [["label": "Masthead safe area", "value": "cli_abc"]],
+            ],
+        ]
+        let presentCall = try JSONDecoder().decode(ToolCallDetail.self, from: JSONSerialization.data(withJSONObject: presentWire))
+        let presentSummary = NativeToolSummary(presentCall)
+        XCTAssertEqual(presentSummary.title, "Related chats")
+        let presentContent = NativeToolContent(presentCall)
+        XCTAssertEqual(presentContent.kind, .chatPresent)
+        let items = NativeChatSessionListResolver.extractItems(from: presentContent)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.agentId, "cli_abc")
+        XCTAssertEqual(items.first?.note, "Working on masthead")
+
+        let resolved = NativeChatSessionListResolver.resolveUnifiedSession(
+            for: items[0],
+            listModel: nil,
+            bridge: nil
+        )
+        XCTAssertEqual(resolved.title, "Masthead safe area")
+        XCTAssertTrue(resolved.runningOnHost)
+        XCTAssertEqual(resolved.provider, "claude-cli")
     }
 }

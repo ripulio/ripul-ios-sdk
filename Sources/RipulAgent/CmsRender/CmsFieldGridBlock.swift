@@ -124,6 +124,8 @@ struct CmsFieldGridBlockView: View {
                 Group {
                     if querySlug.isEmpty || block.props.string("layoutMode") == "grid" {
                         placedContent(row: row, fields: fields)
+                    } else if let styled {
+                        styledRows(row: row, fields: fields, style: styled)
                     } else {
                         fieldFlow(row: row, fields: fields)
                     }
@@ -177,7 +179,7 @@ struct CmsFieldGridBlockView: View {
                     Text(runtime.resolveTemplate(title))
                         .font(.system(size: CmsTypography.size(typo) ?? 15,
                                       weight: CmsTypography.weight(typo) ?? .semibold))
-                        .foregroundColor(runtime.color(typo?.string("color")) ?? .primary)
+                        .foregroundColor(runtime.textColor(typo?.string("color")))
                 }
                 if pickerMode && !hideSingle {
                     recordPicker(rows: rows, current: row)
@@ -270,6 +272,34 @@ struct CmsFieldGridBlockView: View {
         }
     }
 
+    /// The site's list style, unless it is the bare built-in `system` (then
+    /// the form looks as it always has).
+    private var styled: CmsResolvedListStyle? {
+        let style = runtime.listStyle(for: block)
+        return style.isBareSystem ? nil : style
+    }
+
+    /// The fields as list rows, the way Settings shows a record: the label as
+    /// the row's title, the value trailing. A picture field shows its card
+    /// under its label.
+    private func styledRows(row: [String: CmsJSON]?, fields: [Field], style: CmsResolvedListStyle) -> some View {
+        CmsStyledRows(style: style, items: fields) { field in
+            if field.image != nil {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(field.label)
+                        .font(style.titleFont)
+                        .foregroundStyle(style.titleColor)
+                    imageCard(field, row: row)
+                }
+                .cmsListRowPadding(style)
+            } else {
+                let text = value(field, row: row)
+                CmsListRowContent(style: style, title: field.label, trailing: text.isEmpty ? "—" : text)
+            }
+        }
+        .cmsInspectorID("Cms.fieldGrid.rows")
+    }
+
     private func fieldFlow(row: [String: CmsJSON]?, fields: [Field]) -> some View {
         let gap = CGFloat(block.props.double("gap") ?? 2) * 8
         let columns: [GridItem]
@@ -343,7 +373,15 @@ struct CmsFieldGridBlockView: View {
         let fit = cfg.string("fit") ?? "cover"
         let shape = cfg.string("shape") ?? "rounded"
         let urlString = (row?[field.valueFrom]?.stringValue ?? "").trimmingCharacters(in: .whitespaces)
-        if shape == "circle" {
+        let chain = CmsCalendarDecorations.imageChain(cfg["chain"])
+        if !chain.isEmpty {
+            // An image chain: the picture comes from the site's image source
+            // (or an address column) rather than this value as an address.
+            CmsChainImage(candidates: row.map { CmsCalendarDecorations.imageCandidates($0, chain) } ?? [], fit: fit)
+                .frame(width: shape == "circle" ? 120 : nil, height: 120)
+                .frame(maxWidth: shape == "circle" ? nil : .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: shape == "circle" ? 60 : shape == "square" ? 0 : 8, style: .continuous))
+        } else if shape == "circle" {
             imageContent(urlString: urlString, fit: fit)
                 .frame(width: 120, height: 120)
                 .clipShape(Circle())

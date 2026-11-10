@@ -90,6 +90,70 @@ struct RenderServerPulsingSymbol: View {
     }
 }
 
+/// A busy spinner for a row in a chat: eight spokes, the brightest stepping
+/// round once a second, the way the system's does. It replaces `ProgressView()`
+/// in chat rows, whose `UIActivityIndicatorView` turns at the display's full
+/// rate and keeps turning wherever its row is mounted: the window band keeps
+/// about a screen of rows above and below the one read, and one moving layer
+/// makes the render server compose the whole screen every refresh. A stuck
+/// thinking row's spinner, off the screen, cost 5-7% of a core with the app
+/// idle (simulator, 26 October 2026). This one steps eight times a second (no
+/// more than the loop limit), and only while it can be seen (`canBeDrawn`).
+struct RenderServerSpinner: View {
+    var color: Color = .ripul(.textSecondary)
+    var size: CGFloat = 14
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    // Settings > Debug > Native Chat Performance > Paced spinners: off draws
+    // the system spinner these replaced, to compare. Read here so a change
+    // redraws the spinners already on screen.
+    @AppStorage(NativeChatPerformance.allKey) private var allNew = true
+    @AppStorage(NativeChatPerformance.key(.pacedSpinners)) private var paced = true
+
+    var body: some View {
+        if allNew && paced {
+            SpinnerRepresentable(color: color, animates: !reduceMotion)
+                .frame(width: size, height: size)
+                .allowsHitTesting(false)
+                .accessibilityElement()
+                .accessibilityLabel("In progress")
+        } else {
+            ProgressView()
+                .controlSize(size <= 14 ? .mini : size <= 16 ? .small : .regular)
+                .tint(color)
+                .frame(width: size, height: size)
+        }
+    }
+}
+
+/// Glyphs drawn one after another in place, a step every `step` seconds, by
+/// Core Animation: the composer's working star (`✢ ✳ ✶ ✻ ✽`). It replaces a
+/// `@State` index moved every 150 ms for the whole turn, each move a SwiftUI
+/// update, a text layout and a commit of the composer over glass. Draws the
+/// first glyph still where it cannot animate. Drawn in the theme's text family
+/// at `fontSize` and `weight`: size it with the text it sits beside.
+struct RenderServerGlyphCycle: View {
+    var glyphs: [String]
+    var fontSize: CGFloat
+    var weight: Font.Weight = .regular
+    var color: Color
+    var step: CFTimeInterval = 0.15
+    var animates = true
+
+    var body: some View {
+        #if os(iOS)
+        GlyphCycleRepresentable(glyphs: glyphs, fontSize: fontSize, weight: weight.uiFontWeight, color: color,
+                                step: step, animates: animates)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        #else
+        Text(glyphs.first ?? "")
+            .font(.ripul(size: fontSize, weight: weight)) // theme-mapping: the text family, as the status beside it (Peter, 1 November 2026)
+            .foregroundStyle(color)
+            .accessibilityHidden(true)
+        #endif
+    }
+}
+
 /// Where a symbol sits across the box it is drawn in.
 private enum SymbolPlacement {
     case centre, left, right
@@ -110,10 +174,37 @@ private let listIndicatorFramesPerSecond: Float = 30
 private let shimmerFramesPerSecond: Float = 30
 private let shimmerEvery: TimeInterval = 5
 
+/// Caps for the slow, low-contrast loops, applied whatever the Working
+/// Animations setting says (Settings > Debug, `-perfLoopFps`): the setting
+/// raises or lowers how fast loops may run, and these two never benefit from
+/// more frames, because the extra frames are invisible. The render server
+/// draws the whole screen at the rate of the fastest thing moving, and with
+/// the setting at 40 the composer's glow alone held it at 40 frames a second
+/// for the whole turn (Duo simulator, 27 October 2026: render server 18.8% of
+/// a core while streaming, 15.1% with the glow off, 8.5% with every turn loop
+/// off). `-perfOff slowLoops` puts back the setting's rate.
+///
+/// The composer's glow (the one pulse stroke) breathes its opacity between
+/// 0.12 and 0.35 over six seconds each way: at its steepest that is under
+/// 0.006 of opacity a frame at 12 frames a second, on a 1.25 pt line, which no
+/// eye can see step.
+private let glowFramesPerSecond: Float = 12
+/// The shimmer's band is a soft gradient across dim placeholder text; at 20
+/// frames a second it moves about 10-15 points a frame across a composer-wide
+/// line, inside a soft band about ten times as wide (a fifth of four text widths).
+private let shimmerCapFramesPerSecond: Float = 20
+
+/// The spinner's steps a second: eight spokes, round once a second. Each step
+/// is one frame for the render server, and nothing moves between them.
+private let spinnerStepsPerSecond: Float = 8
+
 /// Gives a loop its frame limit: the shipped one, or the one being tried
-/// (`PerfSwitch.loopFramesPerSecond`).
-private func paced(_ animation: CABasicAnimation, shipped: Float = turnLoopFramesPerSecond) -> CABasicAnimation {
-    let limit = PerfSwitch.loopFramesPerSecond ?? shipped
+/// (`PerfSwitch.loopFramesPerSecond`), and never above `cap` for a loop whose
+/// extra frames cannot be seen (unless `-perfOff slowLoops`).
+private func paced(_ animation: CABasicAnimation, shipped: Float = turnLoopFramesPerSecond,
+                   cap: Float? = nil) -> CABasicAnimation {
+    var limit = PerfSwitch.loopFramesPerSecond ?? shipped
+    if let cap, !PerfSwitch.isOff("slowLoops"), NativeChatPerformance.isEnabled(.slowLoops) { limit = min(limit, cap) }
     if limit < 120 {
         animation.preferredFrameRateRange = CAFrameRateRange(minimum: max(1, limit / 2), maximum: limit, preferred: limit)
     }
@@ -121,6 +212,71 @@ private func paced(_ animation: CABasicAnimation, shipped: Float = turnLoopFrame
 }
 
 // MARK: - Layer views
+
+private final class SpinnerLayerView: PlatformLayerView {
+    let spokes = CAReplicatorLayer()
+    let spoke = CALayer()
+    var animates = true
+    /// The step rate the running animation was given, so a new loop limit restarts it.
+    private var runningRate: Float?
+
+    override func setUpLayer() {
+        spokes.instanceCount = 8
+        // Each spoke after the first sits an eighth further back and fainter,
+        // so the brightest leads as the whole steps round.
+        spokes.instanceAlphaOffset = -0.1
+        spokes.addSublayer(spoke)
+        hostLayer.addSublayer(spokes)
+    }
+
+    override func layoutLayer() {
+        let bounds = hostLayer.bounds
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        let side = min(bounds.width, bounds.height)
+        let length = side * 0.28
+        let thickness = max(1, side * 0.11)
+        #if os(iOS)
+        let back: CGFloat = -1
+        #else
+        let back: CGFloat = 1
+        #endif
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        spokes.frame = bounds
+        spokes.instanceTransform = CATransform3DMakeRotation(back * .pi / 4, 0, 0, 1)
+        spoke.bounds = CGRect(x: 0, y: 0, width: thickness, height: length)
+        spoke.cornerRadius = thickness / 2
+        #if os(iOS)
+        spoke.position = CGPoint(x: bounds.midX, y: bounds.midY - side / 2 + length / 2)
+        #else
+        spoke.position = CGPoint(x: bounds.midX, y: bounds.midY + side / 2 - length / 2)
+        #endif
+        CATransaction.commit()
+
+        let limit = PerfSwitch.loopFramesPerSecond ?? turnLoopFramesPerSecond
+        let rate = min(spinnerStepsPerSecond, limit)
+        guard animates, canBeDrawn, !PerfSwitch.loopsAreOff, !PerfSwitch.isOff("spinner") else {
+            spokes.removeAnimation(forKey: "spin")
+            runningRate = nil
+            return
+        }
+        // A layout pass leaves a turn that is under way alone.
+        if runningRate == rate, spokes.animation(forKey: "spin") != nil { return }
+        let steps = Int(spinnerStepsPerSecond)
+        let spin = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+        spin.values = (0..<steps).map { NSNumber(value: Double(-back) * Double($0) * 2 * .pi / Double(steps)) }
+        // Discrete: one more key time than values, from 0 to 1.
+        spin.keyTimes = (0...steps).map { NSNumber(value: Double($0) / Double(steps)) }
+        spin.calculationMode = .discrete
+        spin.duration = 1
+        spin.repeatCount = .infinity
+        // Survives the view leaving and re-entering a window.
+        spin.isRemovedOnCompletion = false
+        spin.preferredFrameRateRange = CAFrameRateRange(minimum: max(1, rate / 2), maximum: rate, preferred: rate)
+        spokes.add(spin, forKey: "spin")
+        runningRate = rate
+    }
+}
 
 private final class PulsingSymbolLayerView: PlatformLayerView {
     /// Filled with the colour and masked to the symbol, so the glyph tints like
@@ -223,7 +379,7 @@ private final class PulseStrokeLayerView: PlatformLayerView {
         pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         // Survives the view leaving and re-entering a window.
         pulse.isRemovedOnCompletion = false
-        shape.add(paced(pulse), forKey: "pulse")
+        shape.add(paced(pulse, cap: glowFramesPerSecond), forKey: "pulse")
     }
 }
 
@@ -254,7 +410,9 @@ private final class ShimmerBandLayerView: PlatformLayerView {
             }
         }
         timer.tolerance = 0.5
-        RunLoop.main.add(timer, forMode: .common)
+        // Default mode: no sweep starts while a scroll is moving (it starts when
+        // the scroll rests), so none adds work under a finger.
+        RunLoop.main.add(timer, forMode: .default)
     }
 
     override func layoutLayer() {
@@ -285,7 +443,7 @@ private final class ShimmerBandLayerView: PlatformLayerView {
         sweep.fromValue = -3 * width
         sweep.toValue = 0
         sweep.duration = duration
-        gradient.add(paced(sweep, shipped: shimmerFramesPerSecond), forKey: "sweep")
+        gradient.add(paced(sweep, shipped: shimmerFramesPerSecond, cap: shimmerCapFramesPerSecond), forKey: "sweep")
     }
 }
 
@@ -346,7 +504,11 @@ private class PlatformLayerView: UIView {
             }
         }
         timer.tolerance = 0.5
-        RunLoop.main.add(timer, forMode: .common)
+        // Default mode, not common: every animated view in every row, hidden
+        // lists' too, walked its layers once a second under a scrolling finger
+        // (Peter's Duo, 5 November 2026). A scroll's rest is soon enough to
+        // notice it was hidden or shown.
+        RunLoop.main.add(timer, forMode: .default)
         watch = timer
     }
 }
@@ -373,6 +535,122 @@ private struct PulsingSymbolRepresentable: UIViewRepresentable {
         if view.systemName != systemName || view.animates != animates || view.placement != placement {
             view.systemName = systemName; view.animates = animates; view.placement = placement; view.setNeedsLayout()
         }
+    }
+}
+
+private final class GlyphCycleLayerView: PlatformLayerView {
+    let glyph = CALayer()
+    var glyphs: [String] = []
+    var fontSize: CGFloat = 13.5
+    var weight = UIFont.Weight.regular
+    var color = UIColor.ripul(.textSecondary)
+    var step: CFTimeInterval = 0.15
+    var animates = true
+    private var drawn: (key: String, size: CGSize)?
+    private var frames: [CGImage] = []
+    private var runningRate: Float?
+
+    override func setUpLayer() {
+        glyph.contentsGravity = .center
+        hostLayer.addSublayer(glyph)
+        if #available(iOS 17.0, *) {
+            registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: GlyphCycleLayerView, _) in
+                view.setNeedsLayout()
+            }
+        }
+    }
+
+    override func layoutLayer() {
+        let bounds = hostLayer.bounds
+        guard bounds.width > 0, bounds.height > 0, !glyphs.isEmpty else { return }
+        let scale = window?.screen.scale ?? traitCollection.displayScale
+        // The glyphs are pictures: drawn in the colour as it resolves now, and
+        // again when light or dark mode changes it.
+        let resolved = color.resolvedColor(with: traitCollection)
+        let key = "\(glyphs.joined())|\(fontSize)|\(weight.rawValue)|\(resolved.description)|\(scale)"
+        if drawn?.key != key || drawn?.size != bounds.size {
+            frames = glyphs.compactMap { render($0, colour: resolved, size: bounds.size, scale: scale) }
+            drawn = (key, bounds.size)
+            runningRate = nil
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        glyph.frame = bounds
+        glyph.contentsScale = scale
+        glyph.contents = frames.first
+        CATransaction.commit()
+        let stepRate = Float(1 / step)
+        let rate = min(stepRate, PerfSwitch.loopFramesPerSecond ?? turnLoopFramesPerSecond)
+        guard animates, frames.count > 1, canBeDrawn, !PerfSwitch.loopsAreOff, !PerfSwitch.isOff("shimmer") else {
+            glyph.removeAnimation(forKey: "cycle")
+            runningRate = nil
+            return
+        }
+        if runningRate == rate, glyph.animation(forKey: "cycle") != nil { return }
+        let cycle = CAKeyframeAnimation(keyPath: "contents")
+        cycle.values = frames
+        // Discrete: one more key time than values, from 0 to 1.
+        cycle.keyTimes = (0...frames.count).map { NSNumber(value: Double($0) / Double(frames.count)) }
+        cycle.calculationMode = .discrete
+        cycle.duration = step * Double(frames.count)
+        cycle.repeatCount = .infinity
+        // Survives the view leaving and re-entering a window.
+        cycle.isRemovedOnCompletion = false
+        cycle.preferredFrameRateRange = CAFrameRateRange(minimum: max(1, rate / 2), maximum: rate, preferred: rate)
+        glyph.add(cycle, forKey: "cycle")
+        runningRate = rate
+    }
+
+    private func render(_ text: String, colour: UIColor, size: CGSize, scale: CGFloat) -> CGImage? {
+        let font = UIFont.ripul(size: fontSize, weight: weight) // theme-mapping: the text family, as the status beside it (Peter, 1 November 2026)
+        let string = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: colour])
+        let measured = string.size()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            string.draw(at: CGPoint(x: (size.width - measured.width) / 2, y: (size.height - measured.height) / 2))
+        }.cgImage
+    }
+}
+
+private struct GlyphCycleRepresentable: UIViewRepresentable {
+    var glyphs: [String], fontSize: CGFloat, weight: UIFont.Weight, color: Color, step: CFTimeInterval, animates: Bool
+    func makeUIView(context: Context) -> GlyphCycleLayerView { GlyphCycleLayerView(frame: .zero) }
+    func updateUIView(_ view: GlyphCycleLayerView, context: Context) {
+        let colour = UIColor(color)
+        if view.glyphs != glyphs || view.fontSize != fontSize || view.weight != weight || view.step != step
+            || view.animates != animates || !view.color.isEqual(colour) {
+            view.glyphs = glyphs; view.fontSize = fontSize; view.weight = weight; view.step = step
+            view.animates = animates
+            view.color = colour
+            view.setNeedsLayout()
+        }
+    }
+}
+
+private extension Font.Weight {
+    /// UIKit's weight of the same name, for glyphs drawn by UIKit.
+    var uiFontWeight: UIFont.Weight {
+        switch self {
+        case .ultraLight: return .ultraLight
+        case .thin: return .thin
+        case .light: return .light
+        case .medium: return .medium
+        case .semibold: return .semibold
+        case .bold: return .bold
+        case .heavy: return .heavy
+        case .black: return .black  // theme-exempt: a font weight, not a colour
+        default: return .regular
+        }
+    }
+}
+
+private struct SpinnerRepresentable: UIViewRepresentable {
+    var color: Color, animates: Bool
+    func makeUIView(context: Context) -> SpinnerLayerView { SpinnerLayerView(frame: .zero) }
+    func updateUIView(_ view: SpinnerLayerView, context: Context) {
+        view.spoke.backgroundColor = UIColor(color).cgColor
+        if view.animates != animates { view.animates = animates; view.setNeedsLayout() }
     }
 }
 
@@ -439,6 +717,15 @@ private struct PulsingSymbolRepresentable: NSViewRepresentable {
         if view.systemName != systemName || view.animates != animates || view.placement != placement {
             view.systemName = systemName; view.animates = animates; view.placement = placement; view.needsLayout = true
         }
+    }
+}
+
+private struct SpinnerRepresentable: NSViewRepresentable {
+    var color: Color, animates: Bool
+    func makeNSView(context: Context) -> SpinnerLayerView { SpinnerLayerView(frame: .zero) }
+    func updateNSView(_ view: SpinnerLayerView, context: Context) {
+        view.spoke.backgroundColor = NSColor(color).cgColor
+        if view.animates != animates { view.animates = animates; view.needsLayout = true }
     }
 }
 

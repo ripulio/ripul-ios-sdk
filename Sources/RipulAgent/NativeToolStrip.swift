@@ -42,6 +42,7 @@ public final class NativeToolStripStore: ObservableObject {
         acknowledge()
     }
     private var latest: NativeToolStripSnapshot?
+    var latestGroup: NativeChatToolGroup?
     private var idleTask: Task<Void, Never>?
     private var send: (([String: Any]) -> Void)?
     private var presented = false
@@ -51,8 +52,12 @@ public final class NativeToolStripStore: ObservableObject {
 
     func receive(_ message: [String: Any], now: Double = Date().timeIntervalSince1970 * 1000) {
         guard let data = try? JSONSerialization.data(withJSONObject: message),
-              let next = try? JSONDecoder().decode(NativeToolStripSnapshot.self, from: data),
-              !next.ownerId.isEmpty, !next.chatId.isEmpty, !next.groupId.isEmpty,
+              let next = try? JSONDecoder().decode(NativeToolStripSnapshot.self, from: data) else { return }
+        receive(next, now: now)
+    }
+
+    func receive(_ next: NativeToolStripSnapshot, now: Double = Date().timeIntervalSince1970 * 1000) {
+        guard !next.ownerId.isEmpty, !next.chatId.isEmpty, !next.groupId.isEmpty,
               !next.tools.isEmpty, next.updatedAt.isFinite,
               next.tools.allSatisfy({ !$0.id.isEmpty && !$0.label.isEmpty && $0.count > 0 }),
               Set(next.tools.map(\.id)).count == next.tools.count else { return }
@@ -75,6 +80,10 @@ public final class NativeToolStripStore: ObservableObject {
         acknowledge()
     }
 
+    func updateHandler(_ send: @escaping ([String: Any]) -> Void) {
+        self.send = send
+    }
+
     func hide() {
         presented = false
         idleTask?.cancel()
@@ -93,6 +102,7 @@ public final class NativeToolStripStore: ObservableObject {
         idleTask?.cancel()
         idleTask = nil
         latest = nil
+        latestGroup = nil
         display = nil
         scopeChanged?()
         revealedActivity = nil

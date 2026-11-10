@@ -81,6 +81,29 @@ public enum ClaudeSignInBrowser {
         #endif
         return config
     }
+
+    /// Claude's sites: its page, its sign-in and Anthropic's code page. What
+    /// the store keeps for them is what "signed in to Claude" is.
+    static let claudeSites = ["claude.ai", "claude.com", "anthropic.com"]
+
+    static func isClaudeSite(_ name: String) -> Bool {
+        let site = name.lowercased()
+        return claudeSites.contains { site == $0 || site.hasSuffix("." + $0) }
+    }
+
+    /// Signs Ripul's browser out of Claude: Claude's cookies and storage leave
+    /// the store the sign-in page uses (the Browser's), so the next page asks
+    /// which account to use. Claude's page otherwise signs in whichever account
+    /// that browser holds, with no way to leave it (3 November 2026: a free
+    /// account Peter could only get round in Safari). Other sites' sign-ins,
+    /// Google's among them, are kept.
+    @MainActor static func signOutOfClaude() async {
+        let store = configuration().websiteDataStore
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        let claude = await store.dataRecords(ofTypes: types).filter { isClaudeSite($0.displayName) }
+        await store.removeData(ofTypes: types, for: claude)
+        NSLog("[ClaudeSignIn] signed Ripul's browser out of Claude (%d sites)", claude.count)
+    }
 }
 
 /// The page and any window it opens (Google's sign-in is a popup), watched for
@@ -92,6 +115,9 @@ final class ClaudeSignInBrowserModel: NSObject, ObservableObject, WKNavigationDe
     @Published private(set) var loading = true
     /// Where the page on top is, host only, for the address line.
     @Published private(set) var host = ""
+
+    /// Between Sign Out and the page starting again.
+    @Published private(set) var signingOut = false
 
     let authUrl: URL
     private let onFinish: (ClaudeSignInBrowser.Outcome) -> Void
@@ -111,6 +137,19 @@ final class ClaudeSignInBrowserModel: NSObject, ObservableObject, WKNavigationDe
         host = authUrl.host ?? ""
         webView.load(URLRequest(url: authUrl))
         NSLog("[ClaudeSignIn] opened %@%@ in Ripul's browser", authUrl.host ?? "", authUrl.path)
+    }
+
+    /// The toolbar's Sign Out: the browser forgets Claude's sign-in and the
+    /// page starts again at the same address, where Claude asks who is signing
+    /// in. The Mac's sign-in is still waiting for this address's code.
+    func signOut() async {
+        guard !finished, !signingOut else { return }
+        signingOut = true
+        loading = true
+        close()
+        await ClaudeSignInBrowser.signOutOfClaude()
+        signingOut = false
+        start()
     }
 
     /// Stops every page and lets it go. Called when the sign-in ends either way.
@@ -263,6 +302,13 @@ struct ClaudeSignInBrowserSheet: View {
                         .font(.ripul(.caption))
                         .foregroundStyle(.ripul(.textSecondary))
                         .uiKitIdentifier("ClaudeSignInBrowser.address")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    // Claude's page has no way to leave the account it shows.
+                    Button("Sign Out") { Task { await model.signOut() } }
+                        .disabled(model.signingOut)
+                        .accessibilityLabel("Sign out of Claude")
+                        .uiKitIdentifier("ClaudeSignInBrowser.signOut")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {

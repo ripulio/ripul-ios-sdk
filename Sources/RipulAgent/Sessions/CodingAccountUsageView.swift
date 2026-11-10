@@ -1,16 +1,16 @@
 import SwiftUI
 
 /// The plan an account is on, as a small pill. Shown beside the account's name.
-struct CodingAccountPlanBadge: View {
+public struct CodingAccountPlanBadge: View {
     let name: String
 
-    init?(usage: CodingAccountUsage?, plan: String?) {
+    public init?(usage: CodingAccountUsage?, plan: String?) {
         let raw = [usage?.plan, plan].compactMap { $0 }.first { $0.lowercased().contains("max_") } ?? usage?.plan ?? plan
         guard let name = CodingAccountUsage.planName(raw) else { return nil }
         self.name = name
     }
 
-    var body: some View {
+    public var body: some View {
         Text(name)
             .font(.ripul(.caption2, weight: .medium))
             .foregroundStyle(.ripul(.textSecondary))
@@ -92,7 +92,9 @@ struct CodingAccountRow: View {
 struct CodingAccountsListWidth: ViewModifier {
     func body(content: Content) -> some View {
         GeometryReader { proxy in
-            content.contentMargins(.horizontal, max(0, (proxy.size.width - 680) / 2), for: .scrollContent)
+            // Keep the system's grouped Settings insets on phones and narrow
+            // windows. A zero override makes the account cards touch the edges.
+            content.contentMargins(.horizontal, proxy.size.width > 720 ? (proxy.size.width - 680) / 2 : nil, for: .scrollContent)
         }
     }
 }
@@ -102,13 +104,19 @@ struct CodingAccountsListWidth: ViewModifier {
 /// When the host could not refresh an account (`usage.error`), the windows it
 /// still carries are the last ones it read, possibly weeks old. They are not
 /// drawn: an old 93% bar reads exactly like a live one.
-struct CodingAccountUsageView: View {
+public struct CodingAccountUsageView: View {
     let usage: CodingAccountUsage?
     var plan: String? = nil
     /// False when the row shows the plan itself, beside the account's name.
     var showsPlan = true
 
-    var body: some View {
+    public init(usage: CodingAccountUsage?, plan: String? = nil, showsPlan: Bool = true) {
+        self.usage = usage
+        self.plan = plan
+        self.showsPlan = showsPlan
+    }
+
+    public var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let now = context.date.timeIntervalSince1970
             VStack(alignment: .leading, spacing: 8) {

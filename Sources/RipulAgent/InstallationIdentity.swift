@@ -1,4 +1,8 @@
+import CryptoKit
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Stable per-installation identity for this app install.
 ///
@@ -29,6 +33,31 @@ public enum InstallationIdentity {
         UserDefaults.standard.set(fresh, forKey: defaultsKey)
         cached = fresh
         return fresh
+    }
+
+    /// A fresh id for this install, for a device that came with another's: set
+    /// up from that device's backup, the two joined every relay room as one
+    /// client and took each other's place (`DeviceIdentityConflict`).
+    @discardableResult
+    public static func reset() -> String {
+        let fresh = UUID().uuidString
+        UserDefaults.standard.set(fresh, forKey: defaultsKey)
+        cached = fresh
+        return fresh
+    }
+
+    /// The device this install runs on, as the relay is told it: iOS's
+    /// per-vendor device id, hashed, which no backup carries to another device.
+    /// The same phone reconnecting gives the same value; a second device that
+    /// came with a copy of `id` gives another. Nil on the Mac.
+    @MainActor public static var deviceFingerprint: String? {
+        #if canImport(UIKit)
+        guard let vendor = UIDevice.current.identifierForVendor else { return nil }
+        let digest = SHA256.hash(data: Data("ripul.device.\(vendor.uuidString)".utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+        #else
+        return nil
+        #endif
     }
 
     /// Hyphen-free form for embedding in relay clientIds — the web layer parses

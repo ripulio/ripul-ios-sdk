@@ -205,7 +205,38 @@ public struct ChatSession: Identifiable, Equatable, Codable {
         return (try? JSONDecoder().decode([ChatSession].self, from: data)) ?? []
     }
 
+    private static let cacheQueue = DispatchQueue(label: "io.ripul.chatSessions.cache", qos: .utility)
+    /// The list `saveToCacheSoon` will write. Touched only on `cacheQueue`.
+    nonisolated(unsafe) private static var pendingCache: [ChatSession]?
+
+    /// Written off the main thread at once, in order with the others: a
+    /// deleted tab or a cleared list, so a removed tab cannot come back from
+    /// the cache.
     static func saveToCache(_ sessions: [ChatSession]) {
+        cacheQueue.async {
+            pendingCache = nil
+            write(sessions)
+        }
+    }
+
+    /// The tabs as the web reports them: written off the main thread a second
+    /// after the first change, the latest list only. While a chat streams the
+    /// web reports its size several times a second, and each report encoded
+    /// and wrote every tab on the main thread (docs/main-thread.md, rule 1).
+    static func saveToCacheSoon(_ sessions: [ChatSession]) {
+        cacheQueue.async {
+            let scheduled = pendingCache != nil
+            pendingCache = sessions
+            guard !scheduled else { return }
+            cacheQueue.asyncAfter(deadline: .now() + 1) {
+                guard let latest = pendingCache else { return }
+                pendingCache = nil
+                write(latest)
+            }
+        }
+    }
+
+    nonisolated private static func write(_ sessions: [ChatSession]) {
         if let data = try? JSONEncoder().encode(sessions) {
             UserDefaults.standard.set(data, forKey: cacheKey)
         }
@@ -627,7 +658,19 @@ public struct RentedMacsClaudeInfo {
 public struct HostAuthBeginInfo {
     public let sessionId: String?
     public let authUrl: String?
+    /// The same sign-in, returning to the Mac's own listener on
+    /// `http://localhost:<port>/callback`: opened in the system's sheet while
+    /// this device listens on that port (`LoopbackSignInReturn`). Nil from a
+    /// Mac before 4 November 2026.
+    public var returnUrl: String? = nil
     public let error: String?
+
+    public init(sessionId: String?, authUrl: String?, returnUrl: String? = nil, error: String?) {
+        self.sessionId = sessionId
+        self.authUrl = authUrl
+        self.returnUrl = returnUrl
+        self.error = error
+    }
 }
 
 /// One switchable Claude account profile on a host machine. Mirrors
@@ -665,6 +708,17 @@ public struct ClaudeAccountProfile: Identifiable, Equatable {
             signInEndsAt: (dict["signInEndsAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) },
             signInEnded: dict["signInEnded"] as? Bool ?? false
         )
+    }
+
+    /// Claude Code's own folder on the Mac with nothing signed in: not an
+    /// account, so no list shows it (`CodingAccountDefaultFolder`).
+    public var isEmptyDefault: Bool {
+        CodingAccountDefaultFolder.isEmpty(slug: slug, loggedIn: loggedIn, email: email, signInEnded: signInEnded)
+    }
+
+    /// The name to show: the default folder goes by its account's email.
+    public var displayName: String {
+        CodingAccountDefaultFolder.title(slug: slug, name: name, email: email, agent: "Claude")
     }
 }
 

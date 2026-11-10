@@ -63,9 +63,11 @@ struct NativeChatWindowModel {
     private var activeIndices: [Int] = []
     private var slotCounts: [Int] = [0]
     private(set) var cache: [HeightKey: HeightEntry] = [:]
+    private var lastMeasuredByLayout: [LayoutKey: [String: HeightEntry]] = [:]
     let configuration: Configuration
     private var clock: UInt64 = 0
     private var samples: [String: [CGFloat]] = [:]
+    private var cachedMedians: [String: CGFloat] = [:]
     private(set) var correctionMode: CorrectionMode = .immediate
 
     init(layout: LayoutKey, configuration: Configuration = Configuration()) {
@@ -81,17 +83,35 @@ struct NativeChatWindowModel {
     mutating func setCorrectionMode(_ mode: CorrectionMode) { correctionMode = mode }
 
     mutating func update(_ rows: [Descriptor], layout: LayoutKey? = nil) {
-        precondition(Set(rows.map(\.id)).count == rows.count, "Row IDs must be unique")
         if let layout {
             precondition(layout.width.isFinite && layout.width > 0 && layout.scale.isFinite && layout.scale > 0)
-            if self.layout != layout { samples.removeAll() }
+            if self.layout != layout {
+                samples.removeAll()
+                cachedMedians.removeAll()
+            }
             self.layout = layout
         }
-        if descriptors.map(\.id) != rows.map(\.id) { structureGeneration &+= 1 }
-        descriptors = rows
-        indexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.element.id, $0.offset) })
-        noSlot = noSlot.filter { key in
-            key.layout == self.layout && indexByID[key.id].map { rows[$0].revision == key.revision } == true
+        if NativeChatPerformance.isEnabled(.incrementalRows) {
+            let sameIDs = descriptors.count == rows.count && zip(descriptors, rows).allSatisfy { $0.id == $1.id }
+            if !sameIDs {
+                precondition(Set(rows.map(\.id)).count == rows.count, "Row IDs must be unique")
+                structureGeneration &+= 1
+                indexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.element.id, $0.offset) })
+            }
+            descriptors = rows
+            if !noSlot.isEmpty {
+                noSlot = noSlot.filter { key in
+                    key.layout == self.layout && indexByID[key.id].map { rows[$0].revision == key.revision } == true
+                }
+            }
+        } else {
+            precondition(Set(rows.map(\.id)).count == rows.count, "Row IDs must be unique")
+            if descriptors.map(\.id) != rows.map(\.id) { structureGeneration &+= 1 }
+            descriptors = rows
+            indexByID = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.element.id, $0.offset) })
+            noSlot = noSlot.filter { key in
+                key.layout == self.layout && indexByID[key.id].map { rows[$0].revision == key.revision } == true
+            }
         }
         rebuild()
     }
@@ -103,10 +123,13 @@ struct NativeChatWindowModel {
         let previous = heights
         self.layout = layout
         samples.removeAll()
+        cachedMedians.removeAll()
         noSlot.removeAll()
         for (index, row) in descriptors.enumerated() {
             clock &+= 1
-            cache[key(for: row)] = HeightEntry(height: previous[index], confidence: .estimated, access: clock)
+            let key = key(for: row)
+            let replaced = cache.updateValue(HeightEntry(height: previous[index], confidence: .estimated, access: clock), forKey: key)
+            if let replaced { forgetMeasuredEntry(key, entry: replaced) }
         }
         rebuild()
     }
@@ -133,15 +156,22 @@ struct NativeChatWindowModel {
             clock &+= 1
             let previous = cache[key]
             let wasEmpty = noSlot.remove(key) != nil
-            cache[key] = HeightEntry(height: height, confidence: .mounted, access: clock)
+            let entry = HeightEntry(height: height, confidence: .mounted, access: clock)
+            cache[key] = entry
+            lastMeasuredByLayout[key.layout, default: [:]][key.id] = entry
             guard previous?.height != height || previous?.confidence != .mounted || wasEmpty else { continue }
             changed = true
             let kind = descriptors[index].kind
-            if samples[kind] == nil && samples.count >= 32 { samples.removeAll() }
+            if samples[kind] == nil && samples.count >= 32 {
+                samples.removeAll()
+                cachedMedians.removeAll()
+            }
             var values = samples[kind, default: []]
             values.append(height)
             if values.count > 31 { values.removeFirst(values.count - 31) }
             samples[kind] = values
+            let sorted = values.sorted()
+            cachedMedians[kind] = sorted[sorted.count / 2]
         }
         if changed { rebuild() } else { evict() }
         return accepted
@@ -163,16 +193,28 @@ struct NativeChatWindowModel {
 
     func hasSlot(at index: Int) -> Bool { !noSlot.contains(key(for: descriptors[index])) }
 
+    /// The row's current height was measured while mounted, not estimated.
+    func isMeasured(_ index: Int) -> Bool { cache[key(for: descriptors[index])]?.confidence == .mounted }
+
     private mutating func rebuild() {
-        // Compute each median once. Old-revision mounted heights are provisional
-        // estimates for the same ID/layout, not evidence the new content was measured.
-        let medians = samples.mapValues { values -> CGFloat in
-            let sorted = values.sorted()
-            return sorted[sorted.count / 2]
-        }
-        var lastMeasured: [String: HeightEntry] = [:]
-        for (key, entry) in cache where key.layout == layout && entry.confidence == .mounted {
-            if lastMeasured[key.id].map({ $0.access < entry.access }) ?? true { lastMeasured[key.id] = entry }
+        let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
+        let medians: [String: CGFloat]
+        let lastMeasured: [String: HeightEntry]?
+        if incremental {
+            // Old-revision mounted heights are provisional estimates for the same ID/layout,
+            // not evidence the new content was measured. Iterate rows O(M), not the 4096 cache.
+            lastMeasured = lastMeasuredByLayout[layout]
+            medians = cachedMedians
+        } else {
+            medians = samples.mapValues { values -> CGFloat in
+                let sorted = values.sorted()
+                return sorted[sorted.count / 2]
+            }
+            var scanned: [String: HeightEntry] = [:]
+            for (key, entry) in cache where key.layout == layout && entry.confidence == .mounted {
+                if scanned[key.id].map({ $0.access < entry.access }) ?? true { scanned[key.id] = entry }
+            }
+            lastMeasured = scanned
         }
         heights = descriptors.map { row in
             let key = key(for: row)
@@ -181,18 +223,27 @@ struct NativeChatWindowModel {
             if var hit = cache[key] {
                 hit.access = clock
                 cache[key] = hit
+                // The secondary index uses access to identify an evicted entry.
+                // Keep it in step with LRU touches, not just measurements.
+                if hit.confidence == .mounted {
+                    lastMeasuredByLayout[key.layout, default: [:]][key.id] = hit
+                }
                 return hit.height
             }
-            let estimate = lastMeasured[row.id]?.height ?? medians[row.kind] ?? row.estimate
+            let estimate = lastMeasured?[row.id]?.height ?? medians[row.kind] ?? row.estimate
             let safe = estimate.isFinite ? max(0, estimate) : 100
             cache[key] = HeightEntry(height: safe, confidence: .estimated, access: clock)
             return safe
         }
         prefix = [0]
+        prefix.reserveCapacity(heights.count + 1)
         slotCounts = [0]
+        slotCounts.reserveCapacity(heights.count + 1)
         activeIndices = []
+        activeIndices.reserveCapacity(heights.count)
+        let hasAnyNoSlot = !noSlot.isEmpty
         for (index, height) in heights.enumerated() {
-            let hasSlot = hasSlot(at: index)
+            let hasSlot = incremental ? (!hasAnyNoSlot || self.hasSlot(at: index)) : self.hasSlot(at: index)
             if hasSlot { activeIndices.append(index) }
             prefix.append(prefix.last! + (hasSlot ? height + configuration.spacing : 0))
             slotCounts.append(slotCounts.last! + (hasSlot ? 1 : 0))
@@ -205,8 +256,26 @@ struct NativeChatWindowModel {
         guard cache.count > configuration.cacheLimit else { return }
         let target = max(1, configuration.cacheLimit * 9 / 10)
         let excess = cache.count - target
-        let oldest = cache.sorted { $0.value.access < $1.value.access }.prefix(excess).map(\.key)
-        for key in oldest { cache.removeValue(forKey: key) }
+        let oldest = cache.sorted { $0.value.access < $1.value.access }.prefix(excess)
+        for (key, evictedEntry) in oldest {
+            cache.removeValue(forKey: key)
+            forgetMeasuredEntry(key, entry: evictedEntry)
+        }
+    }
+
+    /// Called after a cache entry is removed or replaced by a resize estimate.
+    private mutating func forgetMeasuredEntry(_ key: HeightKey, entry: HeightEntry) {
+        guard entry.confidence == .mounted,
+              lastMeasuredByLayout[key.layout]?[key.id]?.access == entry.access else { return }
+        lastMeasuredByLayout[key.layout]?.removeValue(forKey: key.id)
+        for (remainingKey, remainingEntry) in cache where remainingKey.layout == key.layout && remainingKey.id == key.id && remainingEntry.confidence == .mounted {
+            if lastMeasuredByLayout[key.layout]?[key.id].map({ $0.access < remainingEntry.access }) ?? true {
+                lastMeasuredByLayout[key.layout, default: [:]][key.id] = remainingEntry
+            }
+        }
+        if lastMeasuredByLayout[key.layout]?.isEmpty == true {
+            lastMeasuredByLayout.removeValue(forKey: key.layout)
+        }
     }
 
     var totalHeight: CGFloat { activeIndices.isEmpty ? 0 : prefix.last! - configuration.spacing }
@@ -283,19 +352,190 @@ struct NativeChatWindowModel {
         }
         return geometry(for: lower..<upper, mandatory: mandatory)
     }
+
+    /// While a finger or a coast moves the view the band holds still: mounting rows
+    /// mid-fling is what dropped frames (27 Oct 2026, Duo: 2–5 band moves a fling lost
+    /// 75–173 ms; the same chat with every row mounted lost about 8 ms a fling). Keep
+    /// `current`, extending only the edge the view travels toward, only once the
+    /// viewport comes within `margin` screens of it, and then `reach` screens ahead
+    /// in one change of at most `step` rows (a row still on an estimate counts twice).
+    /// Rows behind stay mounted up to `cap` (the rest band's size, so a long fling
+    /// never mounts more than streaming is measured with); past it the farthest go,
+    /// already measured, in the same publication. A viewport that has left the band
+    /// (a jump, not a scroll) gets a fresh plan.
+    func motionPlan(viewport: Range<CGFloat>, current: Plan, direction: Direction,
+                    margin: CGFloat = 0.5, reach: CGFloat = 2, step: Int = 24, cap: Int = 64) -> Plan {
+        guard !heights.isEmpty, current.structureGeneration == structureGeneration,
+              current.range.upperBound <= heights.count, !current.range.isEmpty else {
+            return plan(viewport: viewport, direction: direction)
+        }
+        let screen = max(1, viewport.upperBound - viewport.lowerBound)
+        let mandatory = intersecting(viewport)
+        var lower = current.range.lowerBound
+        var upper = current.range.upperBound
+        guard mandatory.upperBound + configuration.chunk >= lower, mandatory.lowerBound <= upper + configuration.chunk else {
+            return plan(viewport: viewport, direction: direction)
+        }
+        // Hysteresis: nothing changes until the screen comes within `margin` screens of
+        // the leading edge; then that edge moves `reach` screens ahead in one change.
+        // Every band change costs about a frame, whatever its size (Duo, 27 Oct 2026: a
+        // few rows at a time made 78 changes in six fast flings), but mounting costs per
+        // row too. So `reach` bounds a change by height, and `step` by rows: a row still
+        // on an estimate counts twice, since its real height (a long answer with tables)
+        // may be several screens. With no direction yet (a chat just shown) nothing grows.
+        let near = intersecting((viewport.lowerBound - screen * margin)..<(viewport.upperBound + screen * margin))
+        let far = intersecting((viewport.lowerBound - screen * reach)..<(viewport.upperBound + screen * reach))
+        if direction == .up, near.lowerBound < lower {
+            let goal = min(far.lowerBound, near.lowerBound)
+            var budget = step
+            while lower > goal, budget > 0 {
+                lower -= 1
+                budget -= isMeasured(lower) ? 1 : 2
+            }
+        }
+        if direction == .down, near.upperBound > upper {
+            let goal = max(far.upperBound, near.upperBound)
+            var budget = step
+            while upper < goal, budget > 0 {
+                budget -= isMeasured(upper) ? 1 : 2
+                upper += 1
+            }
+        }
+        lower = min(lower, mandatory.lowerBound)
+        upper = max(upper, mandatory.upperBound)
+        // Over the cap, only what grew is exchanged: a band larger than the cap
+        // (kept across a landing) is never cut down in bulk mid-fling.
+        let grew = (current.range.lowerBound - lower) + (upper - current.range.upperBound)
+        let over = (upper - lower) - max(cap, mandatory.count)
+        if grew > 0, over > 0 {
+            let cut = min(grew, over)
+            if direction == .up { upper = max(mandatory.upperBound, upper - cut) }
+            else { lower = min(mandatory.lowerBound, lower + cut) }
+        }
+        return geometry(for: lower..<upper, mandatory: mandatory)
+    }
+
+    /// The band to grow toward at rest: `ahead` screens on the side the view was
+    /// travelling toward and `behind` on the side it came from, at most `cap` rows
+    /// (the rows on screen always count), shared between the sides in that ratio.
+    func restPlan(viewport: Range<CGFloat>, direction: Direction,
+                  ahead: CGFloat = 3, behind: CGFloat = 2, cap: Int = 64) -> Plan {
+        guard !heights.isEmpty else { return geometry(for: 0..<0) }
+        let screen = max(1, viewport.upperBound - viewport.lowerBound)
+        let above = direction == .up ? ahead : direction == .down ? behind : (ahead + behind) / 2
+        let below = direction == .down ? ahead : direction == .up ? behind : (ahead + behind) / 2
+        let mandatory = intersecting(viewport)
+        let desired = intersecting((viewport.lowerBound - screen * above)..<(viewport.upperBound + screen * below))
+        var lower = min(desired.lowerBound, mandatory.lowerBound)
+        var upper = max(desired.upperBound, mandatory.upperBound)
+        let spare = max(cap, mandatory.count) - mandatory.count
+        if upper - lower > mandatory.count + spare {
+            let aboveShare = Int((CGFloat(spare) * above / (above + below)).rounded())
+            let trimmedLower = max(lower, mandatory.lowerBound - aboveShare)
+            upper = min(upper, mandatory.upperBound + spare - (mandatory.lowerBound - trimmedLower))
+            // A side with fewer rows than its share gives the rest to the other.
+            lower = max(lower, mandatory.lowerBound - (spare - (upper - mandatory.upperBound)))
+        }
+        return geometry(for: lower..<upper, mandatory: mandatory)
+    }
+
+    /// One step at rest from `current` toward `target`: at most `step` rows next to
+    /// the band, on the side ahead first. Once `current` covers `target`, the rows
+    /// beyond it go, at most `trimStep` a step, from the side with more to lose. Nil
+    /// when there is nothing left to do.
+    func growthStep(current: Range<Int>, target: Plan, direction: Direction, step: Int = 4, trimStep: Int = 16) -> Plan? {
+        guard current.upperBound <= heights.count, !current.isEmpty,
+              current.lowerBound <= target.range.upperBound, target.range.lowerBound <= current.upperBound else { return target }
+        var lower = current.lowerBound
+        var upper = current.upperBound
+        var budget = step
+        for side in direction == .down ? [1, 0] : [0, 1] where budget > 0 {
+            if side == 0, target.range.lowerBound < lower {
+                let add = min(budget, lower - target.range.lowerBound)
+                lower -= add
+                budget -= add
+            } else if side == 1, target.range.upperBound > upper {
+                let add = min(budget, target.range.upperBound - upper)
+                upper += add
+                budget -= add
+            }
+        }
+        // Never larger than the band was or the target is: what grows on one side comes
+        // off the other side's rows beyond the target in the same step, so an
+        // interrupted growth leaves no oversized band behind.
+        var over = (upper - lower) - max(current.count, target.range.count)
+        if over > 0, upper > target.range.upperBound {
+            let cut = min(over, upper - target.range.upperBound)
+            upper -= cut
+            over -= cut
+        }
+        if over > 0, lower < target.range.lowerBound {
+            lower += min(over, target.range.lowerBound - lower)
+        }
+        if budget < step { return geometry(for: lower..<upper, mandatory: target.mandatory) }
+        guard current != target.range else { return nil }
+        // Only rows beyond the target are left: a grown band shrinks over several steps,
+        // so no one frame unmounts a hundred rows (a message sent into a grown chat).
+        var cut = trimStep
+        while cut > 0, lower < target.range.lowerBound || upper > target.range.upperBound {
+            if upper - target.range.upperBound >= target.range.lowerBound - lower { upper -= 1 } else { lower += 1 }
+            cut -= 1
+        }
+        return geometry(for: lower..<upper, mandatory: target.mandatory)
+    }
 }
 
 /// Adapter helper: exact equality drives revisions, including nested message fields.
 struct NativeChatRowRevisionTracker<Value: Equatable> {
     private var previous: [String: (Value, UInt64)] = [:]
     private var serial: UInt64 = 0
-    mutating func revisions(for values: [(id: String, value: Value)]) -> [UInt64] {
+    mutating func revisions(for values: [(id: String, value: Value)], dirtyIDs: Set<String>? = nil) -> [UInt64] {
         var next: [String: (Value, UInt64)] = [:]
+        next.reserveCapacity(values.count)
         let revisions = values.map { item -> UInt64 in
             let revision: UInt64
-            if let old = previous[item.id], old.0 == item.value { revision = old.1 }
-            else { serial &+= 1; revision = serial }
+            if let old = previous[item.id] {
+                if let dirtyIDs, !dirtyIDs.contains(item.id) {
+                    revision = old.1
+                } else if old.0 == item.value {
+                    revision = old.1
+                } else {
+                    serial &+= 1
+                    revision = serial
+                }
+            } else {
+                serial &+= 1
+                revision = serial
+            }
             next[item.id] = (item.value, revision)
+            return revision
+        }
+        previous = next
+        return revisions
+    }
+}
+
+extension NativeChatRowRevisionTracker where Value: Identifiable, Value.ID == String {
+    mutating func revisions(for values: [Value], dirtyIDs: Set<String>? = nil) -> [UInt64] {
+        var next: [String: (Value, UInt64)] = [:]
+        next.reserveCapacity(values.count)
+        let revisions = values.map { item -> UInt64 in
+            let id = item.id
+            let revision: UInt64
+            if let old = previous[id] {
+                if let dirtyIDs, !dirtyIDs.contains(id) {
+                    revision = old.1
+                } else if old.0 == item {
+                    revision = old.1
+                } else {
+                    serial &+= 1
+                    revision = serial
+                }
+            } else {
+                serial &+= 1
+                revision = serial
+            }
+            next[id] = (item, revision)
             return revision
         }
         previous = next

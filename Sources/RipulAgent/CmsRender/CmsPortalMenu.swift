@@ -43,6 +43,19 @@ public struct CmsPortalMenu: Equatable {
     public let canDesign: Bool
     /// Top-level items, role-filtered. Empty when not a member.
     public let items: [CmsPortalMenuItem]
+    /// The site's `tabBar` tabs, role-filtered, for a host that draws its own
+    /// chrome (one entry per tab, each with a `pageSlug`, never children or a
+    /// url). Empty when the site has no tab bar. `CmsAppView` draws these as
+    /// the system tab bar itself.
+    public let tabs: [CmsPortalMenuItem]
+
+    init(isMember: Bool, role: String?, canDesign: Bool, items: [CmsPortalMenuItem], tabs: [CmsPortalMenuItem] = []) {
+        self.isMember = isMember
+        self.role = role
+        self.canDesign = canDesign
+        self.items = items
+        self.tabs = tabs
+    }
 
     /// The "nothing to show" contribution — not a member / could not resolve.
     public static let none = CmsPortalMenu(isMember: false, role: nil, canDesign: false, items: [])
@@ -80,7 +93,7 @@ public enum CmsPortalMenuResolver {
         }
 
         // 2. The embedded config carries the pages and the shell's nav blocks.
-        let result = await SiteKeyValidator.validate(siteKey: siteKey, baseURL: baseURL)
+        let result = await SiteKeyValidator.validate(siteKey: siteKey, baseURL: baseURL, origin: clientConfig.origin)
         guard let json = result.configJSON, let data = json.data(using: .utf8),
               let config = try? JSONDecoder().decode(PortalConfigSlice.self, from: data),
               let cms = config.cms else {
@@ -95,11 +108,28 @@ public enum CmsPortalMenuResolver {
 
         // Authoritative source: the shell page's sidebarNav (fall back to topNav).
         let shell = cms.shellPageId.flatMap { id in pages.first { $0.id == id } }
-        let navItems = navSource(in: shell?.blocks) ?? pages.lazy.compactMap { navSource(in: $0.blocks) }.first ?? []
-
-        let items = filter(navItems, pageBySlug: pageBySlug, membership: membership)
+        let tabs = tabItems(shell: shell, pageBySlug: pageBySlug, membership: membership)
+        // A site whose only nav is its tab bar contributes the tabs as items.
+        let navItems = navSource(in: shell?.blocks) ?? pages.lazy.compactMap { navSource(in: $0.blocks) }.first
+        let items = navItems.map { filter($0, pageBySlug: pageBySlug, membership: membership) } ?? tabs
         return CmsPortalMenu(isMember: true, role: membership.role,
-                             canDesign: membership.canDesign ?? false, items: items)
+                             canDesign: membership.canDesign ?? false, items: items, tabs: tabs)
+    }
+
+    /// The shell's tab bar as menu items, filtered as `CmsAppView` filters it.
+    static func tabItems(
+        shell: CmsPage?,
+        pageBySlug: [String: CmsPage],
+        membership: CmsPortalMembership?
+    ) -> [CmsPortalMenuItem] {
+        let openable = Set(pageBySlug.values.filter { CmsPageVisibility.canView($0, membership: membership) }.map(\.slug))
+        let tabs = CmsTabBarConfig.find(shell: shell)?.visibleTabs(
+            openableSlugs: openable, membership: membership, canDesign: membership?.canDesign ?? false
+        ) ?? []
+        return tabs.map {
+            CmsPortalMenuItem(id: $0.pageSlug, label: $0.title, systemImage: CmsNavIcon.symbol(for: $0.item.icon),
+                              pageSlug: $0.pageSlug, url: nil, children: [])
+        }
     }
 
     // MARK: - Config slice

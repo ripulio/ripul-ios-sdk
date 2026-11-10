@@ -9,10 +9,35 @@ extension View {
     }
 }
 
+/// Shared geometry for `GlassTopBar` and screens that reserve space for it.
+public enum GlassTopBarLayout {
+    /// Extra space between the inner controls/lozenge and the outer frosted bar's edge.
+    public static let outerBarPadding: CGFloat = 5
+    /// Compact height of the outer frosted capsule (44pt controls + 5pt top and bottom padding,
+    /// matching the 54pt height of the iPhone Duo's status bar background alongside it).
+    public static let outerBarHeight: CGFloat = 44 + outerBarPadding * 2
+    /// Total height below `topChrome.top` for a compact `GlassTopBar` (4pt top gutter + 44pt controls
+    /// + 5pt bottom outer-bar overhang; the 5pt top overhang extends above the 44pt row).
+    public static let compactHeight: CGFloat = 48 + outerBarPadding
+    /// Content reservation below a floating `GlassTopBar` (compactHeight + 4pt bottom gap).
+    public static let contentReservation: CGFloat = compactHeight + 4
+}
+
 private struct RipulTopBarInsetModifier<Bar: View>: ViewModifier {
     let bar: Bar
     #if targetEnvironment(macCatalyst)
     @Environment(\.ripulTopBarSafeAreaTop) private var topOverride
+    #elseif os(iOS)
+    @State private var topChrome = WindowTopChromeClearance()
+    /// Window-space top of the screen as last laid out.
+    @State private var frameTop: CGFloat?
+    /// The bar sits in the band beside a camera (see `updateBand`).
+    @State private var inBand = false
+    /// The screen did not reach the window's top when it ran over the band;
+    /// it stays out until the window changes.
+    @State private var bandRefused = false
+    /// GlassTopBar's 4pt gutter and 54pt outer bar, until measured.
+    @State private var barHeight: CGFloat = GlassTopBarLayout.compactHeight
     #endif
 
     func body(content: Content) -> some View {
@@ -24,10 +49,57 @@ private struct RipulTopBarInsetModifier<Bar: View>: ViewModifier {
         } else {
             content.safeAreaInset(edge: .top) { bar }
         }
+        #elseif os(iOS)
+        // Beside the open Duo's camera the bar joins the band, level with the
+        // status items, as the chat's does (`WindowTopChromeLayout`). Devices,
+        // Files, Trainyard and the rest otherwise sat a row lower, under the
+        // status items (Peter, 1 November 2026). The screen then runs to the
+        // window's top and the inset carries the bar down to its row, so the
+        // bar is laid out where it is drawn, and the content still starts at
+        // the rectangular inset.
+        content
+            .safeAreaInset(edge: .top) {
+                bar
+                    .topChromeExclusion(inBand ? topChrome : WindowTopChromeClearance())
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { barHeight = $0 }
+                    .padding(.top, inBand ? topChrome.top : 0)
+                    .padding(.bottom, inBand ? max(0, topChrome.safeTop - topChrome.top - barHeight) : 0)
+            }
+            .ignoresSafeArea(.container, edges: inBand ? .top : [])
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: {
+                frameTop = $0
+                updateBand()
+            }
+            .background(WindowTopChrome {
+                topChrome = $0
+                bandRefused = false
+                updateBand()
+            })
         #else
         content.safeAreaInset(edge: .top) { bar }
         #endif
     }
+
+    #if os(iOS) && !targetEnvironment(macCatalyst)
+    /// Into the band when the screen's top is the window's rectangular inset:
+    /// a screen lower in the window (a sheet, a column under a bar of its own)
+    /// keeps its bar where it is. In the band while the screen, run over it,
+    /// starts at the window's top.
+    private func updateBand() {
+        guard let frameTop, topChrome.top < topChrome.safeTop, !bandRefused else {
+            inBand = false
+            return
+        }
+        if inBand {
+            if abs(frameTop) >= 1 {
+                inBand = false
+                bandRefused = true
+            }
+        } else {
+            inBand = abs(frameTop - topChrome.safeTop) < 1
+        }
+    }
+    #endif
 }
 
 // MARK: - Scope
@@ -62,6 +134,22 @@ public struct GlassTopBarScope {
     /// line under it. Otherwise the screen's own title stays and the scope
     /// reads under it (the Mac a list belongs to).
     public var currentIsTitle = false
+    /// Several options shown at once, each ticked or not, in place of one
+    /// chosen (`select`): Trainyard showing the yards of the Macs ticked.
+    public var ticks: Ticks?
+
+    /// The options ticked, and a tap that ticks or unticks one. The popover
+    /// stays open for the next tick, and `current` is what the lozenge shows
+    /// for those ticked, which the screen names.
+    public struct Ticks {
+        public var ticked: Set<String>
+        public var toggle: (Option) -> Void
+
+        public init(ticked: Set<String>, toggle: @escaping (Option) -> Void) {
+            self.ticked = ticked
+            self.toggle = toggle
+        }
+    }
 
     public init(options: [Option], current: Option, detail: String? = nil, currentIsTitle: Bool = false,
                 select: @escaping (Option) -> Void) {
@@ -109,22 +197,28 @@ private struct GlassTopBarScopePicker: View {
     private var rows: some View {
         VStack(spacing: 0) {
             ForEach(Array(scope.options.enumerated()), id: \.element.id) { index, option in
+                let ticked = scope.ticks?.ticked.contains(option.id) ?? (option.id == scope.current.id)
                 if index > 0 { Divider() }
                 Button {
-                    dismiss()
-                    if option.id != scope.current.id { scope.select(option) }
+                    if let ticks = scope.ticks {
+                        ticks.toggle(option)
+                    } else {
+                        dismiss()
+                        if option.id != scope.current.id { scope.select(option) }
+                    }
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: option.icon).frame(width: 24)
                         Text(option.title).ripulText().lineLimit(1)
                         Spacer(minLength: 12)
-                        Image(systemName: "checkmark").opacity(option.id == scope.current.id ? 1 : 0)
+                        Image(systemName: "checkmark").opacity(ticked ? 1 : 0)
                     }
                     .padding(.horizontal, 16)
                     .frame(minHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(ticked ? .isSelected : [])
                 .uiKitIdentifier("GlassTopBar.scope.option")
             }
         }
@@ -132,6 +226,41 @@ private struct GlassTopBarScopePicker: View {
         #if os(iOS)
         .presentationCompactAdaptation(.popover)
         #endif
+    }
+}
+
+/// Round control disc worn by buttons inside a `GlassTopBar` title lozenge
+/// (the scope dropdown chevron and the screen help question mark).
+///
+/// Sized at 28×28pt inside the 44pt lozenge so its 14pt radius plus the 8pt
+/// top, bottom and trailing margins sit concentrically inside the lozenge's
+/// 22pt capsule end-cap. Uses a crisp surface fill and hairline ring rather
+/// than nested glass so both buttons read as distinct, easy-to-hit round
+/// controls against the lozenge's own glass material.
+@available(iOS 15.0, macOS 13.0, *)
+public struct GlassTopBarLozengeDisc: View {
+    public let systemImage: String
+    public var isActive: Bool
+
+    public init(systemImage: String, isActive: Bool = false) {
+        self.systemImage = systemImage
+        self.isActive = isActive
+    }
+
+    public var body: some View {
+        Image(systemName: systemImage)
+            .font(.ripulIcon(size: 12, weight: .bold))
+            .foregroundStyle(.ripul(.text))
+            .frame(width: 28, height: 28)
+            .background(
+                Color.ripul(.text).opacity(isActive ? 0.18 : 0.10),
+                in: Circle()
+            )
+            .overlay {
+                Circle()
+                    .strokeBorder(Color.ripul(.text).opacity(isActive ? 0.28 : 0.16), lineWidth: 0.75)
+            }
+            .contentShape(Circle())
     }
 }
 
@@ -253,6 +382,8 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
 
     @Namespace private var topBarNS
     @State private var showingScope = false
+    @Environment(\.ripulRailGutters) private var railGutters
+    @Environment(\.ripulRootBack) private var rootBack
 
     public init(
         title: String,
@@ -309,18 +440,27 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
     /// A screen with no menu items would otherwise get an ellipsis that opens an
     /// empty sheet — worse than no affordance at all.
     private var hasMenu: Bool { showsMenu && MenuContent.self != EmptyView.self }
-    private var hasLeading: Bool { leading != nil || (showLeading && onLeading != nil) }
+    private var hasLeading: Bool { leading != nil || (showLeading && onLeading != nil) || backsOut != nil }
+
+    /// Where the sidebar button goes back to instead: a root opened from
+    /// another screen (`RipulRootBack`). Only a sidebar button is replaced; a
+    /// screen's own back or close keeps its action.
+    private var backsOut: RipulRootBack? {
+        guard leading == nil, onLeading != nil, leadingIcon == RipulRootBack.sidebarSymbol else { return nil }
+        return rootBack
+    }
 
     /// Symmetric, so the lozenge stays screen-centred rather than centred in the
     /// leftover space. Sized to the WIDER cluster: one 44pt button plus its 12pt
-    /// gutter is 56, each additional button 52.
+    /// gutter is 56, each additional button 52. The outer frosted bar already
+    /// supplies `outerBarPadding` on all sides, so a side with no buttons needs 0 here.
     private var resolvedInset: CGFloat {
         if let centerInset { return centerInset }
-        let leadingWidth: CGFloat = hasLeading ? 56 : 12
-        var trailingWidth: CGFloat = 12
+        let leadingWidth: CGFloat = hasLeading ? 56 : 0
+        var trailingWidth: CGFloat = 0
         if hasMenu { trailingWidth = 56 }
-        if onAction != nil, actionIcon != nil { trailingWidth += 52 }
-        if trailingAccessory != nil { trailingWidth += 52 }
+        if onAction != nil, actionIcon != nil { trailingWidth += (trailingWidth == 0 ? 56 : 52) }
+        if trailingAccessory != nil { trailingWidth += (trailingWidth == 0 ? 56 : 52) }
         return max(leadingWidth, trailingWidth)
     }
 
@@ -339,7 +479,14 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
                 .buttonStyle(.plain)
                 #endif
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, GlassTopBarLayout.outerBarPadding)
+        .background {
+            GlassTopBarOuterBackground()
+                .padding(.vertical, -GlassTopBarLayout.outerBarPadding)
+        }
+        // A screen whose content gives its gutter way beside the system's tab
+        // rail asks the bar to do the same (`ripulRailGutters`).
+        .modifier(RailGutters(leading: 12, trailing: 12, active: railGutters))
         .padding(.top, 4)
         // The switcher gestures belong to the WHOLE bar row, not just the
         // lozenge. The lozenge is a small target in the middle of a wide strip
@@ -369,16 +516,26 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
 
     // MARK: - Centre
 
+    private var hasScreenTip: Bool {
+        screenKey != nil && screenTip != nil
+    }
+
+    private var hasLozengeButtons: Bool {
+        center == nil && (switchesScope || hasScreenTip)
+    }
+
     @ViewBuilder
     private var centerLayer: some View {
         Group {
             if let center {
                 center()
+                    .modifier(TitleTapGestures(onTap: lozengeTap, onDoubleTap: onDoubleTapTitle))
             } else {
                 defaultTitleContent
             }
         }
-        .padding(.horizontal, centerInPill && !centerOwnsGlass ? 12 : 0)
+        .padding(.leading, centerInPill && !centerOwnsGlass ? 12 : 0)
+        .padding(.trailing, centerInPill && !centerOwnsGlass ? (hasLozengeButtons ? 8 : 12) : 0)
         .frame(minHeight: 44)
         .modifier(ConditionalGlassPill(active: centerInPill && !centerOwnsGlass))
         .modifier(ConditionalGlassEffectID(
@@ -398,7 +555,6 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
                 NotificationCenter.default.post(name: .ripulShowDevTools, object: nil)
             }
         )
-        .modifier(TitleTapGestures(onTap: lozengeTap, onDoubleTap: onDoubleTapTitle))
         .uiKitIdentifier("GlassTopBar.titleLozenge")
     }
 
@@ -408,6 +564,7 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
     /// opens on touch-down and would take the swipe that summons the switcher.
     private var switchesScope: Bool {
         guard let scope, center == nil, onTapTitle == nil else { return false }
+        if scope.ticks != nil { return scope.options.count > 1 }
         return scope.options.contains { $0.id != scope.current.id }
     }
 
@@ -418,50 +575,54 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
 
     @ViewBuilder
     private var defaultTitleContent: some View {
-        HStack(spacing: 8) {
-            if let scope {
-                // Beside both lines and drawn as the Machines panel draws a
-                // Mac's icon. As a caption-sized grey glyph inside the
-                // subtitle it was there, and nobody saw it.
-                Image(systemName: scope.current.icon)
-                    .font(.ripulIcon(size: 16))
-                    .foregroundStyle(.ripul(.info))
-                    .contentTransition(.symbolEffect(.replace))
-                    .uiKitIdentifier("GlassTopBar.scope.icon")
-            }
-            VStack(alignment: scope == nil ? .center : .leading, spacing: 1) {
-                HStack(spacing: 4) {
+        HStack(spacing: switchesScope && hasScreenTip ? 6 : 8) {
+            HStack(spacing: 8) {
+                if let scope {
+                    // Beside both lines and drawn as the Machines panel draws a
+                    // Mac's icon. As a caption-sized grey glyph inside the
+                    // subtitle it was there, and nobody saw it.
+                    Image(systemName: scope.current.icon)
+                        .font(.ripulIcon(size: 16))
+                        .foregroundStyle(.ripul(.info))
+                        .contentTransition(.symbolEffect(.replace))
+                        .uiKitIdentifier("GlassTopBar.scope.icon")
+                }
+                VStack(alignment: scope == nil && !hasLozengeButtons ? .center : .leading, spacing: 1) {
                     Text(scope?.currentIsTitle == true ? scope?.current.title ?? title : title)
                         .font(.ripul(.caption))
                         .fontWeight(.semibold)
                         .foregroundColor(.ripul(.text))
                         .lineLimit(1)
                         .contentTransition(.interpolate)
-                    if let key = screenKey, let screenTip {
-                        screenTip(key)
-                    }
-                }
-                if let scope {
-                    HStack(spacing: 3) {
+                    if let scope {
                         Text(scope.currentIsTitle
                              ? scope.detail ?? ""
                              : scope.detail.map { scope.current.title + " · " + $0 } ?? scope.current.title)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .contentTransition(.interpolate)
-                        if switchesScope {
-                            Image(systemName: "chevron.down").font(.ripulIcon(size: 7, weight: .bold))
-                        }
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
+                            .uiKitIdentifier("GlassTopBar.scope")
+                    } else if let subtitle {
+                        Text(subtitle)
+                            .font(.ripul(.caption2))
+                            .foregroundStyle(.ripul(.textSecondary))
+                            .contentTransition(.interpolate)
                     }
-                    .font(.ripul(.caption2))
-                    .foregroundStyle(.ripul(.textSecondary))
-                    .uiKitIdentifier("GlassTopBar.scope")
-                } else if let subtitle {
-                    Text(subtitle)
-                        .font(.ripul(.caption2))
-                        .foregroundStyle(.ripul(.textSecondary))
-                        .contentTransition(.interpolate)
                 }
+                if switchesScope {
+                    GlassTopBarLozengeDisc(systemImage: "chevron.down", isActive: showingScope)
+                        .accessibilityLabel("Switch scope")
+                        .uiKitIdentifier("GlassTopBar.scope.button")
+                }
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .modifier(TitleTapGestures(onTap: lozengeTap, onDoubleTap: onDoubleTapTitle))
+
+            if let key = screenKey, let screenTip {
+                screenTip(key)
             }
         }
     }
@@ -478,17 +639,21 @@ public struct GlassTopBar<MenuContent: View, CenterContent: View>: View {
                 // place in the glass container.
                 leading()
                     .modifier(GlassEffectIDModifier(id: "leading", namespace: topBarNS))
-            } else if showLeading, let onLeading {
-                Button(action: onLeading) {
-                    Image(systemName: leadingIcon)
+            } else if let onLeading, showLeading || backsOut != nil {
+                // A root opened from another screen goes back to it, sidebar
+                // pinned or not (see `RipulRootBack`).
+                let back = backsOut
+                Button { if let back { back.handler.goBack() } else { onLeading() } } label: {
+                    Image(systemName: back == nil ? leadingIcon : "chevron.left")
                         .contentTransition(.symbolEffect(.replace))
                         .font(.ripulIcon(size: 18, weight: .semibold))
                         .foregroundStyle(.ripul(.text))
                         .frame(width: 44, height: 44)
-                        .modifier(GlassCircleModifier(glassStyle: "regular"))
+                        .modifier(GlassCircleModifier(glassStyle: "clear"))
                         .modifier(GlassEffectIDModifier(id: "leading", namespace: topBarNS))
                 }
-                .uiKitIdentifier("GlassTopBar.leadingButton")
+                .modifier(BackLabel(title: back?.title))
+                .uiKitIdentifier(back == nil ? "GlassTopBar.leadingButton" : "GlassTopBar.rootBack")
             }
 
             Spacer()
@@ -556,7 +721,7 @@ private struct TrailingMenuHost<MenuContent: View>: View, Equatable {
                 .font(.ripulIcon(size: 18, weight: .semibold))
                 .foregroundStyle(.ripul(.text))
                 .frame(width: 44, height: 44)
-                .modifier(GlassCircleModifier(glassStyle: "regular"))
+                .modifier(GlassCircleModifier(glassStyle: "clear"))
                 .modifier(GlassEffectIDModifier(id: "trailing", namespace: namespace))
         }
         #if targetEnvironment(macCatalyst)
@@ -610,7 +775,233 @@ private struct ConditionalGlassPill: ViewModifier {
 
     func body(content: Content) -> some View {
         if active {
-            content.modifier(GlassPillModifier())
+            content.modifier(GlassPillModifier(glassStyle: "clear"))
+        } else {
+            content
+        }
+    }
+}
+
+/// Fixed optical blur parameters for `GlassTopBarOuterBackground` (chosen in UX
+/// Settings on 6 November 2026: Capsule Bar Blur ON, Scroll-Edge Blur OFF, Clear
+/// Glass Controls ON, Blur Radius 5.8 pt / 23%, Tint 0%).
+public enum TopBarFrost {
+    /// Chosen blur fraction (23% of 25pt = 5.75pt / 5.8pt Gaussian blur radius).
+    public static let standard = 0.23
+    /// Chosen tint opacity (0% -> pure untinted optical blur).
+    public static let standardTint = 0.0
+    /// Maximum Gaussian blur radius scale in points.
+    public static let maxBlurRadius: CGFloat = 25.0
+
+    public static func blurRadius(_ frost: Double) -> CGFloat {
+        CGFloat(min(max(frost, 0), 1)) * maxBlurRadius
+    }
+}
+
+/// Translucent 54pt outer blur capsule wrapping the bar's controls and title lozenge,
+/// matching the iPhone Duo status bar's height and vertical alignment (`y = 21..75`
+/// around the `44pt` controls at `y = 26..70`). Uses a true `CABackdropLayer` Gaussian
+/// blur at `5.8 pt` (`23%`) with `0%` tint so content scrolling underneath is smoothly
+/// out of focus with no milky wash.
+@available(iOS 15.0, macOS 13.0, *)
+public struct GlassTopBarOuterBackground: View {
+    public init() {}
+
+    public var body: some View {
+        VariableBackdropBlurView(
+            blurRadius: TopBarFrost.blurRadius(TopBarFrost.standard),
+            tintOpacity: TopBarFrost.standardTint,
+            scrollEdgeEnabled: false
+        )
+        .clipShape(Capsule())
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .uiKitIdentifier("GlassTopBar.outerBar")
+    }
+}
+
+#if os(iOS)
+private struct VariableBackdropBlurView: UIViewRepresentable {
+    var blurRadius: CGFloat
+    var tintOpacity: Double
+    var scrollEdgeEnabled: Bool
+
+    func makeUIView(context: Context) -> BackdropBlurEffectView {
+        let view = BackdropBlurEffectView()
+        view.blurRadius = blurRadius
+        view.tintOpacity = tintOpacity
+        view.scrollEdgeEnabled = scrollEdgeEnabled
+        return view
+    }
+
+    func updateUIView(_ uiView: BackdropBlurEffectView, context: Context) {
+        uiView.blurRadius = blurRadius
+        uiView.tintOpacity = tintOpacity
+        uiView.scrollEdgeEnabled = scrollEdgeEnabled
+    }
+}
+
+/// Drives the `CABackdropLayer` Gaussian blur radius (`0pt`–`25pt`) directly on a
+/// `UIVisualEffectView` while scaling or hiding its `_UIVisualEffectSubview` tint overlays.
+private final class BackdropBlurEffectView: UIVisualEffectView {
+    var blurRadius: CGFloat = TopBarFrost.blurRadius(TopBarFrost.standard) {
+        didSet {
+            if abs(oldValue - blurRadius) > 0.05 {
+                applyBlurSettings()
+            }
+        }
+    }
+
+    var tintOpacity: Double = TopBarFrost.standardTint {
+        didSet {
+            if abs(oldValue - tintOpacity) > 0.005 {
+                applyBlurSettings()
+            }
+        }
+    }
+
+    var scrollEdgeEnabled: Bool = false {
+        didSet {
+            if oldValue != scrollEdgeEnabled {
+                updateScrollEdgeInteraction()
+            }
+        }
+    }
+
+    private var storedEdgeInteraction: AnyObject?
+
+    @available(iOS 26.0, *)
+    private var edgeInteraction: UIScrollEdgeElementContainerInteraction {
+        if let existing = storedEdgeInteraction as? UIScrollEdgeElementContainerInteraction {
+            return existing
+        }
+        let interaction = UIScrollEdgeElementContainerInteraction()
+        interaction.edge = .top
+        storedEdgeInteraction = interaction
+        return interaction
+    }
+
+    init() {
+        super.init(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+        isUserInteractionEnabled = false
+        applyBlurSettings()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        applyBlurSettings()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        applyBlurSettings()
+        updateScrollEdgeInteraction()
+    }
+
+    private func applyBlurSettings() {
+        guard let backdropView = subviews.first else { return }
+        let active = blurRadius > 0.05 || tintOpacity > 0.005
+        backdropView.isHidden = !active
+        if let filters = backdropView.layer.filters {
+            for filter in filters {
+                guard let obj = filter as? NSObject else { continue }
+                let name = (obj.value(forKey: "name") as? String) ?? String(describing: obj)
+                if name == "gaussianBlur" {
+                    backdropView.layer.setValue(
+                        NSNumber(value: Double(max(0, blurRadius))),
+                        forKeyPath: "filters.gaussianBlur.inputRadius"
+                    )
+                    backdropView.layer.setValue(
+                        true,
+                        forKeyPath: "filters.gaussianBlur.inputNormalizeEdges"
+                    )
+                } else if name == "colorSaturate" {
+                    let saturation = 1.0 + 0.8 * min(max(tintOpacity, 0), 1)
+                    backdropView.layer.setValue(
+                        NSNumber(value: saturation),
+                        forKeyPath: "filters.colorSaturate.inputAmount"
+                    )
+                }
+            }
+        }
+        for subview in subviews.dropFirst() {
+            subview.alpha = CGFloat(min(max(tintOpacity, 0), 1))
+            subview.isHidden = tintOpacity <= 0.005
+        }
+    }
+
+    private func updateScrollEdgeInteraction() {
+        guard #available(iOS 26.0, *) else { return }
+        guard let targetContainer = superview?.superview ?? superview else { return }
+        if scrollEdgeEnabled, window != nil {
+            if let scrollView = Self.findScrollView(from: targetContainer) {
+                edgeInteraction.scrollView = scrollView
+                scrollView.topEdgeEffect.style = .soft
+                scrollView.topEdgeEffect.isHidden = false
+                if !targetContainer.interactions.contains(where: { $0 === edgeInteraction }) {
+                    targetContainer.addInteraction(edgeInteraction)
+                }
+            }
+        } else {
+            if targetContainer.interactions.contains(where: { $0 === edgeInteraction }) {
+                targetContainer.removeInteraction(edgeInteraction)
+            }
+            edgeInteraction.scrollView = nil
+        }
+    }
+
+    private static func findScrollView(from startView: UIView) -> UIScrollView? {
+        var current: UIView? = startView.superview
+        while let view = current {
+            if let found = firstDescendantScrollView(in: view, skipping: startView) {
+                return found
+            }
+            current = view.superview
+        }
+        return nil
+    }
+
+    private static func firstDescendantScrollView(in root: UIView, skipping: UIView) -> UIScrollView? {
+        guard root !== skipping else { return nil }
+        if let scroll = root as? UIScrollView,
+           scroll.bounds.height > 120,
+           scroll.isScrollEnabled {
+            return scroll
+        }
+        for child in root.subviews {
+            if let found = firstDescendantScrollView(in: child, skipping: skipping) {
+                return found
+            }
+        }
+        return nil
+    }
+}
+#elseif os(macOS)
+private struct VariableBackdropBlurView: View {
+    var blurRadius: CGFloat
+    var tintOpacity: Double
+    var scrollEdgeEnabled: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .opacity(min(max( Double(blurRadius) / Double(TopBarFrost.maxBlurRadius), tintOpacity), 1))
+    }
+}
+#endif
+
+/// "Back to Home" on a sidebar button that goes back (`RipulRootBack`); a
+/// sidebar button keeps the label it has.
+private struct BackLabel: ViewModifier {
+    let title: String?
+
+    func body(content: Content) -> some View {
+        if let title {
+            content.accessibilityLabel("Back to \(title)")
         } else {
             content
         }
@@ -620,12 +1011,33 @@ private struct ConditionalGlassPill: ViewModifier {
 /// Shared by the bar's centre slot and the chat title's sibling overlay.
 /// The double tap must fail before a single tap can mutate the pill's layout.
 /// Apply to the title header, keeping disclosed controls outside its hit area.
+///
+/// On an iPhone these are UIKit taps (`TitleTapRecognizer`), because a SwiftUI
+/// tap in the window's top 64 points never fires: UIKit's scroll-to-top region
+/// takes it, and the iPhone Duo's bar sits in that band.
 @available(iOS 15.0, macOS 13.0, *)
 struct TitleTapGestures: ViewModifier {
     let onTap: (() -> Void)?
     let onDoubleTap: (() -> Void)?
 
     func body(content: Content) -> some View {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        if #available(iOS 18.0, *) {
+            if onTap == nil && onDoubleTap == nil {
+                content
+            } else {
+                content.gesture(TitleTapRecognizer(onTap: onTap, onDoubleTap: onDoubleTap))
+            }
+        } else {
+            swiftUITaps(content)
+        }
+        #else
+        swiftUITaps(content)
+        #endif
+    }
+
+    @ViewBuilder
+    private func swiftUITaps(_ content: Content) -> some View {
         if let onTap, let onDoubleTap {
             content.gesture(
                 TapGesture(count: 2)

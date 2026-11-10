@@ -103,7 +103,6 @@ struct VoiceModeOverlay: View {
     @FocusState private var typedFieldFocused: Bool
     #if os(iOS)
     @StateObject private var keyboard = KeyboardObserver()
-    @Environment(\.ripulBottomBarFrame) private var bottomBar
     @State private var navigationClearance: CGFloat = 0
     #endif
 
@@ -330,7 +329,7 @@ struct VoiceModeOverlay: View {
             }
         }
         #if os(iOS)
-        .background(SessionsScrollBoundsReader(bottomBar: bottomBar, gap: 0) {
+        .background(SessionsScrollBoundsReader(gap: 0) {
             navigationClearance = $0
         })
         #endif

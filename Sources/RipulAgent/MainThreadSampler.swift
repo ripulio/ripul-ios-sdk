@@ -37,6 +37,7 @@ public final class MainThreadSampler: @unchecked Sendable {
     // Main-thread only.
     private var busyMs: Double = 0
     private var counts: [String: Int] = [:]
+    private var timings: [String: (runs: Int, totalMs: Double, maxMs: Double)] = [:]
     private var windowStart: CFTimeInterval = 0
     private var cpuAtWindowStart: Double = 0
 
@@ -48,6 +49,12 @@ public final class MainThreadSampler: @unchecked Sendable {
     /// Guards `profile`, swapped out by the minute report on main. Taken only
     /// after the main thread has been resumed, so it cannot deadlock a capture.
     private let profileLock = NSLock()
+    /// The tripwire's stalls this minute (under `profileLock`): all counted for
+    /// `[PERFMIN]`, the first few written out, so a busy minute does not push
+    /// hours of minutes out of the journal.
+    private var minuteStalls = 0
+    private var minuteWorstStallMs: Double = 0
+    private static let stallLinesPerMinute = 6
 
     private init() {
         buffer = .allocate(capacity: maxFrames)
@@ -70,6 +77,15 @@ public final class MainThreadSampler: @unchecked Sendable {
     /// arguments: the debug link `ripul://perf?stallStacks=on`.
     public static func setStallStacks(_ on: Bool) { shared.alwaysArmed = on }
 
+    /// The stall tripwire (Peter, 5 November 2026: the main thread draws the
+    /// screen and does nothing heavy, docs/main-thread.md). Always on in Debug
+    /// builds: whenever the main thread stays awake this long, a `[STALL]`
+    /// line naming what filled it goes to the log and to the perf journal
+    /// (`device_perf_journal`), so a stall felt on a phone can be found after
+    /// the fact. Sampling starts once a stall is this long, so the line names
+    /// what was still running then.
+    static let tripwireMs: Double = 50
+
     /// While a slide is measured: capture stacks for main-thread stalls.
     public static func arm() { shared.armed = true }
     public static func disarm() { shared.armed = false }
@@ -78,6 +94,36 @@ public final class MainThreadSampler: @unchecked Sendable {
     public static func count(_ name: String) {
         guard Thread.isMainThread, shared.started else { return }
         shared.counts[name, default: 0] += 1
+    }
+
+    /// Record a measured duration under `timed:` in the next `[PERFMIN]` line
+    /// (main thread), as `time(_:_:)` does for a closure.
+    public static func record(_ name: String, ms: Double) {
+        guard Thread.isMainThread, shared.started else { return }
+        var timing = shared.timings[name] ?? (runs: 0, totalMs: 0, maxMs: 0)
+        timing.runs += 1
+        timing.totalMs += ms
+        timing.maxMs = max(timing.maxMs, ms)
+        shared.timings[name] = timing
+    }
+
+    /// Time a piece of main-thread work for the next `[PERFMIN]` line, as
+    /// `name=<runs>x <total>ms max <worst>ms` under `timed:`: how long the
+    /// session list's arrangement takes on a busy device, not only how often
+    /// it runs (docs/main-thread.md).
+    @discardableResult
+    public static func time<T>(_ name: String, _ work: () throws -> T) rethrows -> T {
+        guard Thread.isMainThread, shared.started else { return try work() }
+        let started = CACurrentMediaTime()
+        defer {
+            let ms = (CACurrentMediaTime() - started) * 1000
+            var timing = shared.timings[name] ?? (runs: 0, totalMs: 0, maxMs: 0)
+            timing.runs += 1
+            timing.totalMs += ms
+            timing.maxMs = max(timing.maxMs, ms)
+            shared.timings[name] = timing
+        }
+        return try work()
     }
 
     @MainActor private func startOnMain() {
@@ -121,7 +167,10 @@ public final class MainThreadSampler: @unchecked Sendable {
             MainActor.assumeIsolated { self.noteDefaultsChange(note.object as? UserDefaults) }
         }
 
-        let timer = Timer(timeInterval: 60, repeats: true) { [unowned self] _ in
+        // Every 20 s under a frame-budget test, whose runs last about a minute,
+        // so each has its own lines; once a minute otherwise.
+        let interval: TimeInterval = UserDefaults.standard.bool(forKey: "ripul.debug.frameBudget") ? 20 : 60
+        let timer = Timer(timeInterval: interval, repeats: true) { [unowned self] _ in
             MainActor.assumeIsolated { self.reportMinute() }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -137,7 +186,8 @@ public final class MainThreadSampler: @unchecked Sendable {
             let since = awakeSince.pointee
             let awakeMs = since > 0 ? (now - since) * 1000 : 0
 
-            if (armed || alwaysArmed) && awakeMs > 30 {
+            let watching = armed || alwaysArmed
+            if awakeMs > (watching ? 30 : Self.tripwireMs) {
                 if stallStartedAt != since { flushStall(); stallStartedAt = since }
                 stallLastSeenAt = now
                 if stallSamples.count < (alwaysArmed ? 200 : 60), let stack = captureMain() { stallSamples.append(stack) }
@@ -192,7 +242,27 @@ public final class MainThreadSampler: @unchecked Sendable {
         guard stallSamples.count >= 2 else { return }
         // From when the main thread woke to when it was last seen awake. Counting
         // samples read short: taking one costs time on top of the 4ms between them.
-        let ms = alwaysArmed ? (stallLastSeenAt - stallStartedAt) * 1000 : Double(stallSamples.count) * 4 + 30
+        let measured = (stallLastSeenAt - stallStartedAt) * 1000
+        if measured >= Self.tripwireMs {
+            profileLock.lock()
+            minuteStalls += 1
+            minuteWorstStallMs = max(minuteWorstStallMs, measured)
+            // A long one is always written: a minute's first few can be the launch's.
+            let writes = minuteStalls <= Self.stallLinesPerMinute || measured >= 200
+            profileLock.unlock()
+            if writes {
+                let summary = Self.summarize(stallSamples, top: 10, minShare: 0.2)
+                // The most common frames of a SwiftUI update or layout are all
+                // SwiftUI's; ours, at any share, say which view it was.
+                let ours = Self.summarize(stallSamples, top: 6, minShare: 0.05, ownCodeOnly: true)
+                let line = String(format: "[STALL] ~%.0fms | %@%@", measured, summary,
+                                  ours == "-" ? "" : " | ours: \(ours)")
+                DispatchQueue.main.async { NSLog("%@", line) }
+                PerfJournal.append(line)
+            }
+        }
+        guard armed || alwaysArmed else { return }
+        let ms = alwaysArmed ? measured : Double(stallSamples.count) * 4 + 30
         // Always on, a block holds several pieces of work in turn: show the smaller shares too.
         let summary = Self.summarize(stallSamples, top: alwaysArmed ? 18 : 10, minShare: alwaysArmed ? 0.15 : 0.4)
         let line = String(format: "[STALLSTACK] ~%.0fms samples=%d | %@", ms, stallSamples.count, summary)
@@ -234,16 +304,25 @@ public final class MainThreadSampler: @unchecked Sendable {
         counts = [:]
         let writes = defaultsWrites.sorted { $0.value > $1.value }.prefix(8).map { "\($0.key)x\($0.value)" }.joined(separator: " ")
         defaultsWrites = [:]
+        let timed = timings.sorted { $0.value.totalMs > $1.value.totalMs }
+            .map { String(format: "%@=%dx %.0fms max %.0fms", $0.key, $0.value.runs, $0.value.totalMs, $0.value.maxMs) }
+            .joined(separator: " ")
+        timings = [:]
         let thermal = Self.thermalName(ProcessInfo.processInfo.thermalState)
         profileLock.lock()
         let samples = profile
         profile = []
+        let stalls = minuteStalls
+        let worstStall = minuteWorstStallMs
+        minuteStalls = 0
+        minuteWorstStallMs = 0
         profileLock.unlock()
         // Symbolicating ~1,800 samples took 234ms on the main thread — the
         // instrument's own stall. Do it off main; only the counts are taken here.
-        let header = String(format: "[PERFMIN] %.0fs cpu=%.1fs(%.0f%%) main-awake=%.0f%% thermal=%@ samples=%d | counts: %@ | defaults: %@",
+        let header = String(format: "[PERFMIN] %.0fs cpu=%.1fs(%.0f%%) main-awake=%.0f%% stalls=%d worst=%.0fms thermal=%@ samples=%d | counts: %@ | timed: %@ | defaults: %@",
                             wall, cpuUsed, cpuUsed / max(wall, 1) * 100, busy / max(wall * 1000, 1) * 100,
-                            thermal, samples.count, snapshot, writes.isEmpty ? "-" : writes)
+                            stalls, worstStall, thermal, samples.count, snapshot, timed.isEmpty ? "-" : timed,
+                            writes.isEmpty ? "-" : writes)
         DispatchQueue.global(qos: .utility).async {
             let hot = Self.summarize(samples, top: 12, minShare: 0.03)
             NSLog("%@", "\(header) | main: \(hot)")
@@ -301,7 +380,8 @@ public final class MainThreadSampler: @unchecked Sendable {
 
     /// Frames present in at least `minShare` of samples, most common first,
     /// skipping run loop / dispatch plumbing that is present in every stack.
-    private static func summarize(_ samples: [[UInt]], top: Int, minShare: Double) -> String {
+    /// - Parameter ownCodeOnly: only frames in the app's own images (`Ripul…`).
+    private static func summarize(_ samples: [[UInt]], top: Int, minShare: Double, ownCodeOnly: Bool = false) -> String {
         guard !samples.isEmpty else { return "-" }
         let plumbing = ["CFRunLoop", "__CFRunLoop", "_CFRunLoop", "__CFRUNLOOP_IS", "__CFMachPortPerform",
                         "_dispatch", "dispatch_", "UIApplicationMain", "GSEventRun",
@@ -315,6 +395,7 @@ public final class MainThreadSampler: @unchecked Sendable {
             var seen = Set<String>()
             for address in stack {
                 let name = symbol(address)
+                if ownCodeOnly && !name.hasPrefix("Ripul") { continue }
                 let bare = name.split(separator: "`").last.map(String.init) ?? name
                 if plumbing.contains(where: { bare.hasPrefix($0) }) { continue }
                 if seen.insert(name).inserted { tally[name, default: 0] += 1 }
@@ -336,5 +417,8 @@ public enum MainThreadSampler {
     public static func disarm() {}
     public static func setStallStacks(_ on: Bool) {}
     public static func count(_ name: String) {}
+    public static func record(_ name: String, ms: Double) {}
+    @discardableResult
+    public static func time<T>(_ name: String, _ work: () throws -> T) rethrows -> T { try work() }
 }
 #endif

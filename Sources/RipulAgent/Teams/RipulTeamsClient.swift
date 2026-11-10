@@ -97,13 +97,14 @@ public struct RipulMacArea: Identifiable, Hashable {
         .init(id: "devices", label: "Phones and simulators", icon: "iphone", view: "See devices and their screens", control: "Install, launch and touch"),
         .init(id: "trainyard", label: "Trainyard", icon: "tram.fill", view: "See builds and holds", control: "Request, hold and force builds"),
         .init(id: "system", label: "System", icon: "gauge.with.dots.needle.33percent", view: "See alerts, disk and system details", control: "Clear temporary files"),
+        .init(id: "simulators", label: "Lend simulators", icon: "iphone.gen3", view: nil, control: "Borrow this Mac's simulators for their agents"),
     ]
 
     /// The area a recorded command or remote action belongs to, for the activity list.
     static func area(of command: String) -> RipulMacArea? {
         let prefixes: [(String, String)] = [
             ("dock:", "dock"), ("processes:", "processes"), ("screen:", "screen"), ("mirror:", "screen"),
-            ("liveview:", "devices"), ("bridge:", "devices"), ("trainyard:", "trainyard"), ("script:", "scripts"),
+            ("liveview:", "devices"), ("bridge:", "devices"), ("trainyard:fleet", "simulators"), ("trainyard:", "trainyard"), ("script:", "scripts"),
             ("alerts:", "system"), ("agent:writeFile", "files"), ("agent:repo", "repos"), ("agent:git", "repos"),
             ("agent:script", "scripts"), ("agent:jobControl", "terminal"),
         ]

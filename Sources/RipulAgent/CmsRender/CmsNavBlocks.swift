@@ -400,7 +400,7 @@ struct CmsTopNavBlockView: View {
                        weight: CmsTypography.weight(typo) ?? .regular)
     }
     private var labelColor: Color {
-        runtime.color(block.props.object("labelTypography")?.string("color")) ?? .primary
+        runtime.textColor(block.props.object("labelTypography")?.string("color"))
     }
 
     /// The routed page's title (web: the portal shell's `activePage`). Nil
@@ -412,7 +412,7 @@ struct CmsTopNavBlockView: View {
             Text(title)
                 .font(.system(size: CmsTypography.size(typo) ?? 17,
                               weight: CmsTypography.weight(typo) ?? .bold))
-                .foregroundColor(runtime.color(typo?.string("color")) ?? .primary)
+                .foregroundColor(runtime.textColor(typo?.string("color")))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .accessibilityAddTraits(.isHeader)

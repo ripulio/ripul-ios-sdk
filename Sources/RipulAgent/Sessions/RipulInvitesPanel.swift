@@ -51,15 +51,12 @@ struct RipulInvitesPanel: View {
                 } message: {
                     Text("You will need a new invitation to join again.")
                 }
-        } else {
-            // Still fetch on appear so a later invite appearing flips us visible.
-            Color.clear.frame(height: 0)
-                .task { await inviteManager.fetchInvites() }
         }
     }
 
-    /// Team invitations, each with Accept and Decline in the row: the one
-    /// place a Mac shows them, so the action has to be here, not a screen away.
+    /// Team invitations, each with Accept and Decline in the row, so the
+    /// action is here, not a screen away. The Ripul app also asks about each
+    /// one in an alert (TeamInvitePrompt); this row is where one put off waits.
     private var teamInvitesPanel: some View {
         GlassSectionPanel(title: "Team invitations (\(inviteManager.teamInvites.count))", isExpanded: .constant(true),
                           collapsible: false) {

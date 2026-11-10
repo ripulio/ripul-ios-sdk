@@ -171,6 +171,129 @@ final class HostScreenPreviewTests: XCTestCase {
         XCTAssertLessThanOrEqual(panel.frame.minY + aboveKeyboard.height, keyboardY - 68 + 1)
     }
 
+    func testPinchKeepsThePointBetweenTheFingersAndMayTakeTheWholeRegion() async throws {
+        // The point between the fingers stays where it was on the panel, a
+        // point outside it counting as its nearest edge.
+        let start = CGRect(x: 100, y: 200, width: 120, height: 240)
+        let anchor = CGPoint(x: 130, y: 260)
+        XCTAssertEqual(FloatingPanelPinch.origin(start: start, anchor: anchor, size: CGSize(width: 240, height: 480)),
+                       CGPoint(x: 70, y: 140))
+        XCTAssertEqual(FloatingPanelPinch.origin(start: start, anchor: anchor, size: start.size), start.origin)
+        XCTAssertEqual(FloatingPanelPinch.origin(start: start, anchor: CGPoint(x: 400, y: 100), size: CGSize(width: 60, height: 120)),
+                       CGPoint(x: 340, y: 100))
+
+        // Low in the window, the grip has little room below the panel; a pinch
+        // has the whole region, since the panel moves to make room.
+        let host = try window(color: .white)
+        let store = defaults()
+        store.set(400.0, forKey: "y")
+        let controller = RipulFloatingPanelController(
+            content: Color.clear.frame(width: 120, height: 240),
+            size: CGSize(width: 120, height: 240), minSize: CGSize(width: 80, height: 160),
+            showsResizeGrip: true, gripTint: .white,
+            posXKey: "x", posYKey: "y", store: store, aspectRatio: 0.5,
+            contentInsets: UIEdgeInsets(top: 40, left: 0, bottom: 60, right: 0),
+            onResize: { _ in }, onResizeEnded: { _ in })
+        host.rootViewController = controller
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let insets = host.safeAreaInsets
+        let regionWidth = controller.view.bounds.width - insets.left - insets.right - 16
+        let regionHeight = controller.view.bounds.height - insets.top - insets.bottom - 40 - 60 - 16
+        let start120 = CGSize(width: 120, height: 240)
+        let largest = controller.pinchedSize(from: start120, scale: 100)
+        XCTAssertEqual(largest.width, min(regionWidth, regionHeight * 0.5), accuracy: 0.5)
+        XCTAssertEqual(largest.width / largest.height, 0.5, accuracy: 0.001)
+        XCTAssertLessThan(controller.clampedSize(CGSize(width: 4000, height: 4000)).height, largest.height)
+        XCTAssertEqual(controller.pinchedSize(from: start120, scale: 1.5), CGSize(width: 180, height: 360))
+        XCTAssertEqual(controller.pinchedSize(from: start120, scale: 0.01), CGSize(width: 80, height: 160))
+        XCTAssertEqual(controller.pinchedSize(from: start120, scale: .nan), start120)
+    }
+
+    func testAToolbarAboveTheLockedAreaIsLeftOutOfItsRatio() async throws {
+        let host = try window(color: .white)
+        let controller = RipulFloatingPanelController(
+            content: Color.clear.frame(width: 120, height: 270),
+            size: CGSize(width: 120, height: 270), minSize: CGSize(width: 80, height: 190),
+            showsResizeGrip: true, gripTint: .white,
+            posXKey: "x", posYKey: "y", store: defaults(), aspectRatio: 0.5, toolbarHeight: 30,
+            contentInsets: UIEdgeInsets(top: 40, left: 0, bottom: 60, right: 0),
+            onResize: { _ in }, onResizeEnded: { _ in })
+        host.rootViewController = controller
+        try await Task.sleep(nanoseconds: 200_000_000)
+        // Below the 30-point bar the ratio holds, at every size.
+        let start = CGSize(width: 120, height: 270)
+        XCTAssertEqual(controller.pinchedSize(from: start, scale: 1.5), CGSize(width: 180, height: 390))
+        XCTAssertEqual(controller.pinchedSize(from: start, scale: 0.01), CGSize(width: 80, height: 190))
+        XCTAssertEqual(controller.clampedSize(CGSize(width: 140, height: 310)), CGSize(width: 140, height: 310))
+        // The largest still fits the region, bar and all.
+        let insets = host.safeAreaInsets
+        let regionHeight = controller.view.bounds.height - insets.top - insets.bottom - 40 - 60 - 16
+        let largest = controller.pinchedSize(from: start, scale: 100)
+        XCTAssertLessThanOrEqual(largest.height, regionHeight + 0.5)
+        XCTAssertEqual((largest.height - 30) * 0.5, largest.width, accuracy: 0.001)
+        let gripped = controller.clampedSize(CGSize(width: 4000, height: 4000))
+        XCTAssertLessThanOrEqual(gripped.height, regionHeight + 0.5)
+        XCTAssertEqual((gripped.height - 30) * 0.5, gripped.width, accuracy: 0.001)
+    }
+
+    func testAPanelThatMovesToTheWindowsEdgesGoesOverTheBarsAndIsSizedBetweenThem() async throws {
+        let host = try window(color: .white)
+        let insets = host.safeAreaInsets
+        let regionHeight = host.bounds.height - insets.top - insets.bottom - 40 - 60 - 16
+        var placed: [CGRect] = []
+        var gripped: [CGSize] = []
+        var last: (controller: UIViewController, panel: UIView)?
+        // Never placed; then left past the window's top-left; then past its foot.
+        for stored in [nil, CGPoint(x: -500, y: -500), CGPoint(x: 5000, y: 5000)] {
+            let store = defaults()
+            if let stored {
+                store.set(Double(stored.x), forKey: "x")
+                store.set(Double(stored.y), forKey: "y")
+            }
+            let controller = RipulFloatingPanelController(
+                content: Color.clear.frame(width: 120, height: 270),
+                size: CGSize(width: 120, height: 270), minSize: CGSize(width: 80, height: 190),
+                showsResizeGrip: true, gripTint: .white,
+                posXKey: "x", posYKey: "y", store: store, aspectRatio: 0.5, toolbarHeight: 30,
+                contentInsets: UIEdgeInsets(top: 40, left: 0, bottom: 60, right: 0),
+                avoidsKeyboard: true, onResize: { _ in }, onResizeEnded: { _ in })
+            controller.movesToWindowEdges = true
+            host.rootViewController = controller
+            try await Task.sleep(nanoseconds: 200_000_000)
+            let panel = try XCTUnwrap((controller.view as? RipulFloatingPanelRootView)?.panelView)
+            placed.append(panel.frame)
+            gripped.append(controller.clampedSize(CGSize(width: 4000, height: 4000)))
+            last = (controller, panel)
+        }
+        // Never placed, it starts clear of the host's top bar, as a panel kept inside does.
+        XCTAssertEqual(placed[0].minX, insets.left + 8, accuracy: 0.5)
+        XCTAssertEqual(placed[0].minY, insets.top + 40 + 8, accuracy: 0.5)
+        // It goes over the top bar up to the status bar, where the system takes
+        // every touch, and over the bottom bar and the home indicator right
+        // down to the window's foot.
+        XCTAssertEqual(placed[1].minX, insets.left, accuracy: 0.5)
+        XCTAssertEqual(placed[1].minY, insets.top, accuracy: 0.5)
+        XCTAssertEqual(placed[2].maxX, host.bounds.width - insets.right, accuracy: 0.5)
+        XCTAssertEqual(placed[2].maxY, host.bounds.height, accuracy: 0.5)
+        // At the window's foot the grip keeps the size it has, where the room
+        // below the safe area would have shrunk it to the smallest...
+        XCTAssertEqual(gripped[2].width, placed[2].width, accuracy: 0.5)
+        XCTAssertEqual(gripped[2].height, placed[2].height, accuracy: 0.5)
+        // ...and from the top-left it grows only as big as the room between the bars.
+        XCTAssertLessThanOrEqual(gripped[1].height, regionHeight + 0.5)
+        XCTAssertEqual((gripped[1].height - 30) * 0.5, gripped[1].width, accuracy: 0.001)
+
+        // The keyboard up, the panel keeps clear of it and of the bar above it.
+        let (controller, panel) = try XCTUnwrap(last)
+        let keyboardY = controller.view.bounds.maxY - 200
+        let keyboard = controller.view.convert(CGRect(x: 0, y: keyboardY, width: host.bounds.width, height: 200),
+            to: host.screen.coordinateSpace)
+        NotificationCenter.default.post(name: UIResponder.keyboardWillChangeFrameNotification, object: nil,
+            userInfo: [UIResponder.keyboardFrameEndUserInfoKey: keyboard])
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(panel.frame.maxY, keyboardY - 60 - 8, accuracy: 0.5)
+    }
+
     @available(iOS 26.0, *)
     func testPreviewShrinksToFABRestoresSizeAndDisablesHitRegion() async throws {
         let host = try window(color: .green)

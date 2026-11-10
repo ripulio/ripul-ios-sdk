@@ -40,6 +40,9 @@ public struct HostSetting: Decodable, Identifiable {
     public let unit: String?
     /// What the Mac did with the last change, such as asking for a permission.
     public let note: String?
+    /// For a permission: "skipped" once the person went on without it during
+    /// their visit to a new Mac (HostPermissions on the Mac). Nil from an older Mac.
+    public let visit: String?
     public var id: String { key }
 }
 

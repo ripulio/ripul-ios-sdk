@@ -28,7 +28,8 @@ struct SimulatorPreviewHarness: View {
     }
 }
 
-private struct SimulatorHarnessOverlay: UIViewControllerRepresentable {
+/// Also the dock harness's panel (PreviewDockHarness).
+struct SimulatorHarnessOverlay: UIViewControllerRepresentable {
     let state: SimulatorPreviewState
     func makeUIViewController(context: Context) -> SimulatorPreviewController {
         for key in ["posX", "posY", "w", "h"] { UserDefaults.standard.removeObject(forKey: "ripul.simulatorPreview.\(key)") }

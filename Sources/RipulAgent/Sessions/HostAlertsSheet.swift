@@ -6,8 +6,8 @@ import SwiftUI
 /// list in its registry meta (`alerts`, a JSON string; `src/relay/hostAlerts.ts`
 /// in the web app). The machine's row shows them as a bell, opening
 /// `HostAlertsSheet`.
-public struct HostAlert: Decodable, Identifiable, Equatable {
-    public enum Severity: String, Decodable { case info, warning, critical }
+public struct HostAlert: Decodable, Identifiable, Equatable, Sendable {
+    public enum Severity: String, Decodable, Sendable { case info, warning, critical }
 
     public let id: String
     public let severity: Severity
@@ -31,6 +31,11 @@ public struct HostAlert: Decodable, Identifiable, Equatable {
         let slug = String(id.dropFirst(prefix.count))
         return slug.isEmpty ? nil : slug
     }
+
+    /// A Mac whose Xcode has no account in the team the others sign for
+    /// (`fleet:signing:<team>`, raised from Trainyard's readiness by the host's
+    /// page): its fix is signing Xcode in, from the phone, in Xcode's own window.
+    public var isXcodeSignIn: Bool { id == "fleet:signing" || id.hasPrefix("fleet:signing:") }
 
     var icon: String {
         switch severity {
@@ -62,20 +67,24 @@ public extension RemoteMachine {
 /// offers one (e.g. clearing old /tmp builds when the disk is low).
 public struct HostAlertsSheet: View {
     let machineName: String
+    /// The Mac, for an alert whose fix opens one of its windows on the phone.
+    let machineId: String?
     let alerts: [HostAlert]
     /// Runs an alert's action on the host. Nil = the buttons are not offered.
     let onExecute: ((RemoteActionDescriptor) async -> [String: Any])?
     /// Signs a Claude profile on this machine in again, for a sign-in alert.
     let onSignIn: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @State private var running: String?
     @State private var outcomes: [String: (text: String, ok: Bool)] = [:]
     @State private var confirming: HostAlert?
 
-    public init(machineName: String, alerts: [HostAlert],
+    public init(machineName: String, machineId: String? = nil, alerts: [HostAlert],
                 onExecute: ((RemoteActionDescriptor) async -> [String: Any])?,
                 onSignIn: ((String) -> Void)? = nil) {
         self.machineName = machineName
+        self.machineId = machineId
         self.alerts = alerts
         self.onExecute = onExecute
         self.onSignIn = onSignIn
@@ -139,7 +148,17 @@ public struct HostAlertsSheet: View {
                     .font(.ripul(.caption))
                     .foregroundStyle(.ripul(.textSecondary))
             }
-            if let profile = alert.claudeSignInProfile, let onSignIn {
+            if alert.isXcodeSignIn, let url = xcodeSignInURL {
+                // The app opens Xcode's sign-in on the Mac and shows its window (XcodeSignIn.swift in the app).
+                Button {
+                    dismiss()
+                    openURL(url)
+                } label: {
+                    Label("Sign in on \(machineName)", systemImage: "person.badge.key")
+                }
+                .buttonStyle(.bordered)
+                .uiKitIdentifier("HostAlertsSheet.xcodeSignIn")
+            } else if let profile = alert.claudeSignInProfile, let onSignIn {
                 Button("Sign in again") {
                     dismiss()
                     onSignIn(profile)
@@ -163,6 +182,16 @@ public struct HostAlertsSheet: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// `ripul://xcode-signin?machine=<id>&name=<name>`, which the app handles.
+    private var xcodeSignInURL: URL? {
+        guard let machineId else { return nil }
+        var parts = URLComponents()
+        parts.scheme = "ripul"
+        parts.host = "xcode-signin"
+        parts.queryItems = [URLQueryItem(name: "machine", value: machineId), URLQueryItem(name: "name", value: machineName)]
+        return parts.url
     }
 
     private func run(_ alert: HostAlert) {

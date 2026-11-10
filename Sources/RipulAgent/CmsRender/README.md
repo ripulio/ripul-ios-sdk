@@ -98,10 +98,23 @@ every future port:
 | `CmsLayout.swift` | `CmsCss` (px/rem lengths, padding shorthand, hex/rgba colours) + `CmsBlockFrameModifier` (hug/fill/fixed along the stack axis) + `CmsContainerFrameModifier`. Both take `resolve` / `fill` / `radius` closures so frame colours, gradient backgrounds and `radius.*` tokens honour the theme. |
 | `CmsBlockRegistry.swift` | type→renderer map (+ `register` for host apps); `CmsBlockView` (frame application; **hidden/off-device blocks stay MOUNTED invisibly** — zero frame, opacity 0 — so they keep feeding outputs, same rule as the web); `CmsBlockContainerView` (list/row stacks, template slots stacked `main`-first, sidebar → `CmsSidebarLayoutView`); `CmsUnsupportedBlockView`. |
 | `CmsPageView.swift` | Public entry + `CmsPageLoader` (§4). Ladybug diagnostics button, drawer overlay host. |
+| `CmsAppView.swift` | Public `CmsAppView` (iOS): a site as a whole app on the system tab bar, one `NavigationStack` per tab, one runtime for all tabs; `CmsAppHostTab`, `CmsAppController` (§4.4). |
+| `CmsListStyle.swift` | List styles in the site's theme (§5.8): `CmsListStyle` (the shape, lenient decoding, merging), the built-ins `system`/`plain`/`cards` (twin of the web's `cmsListStyles.builtin.json`, held equal by a test), which style a list uses, `CmsResolvedListStyle` (values and palette-role colours, dark palette when dark). |
+| `CmsListStyleViews.swift` | `CmsStyledRows` (one rounded group, edge-to-edge rows, or a card per row), `CmsListRowContent` (picture in its badge, title, subtitle, trailing, chevron). |
+| `CmsListStyleHost.swift` | Public API for a host's own screens (iOS): `.cmsListStyle(_:)`, `.cmsListRow()`, `CmsListRow`, `.cmsSiteTheme(_:)`. |
+| `CmsListStyleKind.swift` | The `cmsList` style kind on `RipulThemeEngine` (iOS): knobs, built-ins, resolution through `RipulStyleKind.resolve`. |
+| `CmsListRowLayout.swift` / `CmsListRowLayoutViews.swift` | A grid's `listRow` (§5.8): the shape, filling `{column}` slots (joining words drop beside an empty value), the date block, and drawing the row (stacked at accessibility text sizes, one VoiceOver element). |
+| `CmsColumnPresentation.swift` | A column's own presentation: style rules (twin of `agGridStyleRules.ts`: conditions, `text`, `icon`, colours), the chip (`lozenge` with `variant` and `icon`), picture candidates (`image.chain` or the value as an address). |
+| `CmsViews.swift` | Views (§5.9): `CmsViewDef`, the stream's events, a view's rows and per-row source statuses. |
+| `CmsCards.swift` / `CmsCardsBlock.swift` | The `cards` block (§5.9): model and rules; drawing, buttons, closing, `CmsPagedCarousel` (also the section carousel). |
+| `CmsCardStyle.swift` | Card styles in the theme: built-ins (twin of `cmsCardStyles.builtin.json`), choosing, merging, `CmsResolvedCardStyle`. |
+| `CmsLevers.swift` | Page and block levers ([`docs/cms-page-levers.md`](../../../docs/cms-page-levers.md)): `titleDisplay: hidden`, frame `bleed` (`CmsBleed`, `CmsBleedModifier`), the floating action button, `{today}` and `{timeOfDay}`, `groupDefaultExpanded`. |
+| `CmsLinkListBlock.swift` | The `linkList` block: nav items as list rows in sections, opening pages through the runtime. |
+| `CmsTabBar.swift` | The `tabBar` block: decoding, which tabs a person gets, routing a link to a tab, the re-tap rule (§4.4). |
 | `CmsBrowserView.swift` | Test-bed browser: definitions → pages, per-definition test-identity menu (§4.3). |
 | `CmsRuntimeDiagnostics.swift` | The runtime inspector (§7.1) with Copy. |
 | `CmsSidebarLayout.swift` / `CmsDrawerOverlay.swift` | Sidebar layout collapse (§6). |
-| Blocks | `CmsBlockViews.swift` (text/markdown/image/divider/section/container), `CmsRecordCardsBlock.swift`, `CmsCalendarBlocks.swift` + `CmsNativeMonthCalendar.swift`, `CmsSelectionBlocks.swift`, `CmsKpiStripBlock.swift`, `CmsAgGridBlock.swift`, `CmsParameterSetterBlock.swift`, `CmsGridViewSwitcherBlock.swift`, `CmsAgentChatBlock.swift`, `CmsFeaturePanelBlock.swift`, `CmsStepProgressBlock.swift` (pills = wrapping capsule row, bar = native `ProgressView`). |
+| Blocks | `CmsBlockViews.swift` (text/markdown/image/divider/section/container), `CmsRecordCardsBlock.swift`, `CmsCalendarBlocks.swift` + `CmsNativeMonthCalendar.swift` + `CmsCalendarDecorations.swift` (the Calendar Strip's `dayFill`, `markers` and image chains, twin of `calendarDecorations.ts`), `CmsSelectionBlocks.swift`, `CmsKpiStripBlock.swift`, `CmsAgGridBlock.swift`, `CmsParameterSetterBlock.swift`, `CmsGridViewSwitcherBlock.swift`, `CmsAgentChatBlock.swift`, `CmsFeaturePanelBlock.swift`, `CmsStepProgressBlock.swift` (pills = wrapping capsule row, bar = native `ProgressView`). |
 
 **Decoding rule:** blocks render from RAW persisted props — the web never
 runs `schemaParse` at render, so new props are absent on old instances.
@@ -197,6 +210,14 @@ The definition comes from `config.cms` (pages/queries/theme) — **never
 `requiresAuth != false` are hidden; opening one via slug explains "requires
 sign-in" rather than 404ing.
 
+The check sends an `Origin`, which the key's `allowedOrigins` must list. A
+native app has no page of its own, so the SDK presents the Ripul portal host
+(`RipulDomain.demoURL`, `https://demo.ripul.io`) unless the host app gives its
+own address as `CmsClientConfig.origin` (WAC Next: `https://wac-next.app`, the
+only origin its key allows). `CmsPortalMenu.resolve` presents the same one.
+For a native caller the origin is a label, not a lock: what a member sees
+rests on the token, the member list and the row rules.
+
 ### 4.3 Test bed (`CmsBrowserView`)
 Lists every owned definition (admin list + per-definition fetch for pages)
 and all site keys. Each definition's section header has a test-identity
@@ -209,6 +230,20 @@ directory/verified-email join). Needs member impersonation or a second
 account; decide when role-gated pages matter.
 
 ---
+
+### 4.4 A site as an app (`CmsAppView`)
+`CmsAppView` draws the shell page's `tabBar` block as iOS's own `TabView`, with
+no appearance overrides (the theme may set the tint only). Each tab is a
+`NavigationStack` whose first page is the tab's page, drawn on its own: the
+app replaces the shell. All tabs share one `CmsPageLoader` load and one
+`CmsRuntime`. Page navigation (`runtime.pendingNavigation`) is routed by
+`CmsAppNavigationState.open`: a tab's first page selects that tab and pops it;
+any other page is pushed onto the selected tab. A re-tap of the selected tab
+pops, then scrolls to the top. A site without a `tabBar` shows its landing page
+in one stack. `CmsPageView` draws a `tabBar` as nothing (out of flow), and
+`CmsPortalMenu.tabs` hands the tabs to hosts that draw their own chrome. The
+conventions, routing rules, limits and tests:
+[cms-app-view.md](../../../docs/cms-app-view.md).
 
 ## 5. Block notes (the non-obvious ones)
 
@@ -247,6 +282,9 @@ chips) → full-screen native list sheet with Select all/Clear. **Read-only**
 until the mutations client exists.
 
 ### 5.2 simpleCalendar — full mirror
+Day styles (`dayFill` style/shape/size/textColor, `dayRing`, marker looks and
+placement, `todayStyle`, `selectionStyle`): `docs/cms-calendar-day-styles.md`,
+tested against the shared `cmsCalendarDayStyles.cases.json`.
 Three faces: custom week strip; **compact custom month grid** with
 native-style swipe paging (drag follows the finger — `simultaneousGesture`,
 or a plain gesture starves inside the page scroll — edge-slide transition
@@ -270,6 +308,31 @@ value: eq/between/thisYear/…)`; `any` = open range; periods fold from today
 with no pick; no-pick publishes nothing. Two-way `parameterId` binding:
 writes `{operator,start,end}` on change AND restores from the (persisted)
 parameter on mount, anchoring the visible month.
+
+Since 27 October 2026 the **week strip pages too**: week and month share one
+`swipeToPage` drag (follows the finger, edge slide keyed by `pageIdentity`),
+and paging never touches the selection. Day taps are ignored during a
+horizontal drag and for 0.3 s after, since the grid moving with the finger
+kept the day under it and took the lift as a tap. A tap follows the web's
+`handleDayClick` (`pick`): tapping the picked day clears it (single), tapping
+the open start again clears it (range), and with nothing picked no row is
+published. Rows land on their **local day** (`CmsCalendarDecorations.localDayKey`:
+a date as written, a datetime by its instant).
+
+**Day decorations** (twin of `calendarDecorations.ts`, in
+`CmsCalendarDecorations.swift`): `dayFill` colours a circle behind the number
+by the first of its `values` the day's rows have (`ring` style: a ring
+instead; a selected filled day keeps its colour inside a selection ring);
+`markers` draws one per distinct `keyColumn` value, at most `max` then "+n",
+each the first image of its chain (an https column, or the site's image route
+through `CmsClient`, cached per page in `CmsMarkerImageCache`, 404s
+remembered for the session), else a dot in `colorColumn`, else the shared
+palette colour hashed from the key; `legend` shows the labelled values under
+the grid. Props decode leniently (a bad entry drops itself). The whole model,
+on both renderers: [cmsCalendarMarkers.md](../../../../chrome-extension/docs/architecture/cmsCalendarMarkers.md). The same chain, cache and route draw pictures in grid list rows, record
+cards, field grids, link list rows (`items[].image.chain`, over the item's own
+fields, falling back to its icon) and the offers grid's logo (`logoImage.chain`,
+then `logo_url`): [cms-list-styles.md](../../../docs/cms-list-styles.md#pictures-from-image-sources-in-more-blocks).
 
 ### 5.3 agGrid — authored projections + saved views
 Web props added (in `AgGridBlock.tsx`, "Native App" group):
@@ -378,6 +441,37 @@ older convention — both must be checked). Degradations: `undocked` renders
 docked; per-block `viewContextId`/`promptCollectionId`/`toolCollectionIds`
 overrides are NOT yet threaded into the embed hash (site-key defaults
 apply).
+
+### 5.8 List styles and linkList
+The site's theme names list styles (`listStyles`, `defaultListStyle`): the
+built-ins `system`, `plain` and `cards`, and the site's own based on them,
+with colours as palette roles. A list's style is its block's `listStyle`,
+else the theme's default, else `system`. The grid's native list, record
+cards and field grids draw from it; the bare built-in `system` keeps their
+old look exactly. The `linkList` block (settings-style rows that open
+pages) is built on `CmsNavItem`. Host screens in `CmsAppView` match the
+site through `.cmsListStyle()`, `.cmsListRow()` and `CmsListRow`. The
+`cmsList` kind on `RipulThemeEngine` resolves through the pure
+`RipulStyleKind.resolve`, never the engine's live document. A grid's
+`listRow` places its columns in a row's parts (date block or picture,
+title, up to three `{column}` lines, trailing value, chip), each in the
+column's own format, chip (`lozenge` variants and icons, style-rule words,
+icons and colours) and picture (`image.chain` through the calendar's image
+cache); the style's `leading`, `lines`, `inlineImage`, `chip` and
+`trailing.align` say how they look. Full write-up:
+[`docs/cms-list-styles.md`](../../../docs/cms-list-styles.md).
+
+### 5.9 Cards and views
+A view (`CmsDefinition.views`: a base query plus sources) works wherever a
+query does: `CmsRuntime` reads `POST …/views/:slug/run` as it streams
+(NDJSON, `URLSession.bytes`), the base rows first, then each source's
+columns joined as `alias.column`, with a status per row and source
+(`pending`, `ready`, `failed`, `later`). The `cards` block draws cards the
+site wrote and cards per row (templates per kind, groups with headers and
+totals, variants, buttons, closing) as a stack, a paged carousel with the
+system's page dots, or the first; card styles come from the theme. A
+section's `carousel` container pages. Write-up:
+[`docs/cms-cards.md`](../../../docs/cms-cards.md).
 
 ---
 

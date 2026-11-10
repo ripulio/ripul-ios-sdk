@@ -140,6 +140,23 @@ extension AgentBridge {
         }
     }
 
+    /// What is in a Mac's relay room: every connection, whose it is, and what
+    /// that Mac may do with it (the web's `roomDescription.ts`). The owner's
+    /// Macs only. Returns `["room": …]` or `["error": …]`.
+    public func describeRoom(machineId: String) async -> [String: Any] {
+        guard let webView = attachedWebView else { return ["error": "webView is nil"] }
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                "return await window.__ripulDescribeRoom?.(machineId) ?? {error: 'This page cannot ask a Mac about its room yet. Reload it.'};",
+                arguments: ["machineId": machineId],
+                contentWorld: .page
+            )
+            return result as? [String: Any] ?? ["error": "The Mac's answer could not be read."]
+        } catch {
+            return ["error": error.localizedDescription]
+        }
+    }
+
     /// Run a shell command on a host machine through the web app's typed
     /// `agent:execCommand` relay command. Every exec is a fresh `zsh -lc` on
     /// the host — no session state survives; callers track cwd themselves and

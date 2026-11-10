@@ -79,6 +79,38 @@ final class CmsPortalThemeTests: XCTestCase {
         XCTAssertEqual(CmsPortalTheme(config: nil).radius("radius.card"), 8)
     }
 
+    /// Text takes the site's palette text colour, as the web's does: when a
+    /// block names none, and when it names MUI's own path (`text.primary`).
+    func testTextUsesTheSitesTextColour() throws {
+        let theme = CmsPortalTheme(config: try decode(##"{"palette":{"text":"#1b2a41","primary":"#c08a5b"}}"##))
+        let navy = CmsRGBA(css: "#1b2a41")!.color
+        XCTAssertEqual(theme.textColor(nil), navy)
+        XCTAssertEqual(theme.textColor(""), navy)
+        XCTAssertEqual(theme.textColor("color.text.primary"), navy)
+        XCTAssertEqual(theme.textColor("text.primary"), navy)
+        XCTAssertEqual(theme.resolve("primary.main"), theme.resolve("color.primary"))
+        XCTAssertEqual(theme.resolve("background.paper"), theme.resolve("color.paper"))
+        // Unset, the web's MUI default: rgba(0,0,0,0.87), not the system's black.
+        XCTAssertEqual(CmsPortalTheme(config: nil).textColor(nil), CmsRGBA(css: "rgba(0,0,0,0.87)")!.color)
+    }
+
+    /// Native buttons take the site's corners only when it sets them (WAC sets none).
+    func testButtonCornersOnlyWhenTheSiteSetsThem() throws {
+        XCTAssertFalse(CmsPortalTheme(config: try decode(##"{"shape":{"cardRadius":10}}"##)).setsButtonRadius)
+        XCTAssertTrue(CmsPortalTheme(config: try decode(##"{"shape":{"buttonRadius":0}}"##)).setsButtonRadius)
+        XCTAssertTrue(CmsPortalTheme(config: try decode(##"{"shape":{"borderRadius":2}}"##)).setsButtonRadius)
+        XCTAssertFalse(CmsPortalTheme(config: nil).setsButtonRadius)
+    }
+
+    /// A native panel (a sign-in or booking card) takes the site's card corners
+    /// when it sets them, square at 0, else keeps its own.
+    func testPanelCornersFollowTheSitesCards() throws {
+        XCTAssertEqual(CmsPortalTheme(config: try decode(##"{"shape":{"cardRadius":0}}"##)).cardCorner(16), 0)
+        XCTAssertEqual(CmsPortalTheme(config: try decode(##"{"shape":{"borderRadius":3}}"##)).cardCorner(16), 6)
+        XCTAssertEqual(CmsPortalTheme(config: try decode(##"{"shape":{"buttonRadius":0}}"##)).cardCorner(16), 16)
+        XCTAssertEqual(CmsPortalTheme(config: nil).cardCorner(10), 10)
+    }
+
     func testColorTokens() {
         let theme = CmsPortalTheme(config: nil)
         XCTAssertNotNil(theme.resolve("color.accent"))
@@ -108,7 +140,7 @@ final class CmsPortalThemeTests: XCTestCase {
 
     func testLenientDecodingNeverFailsTheDefinition() throws {
         let config = try decode(##"""
-        {"mode":"light","palette":{"primary":42},"typography":{"headingWeight":"800","headingFontFamily":"'Inter', sans-serif"},
+        {"mode":"light","palette":{"primary":42},"typography":{"headingWeight":"800","headingFontFamily":"'Inter', 'Helvetica Neue', sans-serif"},
          "shape":{"cardRadius":"16"},"buttons":{"style":"gradient","gradientAngle":"oops"}}
         """##)
         XCTAssertNil(config.palette?.primary)
@@ -117,7 +149,8 @@ final class CmsPortalThemeTests: XCTestCase {
         XCTAssertEqual(config.buttons?.style, "gradient")
         XCTAssertNil(config.buttons?.gradientAngle)
         let theme = CmsPortalTheme(config: config)
-        XCTAssertEqual(theme.headingFontFamily, "Inter")
+        // The first family in the stack this device has (Inter is not installed).
+        XCTAssertEqual(theme.headingFontFamily, "Helvetica Neue")
         XCTAssertEqual(theme.headingWeight, .heavy)
         XCTAssertEqual(theme.cardRadius, 16)
         XCTAssertEqual(theme.gradientAngle, 135)
@@ -182,6 +215,22 @@ final class CmsPortalThemeTests: XCTestCase {
         // Absent steps → web defaults; explicit empty array → no steps.
         XCTAssertEqual(V.steps(from: [:]).map(\.label), ["Account", "Payment", "Setup"])
         XCTAssertEqual(V.steps(from: ["steps": .array([])]).count, 0)
+    }
+
+    @MainActor
+    func testStepProgressLinksAsTheWeb() {
+        typealias V = CmsStepProgressBlockView
+        let step = { (page: String) in V.Step(label: page, pageSlug: page, whenValues: "") }
+        // Nothing links by default; linkCompleted links completed steps back.
+        XCTAssertFalse(V.links(step("a"), index: 0, current: 2, pageSlug: "c", linkAll: false, linkCompleted: false, editing: false))
+        XCTAssertTrue(V.links(step("a"), index: 0, current: 2, pageSlug: "c", linkAll: false, linkCompleted: true, editing: false))
+        XCTAssertFalse(V.links(step("d"), index: 3, current: 2, pageSlug: "c", linkAll: false, linkCompleted: true, editing: false))
+        // linkAll links every step, ahead as well as back.
+        XCTAssertTrue(V.links(step("d"), index: 3, current: 2, pageSlug: "c", linkAll: true, linkCompleted: false, editing: false))
+        // Never the page showing, a step with no page, or while designing.
+        XCTAssertFalse(V.links(step("c"), index: 2, current: 2, pageSlug: "c", linkAll: true, linkCompleted: false, editing: false))
+        XCTAssertFalse(V.links(step(""), index: 1, current: 2, pageSlug: "c", linkAll: true, linkCompleted: false, editing: false))
+        XCTAssertFalse(V.links(step("a"), index: 0, current: 2, pageSlug: "c", linkAll: true, linkCompleted: false, editing: true))
     }
 
     @MainActor

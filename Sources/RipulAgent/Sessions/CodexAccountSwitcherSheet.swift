@@ -64,17 +64,27 @@ public struct CodexAccountSwitcherSheet: View {
     let bridge: AgentBridge
     let signInAccountId: String?
     let startsAddingAccount: Bool
+    let suggestedAccountName: String?
+    let suggestedAccountEmail: String?
     @Environment(\.dismiss) private var dismiss
 
-    public init(machineId: String, machineName: String, direct: Bool = false, bridge: AgentBridge, signInAccountId: String? = nil, startsAddingAccount: Bool = false) {
+    public init(machineId: String, machineName: String, direct: Bool = false, bridge: AgentBridge, signInAccountId: String? = nil, startsAddingAccount: Bool = false,
+                suggestedAccountName: String? = nil, suggestedAccountEmail: String? = nil) {
         self.machineId = machineId; self.machineName = machineName; self.direct = direct; self.bridge = bridge
         self.signInAccountId = signInAccountId
         self.startsAddingAccount = startsAddingAccount
+        self.suggestedAccountName = suggestedAccountName
+        self.suggestedAccountEmail = suggestedAccountEmail
     }
     public var body: some View {
         NavigationStack {
-            List { CodexAccountSection(machineId: machineId, machineName: machineName, direct: direct, bridge: bridge, signInAccountId: signInAccountId, startsAddingAccount: startsAddingAccount) }.ripulThemedList()
-                .navigationTitle("Codex accounts")
+            List {
+                if let suggestedAccountName {
+                    CodingAccountAddComputerHint(name: suggestedAccountName, email: suggestedAccountEmail, machineName: machineName)
+                }
+                CodexAccountSection(machineId: machineId, machineName: machineName, direct: direct, bridge: bridge, signInAccountId: signInAccountId, startsAddingAccount: startsAddingAccount)
+            }.ripulThemedList()
+                .navigationTitle(suggestedAccountName != nil ? "Add Computer" : "Codex accounts")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
@@ -100,6 +110,7 @@ struct CodexAccountSection: View {
     var startsAddingAccount = false
     @State private var startedSignIn = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @State private var state: CodexAccountsState?
     @State private var error: String?
     @State private var requesting = false
@@ -122,6 +133,19 @@ struct CodexAccountSection: View {
                 }
                 Button { Task { await perform("login") } } label: { Label("Add account", systemImage: "plus") }
                     .disabled(busy).uiKitIdentifier("CodexAccounts.add")
+                Button {
+                    openURL(CodingAccountProvider.codex.billingAndAccountURL())
+                } label: {
+                    HStack {
+                        Label(CodingAccountProvider.codex.billingAndAccountTitle, systemImage: "creditcard")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.ripul(.caption))
+                            .foregroundStyle(.ripul(.textSecondary))
+                    }
+                }
+                .buttonStyle(.borderless)
+                .uiKitIdentifier("CodexAccounts.billing")
                 if state == nil && error != nil { Button("Retry") { Task { await refresh() } } }
             }
         } header: { RipulSectionHeader {
@@ -176,6 +200,9 @@ struct CodexAccountSection: View {
             identifier: "CodexAccounts.account.\(account.id)")
         .uiKitIdentifier("CodexAccounts.account.\(account.id)")
         .contextMenu { MenuIcons {
+            Button(CodingAccountProvider.codex.billingAndAccountTitle, systemImage: "arrow.up.right.square") {
+                openURL(CodingAccountProvider.codex.billingAndAccountURL(email: account.email))
+            }
             Button("Rename") { newName = account.name; renaming = account }.disabled(busy)
             Button("Remove", role: .destructive) { removal = account }.disabled(busy || isActive)
         }}

@@ -96,10 +96,115 @@ final class ToolCallDetailsTests: XCTestCase {
         message["calls"] = [call("a", result: "done"), call("b"), call("c"), call("d")]
         store.receive(message, opening: false)
         XCTAssertEqual(store.expandedCallIds, ["b"], "Live results must not reopen the initial target")
+        // Re-opening the same row for a different lozenge switches the expanded call to the newly tapped one.
+        message["initialCallId"] = "c"
+        store.receive(message, opening: true)
+        XCTAssertEqual(store.request?.calls.map(\.id), ["a", "b", "c", "d"])
+        XCTAssertEqual(store.expandedCallIds, ["c"], "Re-opening the same row for a different lozenge must unfold only that lozenge")
         store.close()
         message["initialCallId"] = "removed-call"
         store.receive(message, opening: true)
         XCTAssertEqual(store.expandedCallIds, ["d"], "A removed target falls back to the latest call")
+    }
+
+    @MainActor func testRowStripEventAlwaysOpensAllCallsInRowAndUnfoldsTappedLozengeAfterStreamingGrowth() {
+        let store = NativeChatMessageStore()
+        let rowStates = NativeChatRowStateRegistry()
+        let bridge = AgentBridge()
+        let firstMsg: [String: Any] = [
+            "messageId": "call-1", "chatId": "chat-1", "role": "assistant", "content": "",
+            "timestamp": 1_000, "method": "Read", "status": "success",
+            "toolCall": [
+                "id": "call-1", "toolName": "Read", "label": "Read a.swift", "status": "success",
+                "detail": [
+                    "id": "call-1", "toolName": "Read", "status": "success", "timestamp": 1_000,
+                    "arguments": "{\"file_path\":\"/repo/a.swift\"}", "diagnostics": "{}",
+                    "result": "contents of a",
+                ] as [String: Any],
+            ] as [String: Any],
+        ]
+        store.applyBackfill([firstMsg], chatId: "chat-1")
+        guard case .toolGroup(let initialGroup)? = store.rows.first else {
+            return XCTFail("Expected initial toolGroup row")
+        }
+        let stripStore = rowStates.toolStripStore(forRow: initialGroup.id, group: initialGroup)
+        var handledEvents: [[String: Any]] = []
+        stripStore.present { [weak stripStore] (event: [String: Any]) in
+            handledEvents.append(event)
+            NativeToolGroupRowView.handleStripEvent(
+                event,
+                for: stripStore?.latestGroup ?? initialGroup,
+                bridge: bridge
+            )
+        }
+
+        // Stream more tool calls into the same row (two strip lozenges and one synthesized taskRun).
+        let secondMsg: [String: Any] = [
+            "messageId": "call-2", "chatId": "chat-1", "role": "assistant", "content": "",
+            "timestamp": 1_010, "method": "Grep", "status": "running",
+            "toolCall": [
+                "id": "call-2", "toolName": "Grep", "label": "Grep pattern", "status": "running",
+                "detail": [
+                    "id": "call-2", "toolName": "Grep", "status": "running", "timestamp": 1_010,
+                    "arguments": "{\"pattern\":\"foo\"}", "diagnostics": "{}",
+                    "task": [
+                        "id": "task-2", "type": "local_bash", "title": "Search", "status": "running",
+                        "entries": [["kind": "text", "detail": "Checking logic"]], "totalCount": 1, "synthetic": false,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ] as [String: Any],
+        ]
+        let thirdMsg: [String: Any] = [
+            "messageId": "call-3", "chatId": "chat-1", "role": "assistant", "content": "",
+            "timestamp": 1_020, "method": "Bash", "status": "success",
+            "toolCall": [
+                "id": "call-3", "toolName": "Bash", "label": "swift test", "status": "success",
+                "detail": [
+                    "id": "call-3", "toolName": "Bash", "status": "success", "timestamp": 1_020,
+                    "arguments": "{\"command\":\"swift test\"}", "diagnostics": "{}",
+                    "result": "Executed 10 tests",
+                ] as [String: Any],
+            ] as [String: Any],
+        ]
+        let fourthMsg: [String: Any] = [
+            "messageId": "call-4", "chatId": "chat-1", "role": "assistant", "content": "",
+            "timestamp": 1_030, "method": "Agent", "status": "running",
+            "toolCall": [
+                "id": "call-4", "toolName": "Agent", "label": "Agent Review", "status": "running",
+                "task": [
+                    "id": "task-4", "type": "local_agent", "title": "Review", "status": "running",
+                    "entries": [["kind": "text", "detail": "Auditing row"]], "totalCount": 1, "synthetic": false,
+                ] as [String: Any],
+                "detail": [
+                    "id": "call-4", "toolName": "Agent", "status": "running", "timestamp": 1_030,
+                    "arguments": "{\"description\":\"Review\"}", "diagnostics": "{}",
+                ] as [String: Any],
+            ] as [String: Any],
+        ]
+        store.applyPatch([secondMsg, thirdMsg, fourthMsg], chatId: "chat-1")
+        guard case .toolGroup(let grownGroup)? = store.rows.first else {
+            return XCTFail("Expected grown toolGroup row")
+        }
+        NativeChatRowStateRegistry.syncToolStripStore(stripStore, with: grownGroup)
+        XCTAssertEqual(grownGroup.calls.map { $0.id }, ["call-1", "call-2", "call-3", "call-4"])
+        XCTAssertEqual(grownGroup.taskRuns.first?.id, "call-4", "Synthesized task run must use the launching call's ID")
+
+        // Tapping each lozenge in the grown row must show all 4 calls and unfold only the tapped one.
+        for targetId in ["call-1", "call-2", "call-3"] {
+            stripStore.select(targetId)
+            XCTAssertEqual(bridge.toolCallDetails.request?.calls.map { $0.id }, ["call-1", "call-2", "call-3", "call-4"])
+            XCTAssertEqual(bridge.toolCallDetails.request?.initialExpandedCallId, targetId)
+            XCTAssertEqual(bridge.toolCallDetails.expandedCallIds, [targetId])
+        }
+        // Tapping the synthesized task run also opens all 4 calls and unfolds call-4.
+        NativeToolGroupRowView.openToolDetails(for: grownGroup, initialCallId: grownGroup.taskRuns.first?.id ?? "", bridge: bridge)
+        XCTAssertEqual(bridge.toolCallDetails.request?.calls.map { $0.id }, ["call-1", "call-2", "call-3", "call-4"])
+        XCTAssertEqual(bridge.toolCallDetails.expandedCallIds, ["call-4"])
+        XCTAssertEqual(
+            bridge.toolCallDetails.request?.calls.first(where: { $0.id == "call-2" })?.task?.entries.first?.detail,
+            "Checking logic",
+            "Opening tool details locally must preserve task activity on tool calls"
+        )
     }
 
     @MainActor func testDismissalAndChatIsolation() {

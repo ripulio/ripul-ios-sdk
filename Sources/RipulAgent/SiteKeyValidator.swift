@@ -76,11 +76,26 @@ public enum SiteKeyValidator {
         }
     }
 
+    /// The `Origin` a check presents, which the key's `allowedOrigins` must list:
+    /// the host app's own address when it gives one, else the scheme, host and
+    /// port of `baseURL` (e.g. "https://demo.ripul.io").
+    static func presentedOrigin(_ appOrigin: String?, baseURL: URL) -> String {
+        if let appOrigin, !appOrigin.isEmpty { return appOrigin }
+        var components = URLComponents()
+        components.scheme = baseURL.scheme
+        components.host = baseURL.host
+        if let port = baseURL.port { components.port = port }
+        return components.url?.absoluteString ?? baseURL.absoluteString
+    }
+
     /// Validate a site key, optionally requesting a specific solution context.
     ///
     /// - Parameters:
     ///   - contextId: explicit context id; must be in the key's allowed set.
     ///   - surface: named surface, resolved through the key's surfaceContextMap.
+    ///   - origin: the host app's own address, for a key that allows it rather
+    ///     than the Ripul portal host (`CmsClientConfig.origin`). Nil or empty
+    ///     presents the origin of `baseURL`.
     ///
     /// A refused context/surface comes back as a 403 and fails validation with
     /// the server's message logged. That is deliberate: falling back to the
@@ -90,16 +105,11 @@ public enum SiteKeyValidator {
         siteKey: String,
         contextId: String? = nil,
         surface: String? = nil,
-        baseURL: URL
+        baseURL: URL,
+        origin appOrigin: String? = nil
     ) async -> ValidationResult {
         let url = baseURL.appendingPathComponent("api/v1/site-key/validate")
-
-        // Build the origin from baseURL (e.g. "https://demo.ripul.io")
-        var components = URLComponents()
-        components.scheme = baseURL.scheme
-        components.host = baseURL.host
-        if let port = baseURL.port { components.port = port }
-        let origin = components.url?.absoluteString ?? baseURL.absoluteString
+        let origin = presentedOrigin(appOrigin, baseURL: baseURL)
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

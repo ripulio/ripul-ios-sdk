@@ -18,6 +18,23 @@ public struct NewChatMachine: Identifiable, Equatable {
         self.id = id; self.name = name; self.connection = connection; self.unavailableReason = unavailableReason
         self.teamName = teamName; self.icon = icon
     }
+
+    /// The Relay choice that starts the chat on the account's Mac with the
+    /// most room that has the folder's repository, chosen when it starts
+    /// (the page's `__ripulChooseNewChatMac`). Work follows the chat, so a
+    /// chat started on the busiest Mac keeps loading it.
+    public static let automaticID = "automatic"
+    public static let automatic = NewChatMachine(id: automaticID, name: "Automatic", connection: .relay, icon: "a.circle")
+    public var isAutomatic: Bool { id == Self.automaticID }
+
+    /// The account's own Relay Macs that can take a chat now: what Automatic chooses among.
+    public static func automaticCandidates(_ available: [NewChatMachine]) -> [NewChatMachine] {
+        available.filter { $0.connection == .relay && !$0.isAutomatic && $0.teamName == nil && $0.unavailableReason == nil }
+    }
+    /// Automatic is offered when the account has two or more of its own Relay Macs.
+    public static func offersAutomatic(_ available: [NewChatMachine]) -> Bool {
+        available.filter { $0.connection == .relay && !$0.isAutomatic && $0.teamName == nil }.count >= 2
+    }
 }
 
 /// Creation preferences only. Nothing here edits an existing chat or its owner.
@@ -26,11 +43,23 @@ public struct NewChatDraft: Codable, Equatable {
     public private(set) var machines: [String: String] = [:]
     public private(set) var machineNames: [String: String] = [:]
     public private(set) var folders: [String: String] = [:]
+    /// Set once Automatic has been offered. A Relay Mac remembered before
+    /// then was mostly the last Mac used, not a choice, and kept every new
+    /// chat on the Studio (6 November 2026), so it is forgotten once.
+    private var automaticOffered: Bool?
 
     public init(data: Data? = nil, forcedConnection: NewChatConnection? = nil) {
-        if let data, let saved = try? JSONDecoder().decode(Self.self, from: data) { self = saved }
+        if let data, let saved = try? JSONDecoder().decode(Self.self, from: data) {
+            self = saved
+            if saved.automaticOffered != true {
+                machines[NewChatConnection.relay.rawValue] = nil
+                machineNames[NewChatConnection.relay.rawValue] = nil
+            }
+        }
+        automaticOffered = true
         if let forcedConnection { connection = forcedConnection }
     }
+    public var isAutomatic: Bool { connection == .relay && machineID == NewChatMachine.automaticID }
     public var data: Data? { try? JSONEncoder().encode(self) }
     public var machineID: String? { machines[connection.rawValue] }
     public var machineName: String? { machineNames[connection.rawValue] }
@@ -59,15 +88,38 @@ public struct NewChatDraft: Codable, Equatable {
         select(available.first(where: { $0.connection == .relay && $0.id == relayID })
             ?? NewChatMachine(id: relayID, name: "The selected Mac", connection: .relay))
     }
+    /// When the Relay/Direct switch is hidden, stick to the connection the user
+    /// set the Mac up with: Relay whenever a Relay Mac exists (the common setup),
+    /// or Direct when only Direct Macs are configured or Standalone mode is active.
+    public static func resolvedConnection(for available: [NewChatMachine], allowsRelay: Bool = true,
+                                          allowsDirectSwitching: Bool = false,
+                                          preferredDirectID: String? = nil) -> NewChatConnection? {
+        if !allowsRelay { return .direct }
+        guard !allowsDirectSwitching else { return nil }
+        if preferredDirectID != nil { return .direct }
+        let hasRelay = available.contains(where: { $0.connection == .relay })
+        let hasDirect = available.contains(where: { $0.connection == .direct })
+        return hasRelay ? .relay : (hasDirect ? .direct : .relay)
+    }
+    /// With nothing chosen, Relay starts on Automatic when the account has
+    /// two or more Macs of its own, before any default Mac.
     public mutating func selectInitial(from available: [NewChatMachine], preferredRelayID: String? = nil) {
         // A removed/offline remembered host must remain visibly unavailable.
         guard machineID == nil else { return }
         let candidates = available.filter { $0.connection == connection }
-        if connection == .relay, let preferred = candidates.first(where: { $0.id == preferredRelayID }) { select(preferred) }
+        if connection == .relay, NewChatMachine.offersAutomatic(available) { select(.automatic) }
+        else if connection == .relay, let preferred = candidates.first(where: { $0.id == preferredRelayID }) { select(preferred) }
         else if candidates.count == 1 { select(candidates[0]) }
     }
     public func validationError(in available: [NewChatMachine]) -> String? {
         guard let machineID else { return "Choose a Mac to start a chat." }
+        if isAutomatic {
+            guard NewChatMachine.offersAutomatic(available) else { return "Choose a Mac to start a chat." }
+            guard !NewChatMachine.automaticCandidates(available).isEmpty else { return "None of your Macs is online. Choose a Mac or reconnect one." }
+            let path = folder.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard path.isEmpty || (path.hasPrefix("/") && !path.contains("\0")) else { return "Choose an absolute project folder, or use the Mac's configured working directory." }
+            return nil
+        }
         guard let machine = available.first(where: { $0.connection == connection && $0.id == machineID }) else {
             return "\(machineName ?? "The selected Mac") is unavailable. Choose a Mac or reconnect it."
         }
@@ -109,8 +161,8 @@ public struct NewChatRecentFolders: Codable, Equatable {
 public struct NewChatLaunch: Equatable {
     public let requestID: String
     public let connection: NewChatConnection
-    public let machineID: String
-    public let folder: String
+    public private(set) var machineID: String
+    public private(set) var folder: String
     public let modelID: String
     /// Applied once the chat exists, so it is not part of the creation
     /// identity: retitling a failed attempt still retries the same request.
@@ -121,5 +173,10 @@ public struct NewChatLaunch: Equatable {
         if let previous, previous.connection == connection, previous.machineID == machineID,
            previous.folder == folder, previous.modelID == modelID { requestID = previous.requestID }
         else { requestID = UUID().uuidString.lowercased() }
+    }
+    /// The same request, sent to the Mac Automatic chose and the folder there.
+    public func placed(on machineID: String, folder: String) -> Self {
+        var copy = self; copy.machineID = machineID; copy.folder = folder
+        return copy
     }
 }

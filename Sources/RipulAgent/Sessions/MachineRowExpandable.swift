@@ -227,11 +227,13 @@ public struct MachineRowExpandable: View {
 
     private var claudeAccountLabel: String {
         if let account = activeAccount {
+            // An empty default folder said "Claude: signed in" here while nothing was.
+            guard account.loggedIn else { return "Claude: not signed in" }
             let email = account.email ?? hostAuthStatus?.email
             if let email, !email.isEmpty {
-                return account.isDefault ? "Claude: \(email)" : "Claude: \(account.name) (\(email))"
+                return account.displayName == email ? "Claude: \(email)" : "Claude: \(account.displayName) (\(email))"
             }
-            return account.isDefault ? "Claude: signed in" : "Claude: \(account.name)"
+            return account.isDefault ? "Claude: signed in" : "Claude: \(account.displayName)"
         }
         guard let status = hostAuthStatus else { return "Claude Account" }
         if status.loggedIn {
@@ -400,7 +402,7 @@ public struct MachineRowExpandable: View {
                 alertSignIn = AlertSignIn(profile: profile)
             }
         }) { // theme-mapping: a new sheet, nothing is replaced
-            HostAlertsSheet(machineName: machine.displayName, alerts: hostAlerts,
+            HostAlertsSheet(machineName: machine.displayName, machineId: machine.machineId, alerts: hostAlerts,
                             onExecute: onExecuteAction.map { execute in { action in await execute(action, [:]) } },
                             onSignIn: hostAuthBridge == nil ? nil : { alertSignInProfile = $0 })
         }

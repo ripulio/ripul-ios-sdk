@@ -73,6 +73,9 @@ struct SessionChatColumns<List: View, Chat: View>: View {
     var onResizeList: ((CGFloat) -> Void)? = nil
     @GestureState private var resizeStart: CGFloat?
     @Namespace private var resizeCoordinateSpace
+    /// How far the chat's slide has it from where it rests, for the views in
+    /// it that measure their place in the window.
+    @State private var chatSlide = SlideDisplacement()
 
     private var listWidth: CGFloat { WorkspaceColumns.sessionListWidth(in: width, preferred: preferredListWidth) }
 
@@ -90,7 +93,10 @@ struct SessionChatColumns<List: View, Chat: View>: View {
                 // Window-anchored controls belong to this pane, including while
                 // its retained chat slides offscreen behind the session list.
                 .clipped()
-                .modifier(SlideEffect(offset: showsBoth ? listWidth + 1 : chatOffset))
+                // In a split the chat rests beside the list. In one column it
+                // rests on screen, and the back swipe carries it off.
+                .slide(by: showsBoth ? listWidth + 1 : chatOffset, rest: showsBoth ? listWidth + 1 : 0,
+                       displacement: chatSlide)
                 .allowsHitTesting((showsBoth || !showingList) && canInteractWithChat)
                 .accessibilityHidden(!showsBoth && showingList)
             if showsBoth {

@@ -2,6 +2,30 @@ import XCTest
 @testable import RipulAgent
 
 final class NativeChatWindowModelTests: XCTestCase {
+    func testResizeEstimateReplacementRemovesOldMountedIndex() {
+        var subject = model([100])
+        subject.measure(777, for: subject.key(for: subject.descriptors[0]))
+        let originalLayout = subject.layout
+        subject.changeLayoutPreservingEstimates(.init(width: 600))
+        subject.changeLayoutPreservingEstimates(originalLayout)
+        subject.update([.init(id: "r0", revision: 2, kind: "message", estimate: 42)])
+        XCTAssertEqual(subject.heights, [42], "Resize replaced the old measurement with an estimate; the index must agree")
+    }
+
+    func testEvictedMeasurementDoesNotSurviveInSecondaryIndex() {
+        var subject = model([100], configuration: .init(cacheLimit: 2))
+        let original = subject.descriptors[0]
+        subject.measure(777, for: subject.key(for: original))
+        // Measuring rebuilds the ledger and touches the mounted cache entry.
+        // Eviction must still recognize and remove its secondary-index copy.
+        for i in 1...4 {
+            subject.update([.init(id: "other-\(i)", revision: 1, kind: "other", estimate: 50)])
+        }
+        XCTAssertNil(subject.cache[subject.key(for: original)])
+        subject.update([.init(id: "r0", revision: 2, kind: "new-kind", estimate: 42)])
+        XCTAssertEqual(subject.heights, [42], "An evicted measurement must not remain an estimate forever")
+    }
+
     private func model(_ heights: [CGFloat], configuration: NativeChatWindowModel.Configuration = .init()) -> NativeChatWindowModel {
         var model = NativeChatWindowModel(layout: .init(width: 320), configuration: configuration)
         model.update(heights.enumerated().map { .init(id: "r\($0.offset)", revision: 1, kind: "message", estimate: $0.element) })
@@ -246,4 +270,134 @@ final class NativeChatWindowModelTests: XCTestCase {
         }
     }
 
+    func testDirtyIDsSkipEqualityOnUnchangedRowsWhileUpdatingDirtyAndNewRows() {
+        final class Counter { var comparisons = 0 }
+        struct TrackedRow: Equatable, Identifiable {
+            let id: String
+            let text: String
+            let counter: Counter
+            static func == (lhs: TrackedRow, rhs: TrackedRow) -> Bool {
+                lhs.counter.comparisons += 1
+                return lhs.id == rhs.id && lhs.text == rhs.text
+            }
+        }
+        let counter = Counter()
+        var tracker = NativeChatRowRevisionTracker<TrackedRow>()
+        let initial = (0..<50).map { TrackedRow(id: "r\($0)", text: "v1", counter: counter) }
+        let rev1 = tracker.revisions(for: initial)
+        XCTAssertEqual(counter.comparisons, 0, "First insert needs no equality checks")
+
+        var updated = initial
+        updated[49] = TrackedRow(id: "r49", text: "v2", counter: counter)
+        let rev2 = tracker.revisions(for: updated, dirtyIDs: ["r49"])
+        XCTAssertEqual(counter.comparisons, 1, "Only the 1 dirty row should run Equatable.==")
+        XCTAssertEqual(Array(rev1.prefix(49)), Array(rev2.prefix(49)))
+        XCTAssertNotEqual(rev1[49], rev2[49])
+    }
+
+    // The steady band (27 Oct 2026). 200 rows of 100 pt with 10 pt gaps: row k spans
+    // 110k..<110k + 100. The screen is 880 pt, eight rows.
+
+    func testMotionPlanHoldsTheBandWhileTheScreenStaysInside() {
+        let subject = model(Array(repeating: 100, count: 200))
+        let current = subject.geometry(for: 80..<120)
+        for direction in [NativeChatWindowModel.Direction.up, .down, .stationary] {
+            let plan = subject.motionPlan(viewport: 10_000..<10_880, current: current, direction: direction)
+            XCTAssertEqual(plan.range, 80..<120, "\(direction)")
+        }
+    }
+
+    func testMotionPlanGrowsOnlyTheLeadingEdgeInOneChangeEstimatesCountingTwice() {
+        var subject = model(Array(repeating: 100, count: 200))
+        let viewport: Range<CGFloat> = 8_800..<9_680
+        var current = subject.geometry(for: 80..<120)
+        // Every row is still an estimate: 24 / 2 = 12 rows in one change.
+        XCTAssertEqual(subject.motionPlan(viewport: viewport, current: current, direction: .up).range, 68..<120,
+                       "one change toward two screens above, nothing below dropped")
+        XCTAssertEqual(subject.motionPlan(viewport: viewport, current: current, direction: .up, step: 4).range, 78..<120,
+                       "at most `step` rows a change")
+        XCTAssertEqual(subject.motionPlan(viewport: viewport, current: current, direction: .down).range, 80..<120,
+                       "travelling away from an edge never grows it")
+        XCTAssertEqual(subject.motionPlan(viewport: viewport, current: current, direction: .stationary).range, 80..<120,
+                       "no direction yet: nothing grows")
+        // Not yet half a screen from the edge: nothing changes.
+        XCTAssertEqual(subject.motionPlan(viewport: 9_500..<10_380, current: current, direction: .up).range, 80..<120)
+        // Measured rows count once: the change reaches the full two screens (16 rows).
+        subject.measure((60..<80).map { (subject.key(for: subject.descriptors[$0]), CGFloat(100)) })
+        current = subject.geometry(for: 80..<120)
+        XCTAssertEqual(subject.motionPlan(viewport: viewport, current: current, direction: .up).range, 64..<120)
+    }
+
+    func testMotionPlanExchangesOnlyWhatGrewPastItsCap() {
+        let subject = model(Array(repeating: 100, count: 200))
+        let full = subject.geometry(for: 56..<120)
+        XCTAssertEqual(subject.motionPlan(viewport: 6_160..<7_040, current: full, direction: .up).range, 44..<108,
+                       "at the cap: twelve estimated rows grown above, twelve of the farthest behind dropped")
+        // A band over the cap (kept across a landing) is never cut down in bulk mid-fling.
+        let oversized = subject.geometry(for: 20..<120)
+        XCTAssertEqual(subject.motionPlan(viewport: 6_000..<6_880, current: oversized, direction: .up).range, 20..<120)
+        XCTAssertEqual(subject.motionPlan(viewport: 2_200..<3_080, current: oversized, direction: .up).range, 8..<108)
+    }
+
+    func testMotionPlanReplansAfterAJumpOutOfTheBand() {
+        let subject = model(Array(repeating: 100, count: 200))
+        let current = subject.geometry(for: 80..<120)
+        let plan = subject.motionPlan(viewport: 1_100..<1_980, current: current, direction: .up)
+        XCTAssertTrue(plan.range.contains(12))
+        XCTAssertLessThan(plan.range.upperBound, 80)
+    }
+
+    func testRestPlanKeepsThreeScreensAheadAndTwoBehindWithinItsCap() {
+        let subject = model(Array(repeating: 100, count: 200))
+        let viewport: Range<CGFloat> = 11_000..<11_880
+        XCTAssertEqual(subject.restPlan(viewport: viewport, direction: .up).range, 76..<124)
+        XCTAssertEqual(subject.restPlan(viewport: viewport, direction: .down).range, 84..<132)
+        // Capped, the rows past the screen are shared three to two, ahead first.
+        XCTAssertEqual(subject.restPlan(viewport: viewport, direction: .up, cap: 32).range, 86..<118)
+    }
+
+    func testGrowthStepMountsFourRowsAtATimeAheadFirstThenTrimsToTheTarget() {
+        let subject = model(Array(repeating: 100, count: 200))
+        let target = subject.geometry(for: 76..<124, mandatory: 100..<108)
+        var range = 96..<112
+        var steps: [Range<Int>] = []
+        while let next = subject.growthStep(current: range, target: target, direction: .up), steps.count < 20 {
+            steps.append(next.range)
+            range = next.range
+        }
+        XCTAssertEqual(steps.first, 92..<112, "ahead (above) first")
+        XCTAssertEqual(steps.count, 8)
+        XCTAssertEqual(range, 76..<124)
+        XCTAssertEqual(subject.growthStep(current: 70..<130, target: target, direction: .up)?.range, 76..<124,
+                       "once the target is covered, the rows beyond it go")
+        XCTAssertNil(subject.growthStep(current: 76..<124, target: target, direction: .up))
+    }
+
+    func testGrowthStepShrinksAGrownBandSixteenRowsAStep() {
+        let subject = model(Array(repeating: 100, count: 200))
+        let target = subject.geometry(for: 60..<124, mandatory: 90..<98)
+        var range = 0..<160
+        var dropped: [Int] = []
+        while let next = subject.growthStep(current: range, target: target, direction: .up), dropped.count < 20 {
+            dropped.append(range.count - next.range.count)
+            range = next.range
+        }
+        XCTAssertEqual(range, 60..<124)
+        XCTAssertEqual(dropped, [16, 16, 16, 16, 16, 16], "never a hundred rows in one frame")
+    }
+
+    func testGrowthStepNeverMountsMoreThanTheBandOrTheTarget() {
+        let subject = model(Array(repeating: 100, count: 200))
+        let target = subject.geometry(for: 16..<80, mandatory: 40..<48)
+        var range = 40..<104
+        var largest = range.count
+        while let next = subject.growthStep(current: range, target: target, direction: .up) {
+            range = next.range
+            largest = max(largest, range.count)
+            if range == target.range { break }
+        }
+        XCTAssertEqual(range, 16..<80)
+        XCTAssertEqual(largest, 64, "rows grown above are exchanged for rows below, never added on top")
+        XCTAssertEqual(subject.growthStep(current: 40..<104, target: target, direction: .up)?.range, 36..<100)
+    }
 }

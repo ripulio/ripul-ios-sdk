@@ -32,6 +32,7 @@ struct QuickLaunchStrip: View {
     /// the view that owns the `RipulSessionCache` — matching how every other
     /// cache-derived value reaches `MachineRowExpandable`.
     @Environment(\.newChatAction) private var newChatAction
+    @Environment(\.compactSectionActions) private var compactSectionActions
     private var createNewChat: ((String?) -> Void)? { newChatAction.map { action in { action($0) } } }
     let targets: [QuickLaunchTarget]
     /// Destination for CLI launches. Nil ⇒ CLI circles are omitted.
@@ -92,7 +93,7 @@ struct QuickLaunchStrip: View {
     /// "New Session" button when the picker exists to replace them — otherwise
     /// the gate would erase the strip's every launch affordance.
     private var effectiveShowCircles: Bool {
-        createNewChat == nil && (showCircles || pickerCache == nil)
+        createNewChat == nil && ((showCircles && !compactSectionActions) || pickerCache == nil)
     }
 
     var body: some View {

@@ -55,6 +55,7 @@ private final class SimulatorToolClient {
                     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
                     "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
                     "tools": bridge.nativeToolDefinitions,
+                    "endUserTools": endUserToolSummaries,
                 ])
                 guard let credential = reply["credential"] as? String else { throw URLError(.badServerResponse) }
                 self.credential = credential
@@ -69,7 +70,8 @@ private final class SimulatorToolClient {
             while !Task.isCancelled {
                 do {
                     // Re-announcing also handles registry changes after startup.
-                    let next = try await post("next", body: ["tools": bridge.nativeToolDefinitions])
+                    let next = try await post("next", body: ["tools": bridge.nativeToolDefinitions,
+                                                             "endUserTools": endUserToolSummaries])
                     guard let id = next["requestId"] as? String,
                           let name = next["toolName"] as? String else { continue }
                     var response: [String: Any] = ["requestId": id]
@@ -92,6 +94,14 @@ private final class SimulatorToolClient {
                 }
             }
         }
+    }
+
+    /// The app's own end-user tools, named so an agent knows they exist. The
+    /// connection runs them only when it was launched for end-user testing,
+    /// and then they are in `tools` already.
+    private var endUserToolSummaries: [[String: String]] {
+        guard !bridge.isEndUserTestingEnabled else { return [] }
+        return bridge.registry.tools(audience: .endUser).map { ["name": $0.name, "description": $0.description] }
     }
 
     private func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {

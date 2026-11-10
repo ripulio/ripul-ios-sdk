@@ -8,12 +8,22 @@ import SwiftUI
 public struct RenameSessionAlert: ViewModifier {
     @Binding var renamingSession: ChatSession?
     @Binding var renameText: String
+    @Binding var iconPickerSession: ChatSession?
     var bridge: AgentBridge
+    var unifiedRow: ((ChatSession) -> UnifiedSession?)?
 
-    public init(renamingSession: Binding<ChatSession?>, renameText: Binding<String>, bridge: AgentBridge) {
+    public init(
+        renamingSession: Binding<ChatSession?>,
+        renameText: Binding<String>,
+        iconPickerSession: Binding<ChatSession?> = .constant(nil),
+        bridge: AgentBridge,
+        unifiedRow: ((ChatSession) -> UnifiedSession?)? = nil
+    ) {
         self._renamingSession = renamingSession
         self._renameText = renameText
+        self._iconPickerSession = iconPickerSession
         self.bridge = bridge
+        self.unifiedRow = unifiedRow
     }
 
     public func body(content: Content) -> some View {
@@ -42,6 +52,16 @@ public struct RenameSessionAlert: ViewModifier {
             } message: { _ in
                 Text("Enter a new name for this session.")
             }
+            .ripulSheet(item: $iconPickerSession) { session in
+                let row = unifiedRow?(session)
+                let keys = ([session.id, session.sourceChatId, session.hostChatId] + (row?.readStateKeys ?? [])).compactMap { $0 }
+                SessionIconPicker(
+                    sessionTitle: row?.title ?? session.displayName,
+                    currentIcon: bridge.sessionList.customIcon(anyOf: keys)
+                ) { newIcon in
+                    bridge.setSessionIcon(newIcon, chatSession: session, unified: row)
+                }
+            }
     }
 }
 
@@ -50,8 +70,16 @@ public extension View {
     func renameSessionAlert(
         renamingSession: Binding<ChatSession?>,
         renameText: Binding<String>,
-        bridge: AgentBridge
+        iconPickerSession: Binding<ChatSession?> = .constant(nil),
+        bridge: AgentBridge,
+        unifiedRow: ((ChatSession) -> UnifiedSession?)? = nil
     ) -> some View {
-        modifier(RenameSessionAlert(renamingSession: renamingSession, renameText: renameText, bridge: bridge))
+        modifier(RenameSessionAlert(
+            renamingSession: renamingSession,
+            renameText: renameText,
+            iconPickerSession: iconPickerSession,
+            bridge: bridge,
+            unifiedRow: unifiedRow
+        ))
     }
 }

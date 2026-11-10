@@ -329,4 +329,94 @@ final class SessionReadStateTests: XCTestCase {
         XCTAssertTrue(AgentBridge.pinnedKeys(cache: cache).isEmpty)
         XCTAssertTrue(bridge.sessionList.pinnedChatKeys.isEmpty)
     }
+
+    func testSettingAndClearingASessionIconCoversEveryAliasAndPersists() {
+        let cache = cache(); let bridge = bridge(cache)
+        let tab = ChatSession(id: "tab-1", sourceChatId: "cli_550e8400-e29b-41d4-a716-446655440000", displayName: "One", createdAt: Date())
+        let session = row("claude-cli:550e8400-e29b-41d4-a716-446655440000", tab: tab)
+
+        bridge.setSessionIcon("star.fill", chatSession: tab, unified: session)
+        XCTAssertEqual(bridge.sessionList.customIcon(anyOf: session.readStateKeys), "star.fill")
+        XCTAssertEqual(bridge.sessionList.customIcon(anyOf: ["550e8400-e29b-41d4-a716-446655440000"]), "star.fill",
+                       "Remote scan row with no open tab still resolves the custom icon")
+        XCTAssertEqual(self.bridge(cache).sessionList.customIcon(anyOf: session.readStateKeys), "star.fill",
+                       "A new bridge given the cache restores the custom icon")
+
+        bridge.setSessionIcon(nil, session)
+        XCTAssertNil(bridge.sessionList.customIcon(anyOf: session.readStateKeys))
+        XCTAssertTrue(AgentBridge.customIcons(cache: cache).isEmpty)
+    }
+
+    // MARK: - Icons kept on the server (7 November 2026)
+
+    func testAnIconChosenOnAnotherDeviceShowsHereAndSoDoesItsClearing() {
+        let cache = cache(); let bridge = bridge(cache)
+        let tab = ChatSession(id: "room_central", sourceChatId: "room_central", displayName: "Central command", createdAt: Date())
+        let room = row("room_central", tab: tab)
+
+        bridge.applyServerSessionIcons(["room_central": "star.fill"], rows: [room])
+        XCTAssertEqual(bridge.sessionList.customIcon(anyOf: room.readStateKeys), "star.fill")
+        XCTAssertEqual(self.bridge(cache).sessionList.customIcon(anyOf: room.readStateKeys), "star.fill",
+                       "Kept for the next launch, before the server answers")
+
+        bridge.applyServerSessionIcons(["room_central": ""], rows: [room])
+        XCTAssertNil(bridge.sessionList.customIcon(anyOf: room.readStateKeys), "Cleared on another device, cleared here")
+    }
+
+    func testTheServersIconReachesAMacsChatListedAfterTheRead() {
+        let cache = cache(); let bridge = bridge(cache)
+        let uuid = "550e8400-e29b-41d4-a716-446655440000"
+        bridge.applyServerSessionIcons([uuid: "flame"], rows: [])
+        let later = UnifiedSession(id: uuid, title: "Later", lastUsed: Date(), gitBranch: nil, messageCount: nil,
+                                   projectName: nil, provider: nil, providerLabel: nil, machineName: nil, machineId: "mac-1",
+                                   matchKeys: [uuid, "cli_\(uuid)"], cachedIsOpen: false, ripulSession: nil)
+        XCTAssertEqual(bridge.sessionList.customIcon(anyOf: later.readStateKeys), "flame")
+    }
+
+    func testOnlyWhatTheServerHasNeverHeardOfIsSentAndTheServerWinsOverAStaleCopy() {
+        let merged = SessionReadLedger.mergingServerIcons(
+            local: ["chat-mine": "leaf", "chat-theirs": "old", "mac_1": "desktopcomputer", "chat-held": "new"],
+            server: ["chat-theirs": "bolt", "chat-held": "older"],
+            rows: [
+                .init(metadataKey: "chat-mine", names: ["chat-mine", "tab-a"]),
+                .init(metadataKey: "chat-theirs", names: ["chat-theirs"]),
+                .init(metadataKey: "mac_1", names: ["mac_1"]),
+                .init(metadataKey: "chat-held", names: ["chat-held"]),
+            ],
+            unsaved: ["chat-held"])
+        XCTAssertEqual(merged.send, ["chat-mine": "leaf"], "An icon from before the server kept them; a Mac's own chat stays on the device")
+        XCTAssertEqual(merged.icons["chat-theirs"], "bolt")
+        XCTAssertEqual(merged.icons["chat-held"], "new", "A choice the server has not confirmed stands")
+        XCTAssertEqual(merged.icons["mac_1"], "desktopcomputer")
+    }
+
+    func testAReadThatSetOutBeforeTheSaveDoesNotPutTheOldIconBack() {
+        let cache = cache(); let bridge = bridge(cache)
+        let session = row("room_central")
+        bridge.setSessionIcon("star.fill", session)
+        XCTAssertEqual(bridge.unsavedSessionIcons["room_central"], "star.fill")
+
+        bridge.applyServerSessionIcons(["room_central": "flame"], rows: [session])
+        XCTAssertEqual(bridge.sessionList.customIcon(anyOf: session.readStateKeys), "star.fill")
+    }
+
+    func testSessionIconPickerCatalogIsRichUniqueValidAndSearchable() {
+        let all = SessionIconPicker.availableIcons.flatMap(\.icons)
+        XCTAssertGreaterThanOrEqual(all.count, 250)
+        XCTAssertEqual(Set(all).count, all.count, "Every icon in the picker appears once")
+        for icon in all {
+            XCTAssertTrue(SessionIconPicker.isValidSystemSymbol(icon), "Missing SF Symbol: \(icon)")
+        }
+
+        let bySynonym = SessionIconPicker.filteredSections(search: "database").flatMap(\.icons)
+        XCTAssertTrue(bySynonym.contains("cylinder.split.1x2.fill"))
+
+        let bySection = SessionIconPicker.filteredSections(search: "", sectionFilter: "Git & Workflows")
+        XCTAssertEqual(bySection.map(\.section), ["Git & Workflows"])
+        XCTAssertTrue(bySection.first?.icons.contains("arrow.triangle.branch") == true)
+
+        let uncurated = SessionIconPicker.filteredSections(search: "paperplane.circle.fill")
+        XCTAssertEqual(uncurated.last?.section, "System Symbol")
+        XCTAssertEqual(uncurated.last?.icons, ["paperplane.circle.fill"])
+    }
 }

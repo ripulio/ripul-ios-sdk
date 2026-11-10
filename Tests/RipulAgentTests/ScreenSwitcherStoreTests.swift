@@ -411,6 +411,159 @@ final class ScreenSwitcherStoreTests: XCTestCase {
         XCTAssertEqual(store.stop, .screen)
     }
 
+    // MARK: - Carried to a wide window's edge
+
+    /// An open Duo held landscape (951 by 669): a screen docks in the 548
+    /// points beside a phone-width app.
+    private let duoTargets = ScreenSwitcherStore.DockTargets(
+        left: CGRect(x: 0, y: 0, width: 548, height: 669),
+        right: CGRect(x: 403, y: 0, width: 548, height: 669))
+
+    private func wideBoard() -> ScreenSwitcherStore {
+        let store = chatBoard(bubble: false)
+        store.dockTargetsProvider = { [duoTargets] in duoTargets }
+        return store
+    }
+
+    /// Pulled `lift` of the way to the grid, then carried sideways with the finger at `fingerX`.
+    private func carry(_ store: ScreenSwitcherStore, by carry: CGFloat, fingerX: CGFloat, lift: CGFloat = 0.6) {
+        store.beginInteractive(snapshot: nil)
+        store.updateInteractive(translation: lift * store.travelDistance)
+        store.fingerLocation = CGPoint(x: fingerX, y: 300)
+        store.updateCarry(translation: carry)
+    }
+
+    func testAPhonesCardStaysCentredWhateverTheFingerDoesSideways() {
+        let store = chatBoard(bubble: false)
+        carry(store, by: 300, fingerX: 420)
+        XCTAssertNil(store.dockTargets)
+        XCTAssertEqual(store.carry, 0)
+        XCTAssertNil(store.dockHover)
+        store.closeImmediately()
+    }
+
+    func testAWideWindowsCardFollowsTheFingerAndAnEdgeTakesIt() {
+        let store = wideBoard()
+        carry(store, by: 120, fingerX: 600)
+        XCTAssertEqual(store.dockTargets, duoTargets)
+        XCTAssertEqual(store.carry, 120)
+        XCTAssertNil(store.dockHover, "not near an edge yet")
+        store.fingerLocation = CGPoint(x: 910, y: 300)
+        store.updateCarry(translation: 430)
+        XCTAssertEqual(store.dockHover, .right)
+        // A finger resting near the boundary stays in.
+        store.fingerLocation = CGPoint(x: 830, y: 300)
+        store.updateCarry(translation: 350)
+        XCTAssertEqual(store.dockHover, .right)
+        // Well away, out again.
+        store.fingerLocation = CGPoint(x: 600, y: 300)
+        store.updateCarry(translation: 120)
+        XCTAssertNil(store.dockHover)
+        // And the left edge.
+        store.fingerLocation = CGPoint(x: 30, y: 300)
+        store.updateCarry(translation: -440)
+        XCTAssertEqual(store.dockHover, .left)
+        store.closeImmediately()
+    }
+
+    func testOnlyALiftedCardDocks() {
+        let store = wideBoard()
+        carry(store, by: 430, fingerX: 920, lift: 0.05)
+        XCTAssertNil(store.dockHover, "a card still filling the window has not been lifted")
+        store.closeImmediately()
+    }
+
+    func testAPullStartingAtAnEdgeHasNotBeenCarriedThere() {
+        XCTAssertNil(ScreenSwitcherStore.dockSide(fingerX: 930, carry: 10, width: 951, lifted: true, current: nil))
+        XCTAssertEqual(ScreenSwitcherStore.dockSide(fingerX: 930, carry: 40, width: 951, lifted: true, current: nil), .right)
+        // Carried far enough across, wherever the finger is.
+        XCTAssertEqual(ScreenSwitcherStore.dockSide(fingerX: 700, carry: 280, width: 951, lifted: true, current: nil), .right)
+        XCTAssertEqual(ScreenSwitcherStore.dockSide(fingerX: nil, carry: -280, width: 951, lifted: true, current: nil), .left)
+        XCTAssertNil(ScreenSwitcherStore.dockSide(fingerX: 930, carry: 400, width: 951, lifted: false, current: nil))
+    }
+
+    func testLettingGoOverAnEdgeLandsTheCardAndHandsItToTheHost() async throws {
+        let store = wideBoard()
+        var docked: [String] = []
+        var sides: [ScreenSwitcherStore.DockSide] = []
+        store.onDock = { id, side in
+            docked.append(id)
+            sides.append(side)
+            store.completeDock(landingOn: nil)
+        }
+        store.onSelect = { _ in XCTFail("Docking goes through the host, not onSelect") }
+        carry(store, by: 430, fingerX: 920)
+        store.endInteractive(translation: 0, velocity: 0)
+        XCTAssertEqual(store.dockLanding, .right)
+        XCTAssertTrue(store.isDocking)
+        XCTAssertFalse(store.isSettled, "no tap is live while it lands")
+        store.close()
+        XCTAssertTrue(store.isDocking, "nor does a tap outside put it back")
+        XCTAssertEqual(docked, [], "the hand-off waits for the card to land")
+
+        try await Task.sleep(for: .milliseconds(550))
+        XCTAssertEqual(docked, ["agent:chat-1"])
+        XCTAssertEqual(sides, [.right])
+        XCTAssertFalse(store.isActive, "with no card to land on, the board goes")
+        XCTAssertNil(store.dockLanding)
+        XCTAssertEqual(store.carry, 0)
+        XCTAssertNotNil(store.document(for: "agent:chat-1"), "docking is not closing")
+    }
+
+    func testADockWithALandingCardLeavesTheBoardOpenOnIt() async throws {
+        let store = wideBoard()
+        store.onDock = { _, _ in store.completeDock(landingOn: "files:readme") }
+        carry(store, by: -440, fingerX: 25)
+        store.endInteractive(translation: 0, velocity: 0)
+        try await Task.sleep(for: .milliseconds(550))
+        XCTAssertTrue(store.isActive)
+        XCTAssertEqual(store.stop, .grid)
+        XCTAssertEqual(store.progress, 1)
+        XCTAssertEqual(store.activeDestinationId, "files:readme")
+        XCTAssertNil(store.dockTargets)
+        XCTAssertNil(store.dockLanding)
+        XCTAssertEqual(store.carry, 0)
+    }
+
+    func testAHostThatIgnoresTheDockGetsTheGridBack() async throws {
+        let store = wideBoard()
+        store.onDock = { _, _ in }
+        carry(store, by: 430, fingerX: 920)
+        store.endInteractive(translation: 0, velocity: 0)
+        try await Task.sleep(for: .milliseconds(550))
+        XCTAssertEqual(store.stop, .grid)
+        XCTAssertNil(store.dockLanding)
+        XCTAssertEqual(store.carry, 0)
+        XCTAssertEqual(store.activeDestinationId, "agent:chat-1", "the card is intact")
+    }
+
+    func testLettingGoAwayFromAnEdgeLandsOnAStopAndCentresTheCard() {
+        let store = wideBoard()
+        var docked = 0
+        store.onDock = { _, _ in docked += 1 }
+        carry(store, by: 150, fingerX: 620, lift: 0.8)
+        advance(store)
+        store.endInteractive(translation: 0, velocity: 0)
+        XCTAssertEqual(store.stop, .grid)
+        XCTAssertEqual(store.carry, 0)
+        XCTAssertNil(store.dockTargets)
+        XCTAssertEqual(docked, 0)
+        store.closeImmediately()
+    }
+
+    func testAPullFromTheDeckPagesRatherThanCarries() {
+        let store = wideBoard()
+        pull(store, to: 0.3)
+        store.endInteractive(translation: 0, velocity: 0)
+        XCTAssertEqual(store.stop, .deck)
+        store.beginInteractive(snapshot: nil)
+        store.fingerLocation = CGPoint(x: 920, y: 300)
+        store.updateCarry(translation: 430)
+        XCTAssertNil(store.dockTargets, "on the deck a sideways drag pages the cards")
+        XCTAssertEqual(store.carry, 0)
+        store.closeImmediately()
+    }
+
     func testMostRecentlyUsedIsRecencyNotDisplayOrder() {
         let store = ScreenSwitcherStore()
         store.open(document(1))

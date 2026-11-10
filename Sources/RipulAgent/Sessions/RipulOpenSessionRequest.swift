@@ -22,13 +22,17 @@ public enum RipulOpenSessionRequest {
     /// The `UnifiedSession.id` waiting to be opened.
     public static var pendingSessionId: String?
     public static var pendingMachineId: String?
+    /// Optional fallback `UnifiedSession` (e.g. an archived chat from `search_chats`
+    /// or `present_chats`) when the session is not in `model.unifiedSessions`.
+    public static var pendingFallbackSession: UnifiedSession?
 
     /// The rescan chasing a request whose chat isn't listed yet.
     static var rescan: (id: String, task: Task<Void, Never>)?
 
-    public static func open(sessionId: String, machineId: String? = nil) {
+    public static func open(sessionId: String, machineId: String? = nil, fallback: UnifiedSession? = nil) {
         pendingSessionId = sessionId
         pendingMachineId = machineId
+        pendingFallbackSession = fallback
         opening = (sessionId, .now)
         NotificationCenter.default.post(name: notification, object: nil)
     }

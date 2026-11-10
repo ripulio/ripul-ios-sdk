@@ -9,12 +9,15 @@ final class KeyboardAttachedWebViewController: UIViewController {
     let content: AgentWebViewController
     private weak var bridge: AgentBridge?
     private var navigationInset: CGFloat?
+    /// How far below its usual place the composer rests (`ComposerRestingLayout`).
+    private var restingDrop: CGFloat
     private var keyboardFrame: CGRect?
 
-    init(content: AgentWebViewController, bridge: AgentBridge, navigationInset: CGFloat?) {
+    init(content: AgentWebViewController, bridge: AgentBridge, navigationInset: CGFloat?, restingDrop: CGFloat = 0) {
         self.content = content
         self.bridge = bridge
         self.navigationInset = navigationInset
+        self.restingDrop = restingDrop
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -40,9 +43,10 @@ final class KeyboardAttachedWebViewController: UIViewController {
         }
     }
 
-    func update(navigationInset: CGFloat?) {
-        guard self.navigationInset != navigationInset else { return }
+    func update(navigationInset: CGFloat?, restingDrop: CGFloat = 0) {
+        guard self.navigationInset != navigationInset || self.restingDrop != restingDrop else { return }
         self.navigationInset = navigationInset
+        self.restingDrop = restingDrop
         if navigationInset == nil { keyboardFrame = nil }
         if isViewLoaded { updateTranslation() }
     }
@@ -58,7 +62,7 @@ final class KeyboardAttachedWebViewController: UIViewController {
             let local = view.convert(keyboardFrame, from: window.screen.coordinateSpace)
             let inWindow = window.convert(keyboardFrame, from: window.screen.coordinateSpace)
             shift = ComposerKeyboardLayout.webShift(bounds: view.bounds,
-                safeBottom: window.safeAreaInsets.bottom, navigationInset: navigationInset,
+                safeBottom: max(0, window.safeAreaInsets.bottom - restingDrop), navigationInset: navigationInset,
                 keyboard: local, docked: inWindow.maxY >= window.bounds.maxY - 1)
         }
         let transform = CGAffineTransform(translationX: 0, y: -shift)

@@ -166,8 +166,10 @@ public struct ChatSuggestion: Identifiable {
     public let name: String
     public let description: String?
     public let token: String
-    public init(id: String, name: String, description: String? = nil, token: String) {
-        self.id = id; self.name = name; self.description = description; self.token = token
+    /// The chat's own icon, as its row in the chat list shows it: the one given it, else its provider's.
+    public let icon: String?
+    public init(id: String, name: String, description: String? = nil, token: String, icon: String? = nil) {
+        self.id = id; self.name = name; self.description = description; self.token = token; self.icon = icon
     }
 }
 
@@ -181,7 +183,7 @@ public struct ChatSuggestion: Identifiable {
 enum ContextMentionAliasing {
     /// Mirrors CONTEXT_TOKEN_RE in
     /// chrome-extension/src/context-providers/resolveContextRefs.ts.
-    private static let tokenPattern = try? NSRegularExpression(
+    static let tokenPattern = try? NSRegularExpression(
         pattern: #"\[context:\s*([A-Za-z0-9_.]+)/([A-Za-z0-9_-]+)(?:\s*\|\s*([^\]]*?))?\s*\]"#
     )
 
@@ -310,6 +312,8 @@ public struct NativeChatInput: View {
     var composerActionPending: Bool
     var onComposerAction: ((String) -> Void)?
     let onPause: (() -> Void)?
+    /// Stop on a paused chat: ends its task and drops the messages waiting (pausingATask.md).
+    let onStop: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
     let onAddArtefact: (() -> Void)?
@@ -410,6 +414,31 @@ public struct NativeChatInput: View {
     @State private var slashDrillCommand: SlashCommandInfo?
     /// Composer-visible alias → the `[context: …]` token it stands in for.
     @State private var contextAliases: [String: String] = [:]
+    /// The people and agents picked from @ in this draft, as they read in the field: drawn as mentions.
+    @State private var pickedMentions: [String] = []
+    /// Window-space top of the composer body and top-chrome clearance so the
+    /// `@` and `/` suggestion overlays never grow up under the top safe area or
+    /// floating top bar on small screens or with the onscreen keyboard open.
+    @State private var composerTopY: CGFloat = 0
+    @State private var topChrome = WindowTopChromeClearance()
+
+    static func suggestionListMaxHeight(composerTopY: CGFloat, topChrome: WindowTopChromeClearance, reservedHeight: CGFloat) -> CGFloat {
+        guard composerTopY > 0 else { return 280 }
+        // Clear the window's top safe area and the 48pt floating top bar, plus
+        // an 8pt breathing gap below it and the 4pt VStack gap above the editor.
+        let topClearance = topChrome.contentClearance(below: 48) + 8
+        let available = composerTopY - topClearance - 4 - reservedHeight
+        return min(280, max(88, floor(available)))
+    }
+
+    private var atScrollMaxHeight: CGFloat {
+        // Reserve 36pt for the pinned classToggleRow above the scroll list.
+        Self.suggestionListMaxHeight(composerTopY: composerTopY, topChrome: topChrome, reservedHeight: 36)
+    }
+
+    private var slashScrollMaxHeight: CGFloat {
+        Self.suggestionListMaxHeight(composerTopY: composerTopY, topChrome: topChrome, reservedHeight: 0)
+    }
 
     private var isTwoRow: Bool { (chatInputLayout ?? "twoRow") == "twoRow" }
     private var resolvedChatInputGlassStyle: String { chatInputGlassStyle ?? "clear" }
@@ -432,6 +461,7 @@ public struct NativeChatInput: View {
         composerActionPending: Bool = false,
         onComposerAction: ((String) -> Void)? = nil,
         onPause: (() -> Void)? = nil,
+        onStop: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
         onAddArtefact: (() -> Void)? = nil,
@@ -475,6 +505,7 @@ public struct NativeChatInput: View {
         self.composerActionPending = composerActionPending
         self.onComposerAction = onComposerAction
         self.onPause = onPause
+        self.onStop = onStop
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
         self.onAddArtefact = onAddArtefact
@@ -674,6 +705,8 @@ public struct NativeChatInput: View {
                     singleRowBody
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { composerTopY = $0 }
+            .background(WindowTopChrome { topChrome = $0 })
             #if targetEnvironment(macCatalyst)
             // The labels already draw circular glass. Mac idiom's automatic
             // button style adds a second, rectangular bezel around them.
@@ -710,6 +743,7 @@ public struct NativeChatInput: View {
             if newValue.isEmpty {
                 messageHistory?.composerModality = "keyboard"
                 contextAliases = [:]
+                pickedMentions = []
             }
             if isDictating && newValue.isEmpty {
                 dictationBase = ""
@@ -943,9 +977,19 @@ public struct NativeChatInput: View {
         }
     }
 
-    /// Offered for a bare `@` and for anything typed toward "element".
+    /// True when the user has toggled off People, Branches, and Files so only
+    /// Chats remains enabled in the @-mention class bar.
+    private var onlyChatsClassEnabled: Bool {
+        !hiddenClasses.contains("chats")
+            && hiddenClasses.contains("people")
+            && hiddenClasses.contains("repo")
+            && hiddenClasses.contains("files")
+    }
+
+    /// Offered for a bare `@` and for anything typed toward "element", except
+    /// when the user has narrowed the @ picker to Chats only.
     private var elementPickShown: Bool {
-        guard onPickElement != nil else { return false }
+        guard onPickElement != nil, !onlyChatsClassEnabled else { return false }
         let query = afterAtText.lowercased()
         return query.isEmpty || "element".hasPrefix(query) || "pick".hasPrefix(query)
     }
@@ -965,6 +1009,7 @@ public struct NativeChatInput: View {
         } else {
             text += "@" + Self.mentionToken(suggestion.name) + " "
         }
+        pickedMentions.append("@" + Self.mentionToken(suggestion.name))
         if !addressedParticipants.contains(suggestion.id) {
             addressedParticipants.append(suggestion.id)
         }
@@ -978,6 +1023,7 @@ public struct NativeChatInput: View {
         } else {
             text += "@" + Self.mentionToken(suggestion.name) + " "
         }
+        pickedMentions.append("@" + Self.mentionToken(suggestion.name))
         if !addressedParticipants.contains(suggestion.id) {
             addressedParticipants.append(suggestion.id)
         }
@@ -1076,7 +1122,7 @@ public struct NativeChatInput: View {
     private func chatRow(_ suggestion: ChatSuggestion) -> some View {
         Button { selectChatSuggestion(suggestion) } label: {
             HStack(spacing: 8) {
-                Image(systemName: "bubble.left.and.bubble.right")
+                Image(systemName: suggestion.icon ?? "bubble.left.and.bubble.right")
                     .foregroundStyle(.ripul(.textSecondary)).frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name).font(.ripul(size: 14, weight: .medium))
@@ -1154,7 +1200,9 @@ public struct NativeChatInput: View {
         if !hiddenClasses.contains("files") {
             picks += fileSuggestions.map { s in ("f:\(s.id)", { selectFileSuggestion(s) }) }
         }
-        picks += elementSuggestions.map { s in ("e:\(s.id)", { selectElementSuggestion(s) }) }
+        if !onlyChatsClassEnabled {
+            picks += elementSuggestions.map { s in ("e:\(s.id)", { selectElementSuggestion(s) }) }
+        }
         return picks
     }
 
@@ -1192,13 +1240,14 @@ public struct NativeChatInput: View {
             let chatsShown = (!chatSuggestions.isEmpty || chatsLoading) && !hiddenClasses.contains("chats")
             let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
             let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
-            let hasResults = elementPickShown || peopleShown || teamShown || chatsShown || branchesShown || filesShown || !elementSuggestions.isEmpty
+            let elementsShown = !elementSuggestions.isEmpty && !onlyChatsClassEnabled
+            let hasResults = elementPickShown || peopleShown || teamShown || chatsShown || branchesShown || filesShown || elementsShown
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 20)
-                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("chats") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Search chats, people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
+                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("chats") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && !elementsShown ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Search chats, people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
                         .font(.ripul(size: 14))
                         .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
@@ -1212,7 +1261,7 @@ public struct NativeChatInput: View {
                         if elementPickShown {
                             suggestionSectionHeader("Element")
                             atRow("pick", highlighted: highlighted) { elementPickRow }
-                            if peopleShown || teamShown || chatsShown || branchesShown || filesShown || !elementSuggestions.isEmpty {
+                            if peopleShown || teamShown || chatsShown || branchesShown || filesShown || elementsShown {
                                 Divider()
                             }
                         }
@@ -1270,7 +1319,7 @@ public struct NativeChatInput: View {
                                 }
                             }
                         }
-                        if !elementSuggestions.isEmpty {
+                        if elementsShown {
                             if peopleShown || teamShown || chatsShown || branchesShown || filesShown {
                                 Divider()
                             }
@@ -1284,7 +1333,7 @@ public struct NativeChatInput: View {
                         }
                     }
                 }
-                .frame(maxHeight: 280)
+                .frame(maxHeight: atScrollMaxHeight)
                 .onChange(of: highlighted) { id in
                     if let id { withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(id) } }
                 }
@@ -1589,7 +1638,7 @@ public struct NativeChatInput: View {
                         }
                     }
                 }
-                .frame(maxHeight: 280)
+                .frame(maxHeight: slashScrollMaxHeight)
             }
         }
         .background(.ultraThinMaterial)
@@ -1652,7 +1701,7 @@ public struct NativeChatInput: View {
                 }
             }
         }
-        .frame(maxHeight: 280)
+        .frame(maxHeight: slashScrollMaxHeight)
     }
 
     private func slashCommandRow(_ command: SlashCommandInfo) -> some View {
@@ -1839,11 +1888,9 @@ public struct NativeChatInput: View {
         isAgentRunning && !isAgentPaused && conversationMode != "group"
     }
 
-    // Matches ChatTextView's font so the shimmer overlay sits exactly where
-    // the UIKit placeholder label would.
-    private var placeholderFont: Font {
-        .ripul(size: UIFont.ripul(.body).pointSize + 1, weight: .semibold)
-    }
+    // ChatTextView's font size (semibold), so the working status sits exactly
+    // where the UIKit placeholder label would, in the same type.
+    private var placeholderFontSize: CGFloat { UIFont.ripul(.body).pointSize + 1 } // theme-mapping: the size ChatTextView's font has
 
     /// Up recalls history only at the start of a message: a single line, or a
     /// recalled message still unedited (so a multi-line one can be stepped
@@ -1871,6 +1918,7 @@ public struct NativeChatInput: View {
         NoAutofillTextView(
             text: $text,
             height: $textHeight,
+            mentions: Array(contextAliases.keys) + pickedMentions,
             // While waiting, the UIKit placeholder is blanked and the
             // shimmering SwiftUI overlay below renders the copy instead.
             placeholder: agentWaiting ? "" : conversationMode == "group" ? "Message the group · @Agent to ask" : isAgentPaused ? "Agent is paused, add new instruction…" : "Message...",
@@ -1917,11 +1965,13 @@ public struct NativeChatInput: View {
                 ComposerWaitingStatusLabel(
                     text: waitingPlaceholder,
                     base: Color.ripul(system: .placeholderText).opacity(0.45),
-                    highlight: Color.ripul(system: .placeholderText).opacity(0.85)
+                    highlight: Color.ripul(system: .placeholderText).opacity(0.85), // theme-mapping: unchanged, a comma added
+                    fontSize: placeholderFontSize,
+                    weight: .semibold
                 )
                 .padding(.leading, 12)
                 .padding(.trailing, 12)
-                .padding(.top, 9)
+                .padding(.top, 8)
                 .allowsHitTesting(false)
             }
         }
@@ -1969,6 +2019,21 @@ public struct NativeChatInput: View {
                         .frame(width: 36, height: 36)
                         .contentShape(Circle())
                         .modifier(GlassCircleModifier(glassStyle: "clear"))
+                }
+                if let onStop {
+                    Button {
+                        dismissKeyboard()
+                        onStop()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .accessibilityLabel("Stop")
+                            .font(.ripulIcon(size: 16, weight: .bold))
+                            .foregroundStyle(.ripul(.danger))
+                            .frame(width: 36, height: 36)
+                            .contentShape(Circle())
+                            .modifier(GlassCircleModifier(glassStyle: "clear"))
+                    }
+                    .transition(.scale.combined(with: .opacity))
                 }
             }
             .padding(.trailing, 4)
@@ -2078,6 +2143,21 @@ public struct NativeChatInput: View {
                         .modifier(GlassCircleModifier(glassStyle: nil))
                 }
                 .transition(.scale.combined(with: .opacity))
+                if let onStop {
+                    Button {
+                        dismissKeyboard()
+                        onStop()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .accessibilityLabel("Stop")
+                            .font(.ripulIcon(size: 18, weight: .bold))
+                            .foregroundStyle(.ripul(.danger))
+                            .frame(width: 40, height: 40)
+                            .contentShape(Circle())
+                            .modifier(GlassCircleModifier(glassStyle: nil))
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                }
             }
         } else if isAgentPaused || hasContent {
             HStack(spacing: 4) {
@@ -2207,6 +2287,8 @@ public struct NativeChatInput: View {
     var composerActionPending: Bool
     var onComposerAction: ((String) -> Void)?
     let onPause: (() -> Void)?
+    /// Stop on a paused chat: ends its task and drops the messages waiting (pausingATask.md).
+    let onStop: (() -> Void)?
     let onNewChat: (() -> Void)?
     let onQuickCommands: (() -> Void)?
     let onAddArtefact: (() -> Void)?
@@ -2297,6 +2379,7 @@ public struct NativeChatInput: View {
         composerActionPending: Bool = false,
         onComposerAction: ((String) -> Void)? = nil,
         onPause: (() -> Void)? = nil,
+        onStop: (() -> Void)? = nil,
         onNewChat: (() -> Void)? = nil,
         onQuickCommands: (() -> Void)? = nil,
         onAddArtefact: (() -> Void)? = nil,
@@ -2335,6 +2418,7 @@ public struct NativeChatInput: View {
         self.composerActionPending = composerActionPending
         self.onComposerAction = onComposerAction
         self.onPause = onPause
+        self.onStop = onStop
         self.onNewChat = onNewChat
         self.onQuickCommands = onQuickCommands
         self.onAddArtefact = onAddArtefact
@@ -2654,7 +2738,7 @@ public struct NativeChatInput: View {
     private func chatRow(_ suggestion: ChatSuggestion) -> some View {
         Button { selectChatSuggestion(suggestion) } label: {
             HStack(spacing: 8) {
-                Image(systemName: "bubble.left.and.bubble.right")
+                Image(systemName: suggestion.icon ?? "bubble.left.and.bubble.right")
                     .foregroundStyle(.ripul(.textSecondary)).frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(suggestion.name).font(.ripul(size: 14, weight: .medium))
@@ -2706,6 +2790,13 @@ public struct NativeChatInput: View {
         .buttonStyle(.plain)
     }
 
+    private var onlyChatsClassEnabled: Bool {
+        !hiddenClasses.contains("chats")
+            && hiddenClasses.contains("people")
+            && hiddenClasses.contains("repo")
+            && hiddenClasses.contains("files")
+    }
+
     private var afterAtText: String {
         guard let triggerIdx = atTriggerIndex,
               triggerIdx < text.endIndex else { return "" }
@@ -2722,13 +2813,14 @@ public struct NativeChatInput: View {
             let chatsShown = (!chatSuggestions.isEmpty || chatsLoading) && !hiddenClasses.contains("chats")
             let branchesShown = !branchSuggestions.isEmpty && !hiddenClasses.contains("repo")
             let filesShown = !fileSuggestions.isEmpty && !hiddenClasses.contains("files")
-            let hasResults = peopleShown || teamShown || chatsShown || branchesShown || filesShown || !elementSuggestions.isEmpty
+            let elementsShown = !elementSuggestions.isEmpty && !onlyChatsClassEnabled
+            let hasResults = peopleShown || teamShown || chatsShown || branchesShown || filesShown || elementsShown
             if !hasResults {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.ripul(.textSecondary))
                         .frame(width: 20)
-                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("chats") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && elementSuggestions.isEmpty ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Search chats, people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
+                    Text(hiddenClasses.contains("people") && hiddenClasses.contains("chats") && hiddenClasses.contains("repo") && hiddenClasses.contains("files") && !elementsShown ? "All classes hidden — use the toggles above" : (afterAtText.isEmpty ? "Search chats, people, branches, files, and UI elements" : "No matches for \u{201C}\(afterAtText)\u{201D}"))
                         .font(.ripul(size: 14))
                         .foregroundStyle(.ripul(.textSecondary))
                     Spacer()
@@ -2792,7 +2884,7 @@ public struct NativeChatInput: View {
                                 }
                             }
                         }
-                        if !elementSuggestions.isEmpty {
+                        if elementsShown {
                             if peopleShown || teamShown || chatsShown || branchesShown || filesShown {
                                 Divider()
                             }
@@ -3271,7 +3363,9 @@ public struct NativeChatInput: View {
                     ComposerWaitingStatusLabel(
                         text: waitingPlaceholder,
                         base: Color(nsColor: .placeholderTextColor).opacity(0.45),
-                        highlight: Color(nsColor: .placeholderTextColor).opacity(0.85)
+                        highlight: Color(nsColor: .placeholderTextColor).opacity(0.85),
+                        // The field's own type: the system's body size.
+                        fontSize: NSFont.systemFontSize
                     )
                     .padding(.leading, 12)
                     .padding(.trailing, 12)
@@ -3353,6 +3447,19 @@ public struct NativeChatInput: View {
                         .background(Color.ripul(.success), in: Capsule())
                 }
                 .buttonStyle(.plain)
+                if let onStop {
+                    Button {
+                        onStop()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .accessibilityLabel("Stop")
+                            .font(.ripulIcon(size: 14, weight: .bold))
+                            .foregroundStyle(.ripul(.onAccent))
+                            .frame(width: 34, height: 28)
+                            .background(Color.ripul(.danger), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .transition(.scale.combined(with: .opacity))
             .padding(.trailing, 6)
@@ -3450,6 +3557,21 @@ public struct NativeChatInput: View {
                 }
                 .buttonStyle(.plain)
                 .transition(.scale.combined(with: .opacity))
+                if let onStop {
+                    Button {
+                        onStop()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .accessibilityLabel("Stop")
+                            .font(.ripulIcon(size: 18, weight: .bold))
+                            .foregroundStyle(.ripul(.danger))
+                            .frame(width: 40, height: 40)
+                            .contentShape(Circle())
+                            .modifier(GlassCircleModifier(glassStyle: nil))
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.scale.combined(with: .opacity))
+                }
             }
         } else if hasContent {
             HStack(spacing: 4) {
@@ -3550,15 +3672,19 @@ struct HistorySheet: View {
     let onSelect: (MessageHistory.Entry) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
+    @State private var groupByChat = false
 
-    private var groups: [(id: String, title: String, entries: [MessageHistory.Entry])] {
-        let entries = history.entries.reversed().filter {
+    private var filteredEntries: [MessageHistory.Entry] {
+        history.entries.reversed().filter {
             search.isEmpty || $0.text.localizedCaseInsensitiveContains(search)
                 || $0.chatTitle.localizedCaseInsensitiveContains(search)
                 || $0.attachmentNames.contains { $0.localizedCaseInsensitiveContains(search) }
         }
+    }
+
+    private var groups: [(id: String, title: String, entries: [MessageHistory.Entry])] {
         var result: [(id: String, title: String, entries: [MessageHistory.Entry])] = []
-        for entry in entries {
+        for entry in filteredEntries {
             let id = entry.chatID ?? "unassigned"
             if let index = result.firstIndex(where: { $0.id == id }) { result[index].entries.append(entry) }
             else { result.append((id, entry.chatTitle, [entry])) }
@@ -3569,9 +3695,20 @@ struct HistorySheet: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(groups, id: \.id) { group in
-                    Section(themed: group.title) {
-                        ForEach(group.entries) { msg in historyRow(msg) }
+                Section {
+                    Toggle("Group by chat", isOn: $groupByChat)
+                        .accessibilityIdentifier("promptHistory.groupByChat")
+                }.ripulThemedListRows()
+
+                if groupByChat {
+                    ForEach(groups, id: \.id) { group in
+                        Section(themed: group.title) {
+                            ForEach(group.entries) { msg in historyRow(msg) }
+                        }.ripulThemedListRows()
+                    }
+                } else {
+                    Section {
+                        ForEach(filteredEntries) { msg in historyRow(msg) }
                     }.ripulThemedListRows()
                 }
             }.ripulThemedList()
@@ -3607,6 +3744,11 @@ struct HistorySheet: View {
                     Text(msg.text.isEmpty ? "Attachments" : msg.text)
                         .lineLimit(3)
                         .foregroundStyle(.ripul(.text))
+                    if !groupByChat {
+                        Label(msg.chatTitle, systemImage: "bubble.left")
+                            .foregroundStyle(.ripul(.textSecondary))
+                            .lineLimit(1)
+                    }
                     if !msg.attachmentNames.isEmpty {
                         Label(msg.attachmentNames.joined(separator: ", "), systemImage: "paperclip")
                             .lineLimit(2)
@@ -3964,6 +4106,9 @@ class ChatTextView: UITextView {
 struct NoAutofillTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
+    /// Words picked from @ (people, agents, chats, branches): drawn as mentions,
+    /// in the tint on a light wash of it, as Messages draws a mention.
+    var mentions: [String] = []
     var placeholder: String
     var onSubmit: () -> Void
     var onTextChange: ((String) -> Void)?
@@ -4058,6 +4203,7 @@ struct NoAutofillTextView: UIViewRepresentable {
             textView.layoutIfNeeded()
             context.coordinator.recalcHeight(textView)
         }
+        context.coordinator.drawMentions(textView)
     }
 
     class Coordinator: NSObject, UITextViewDelegate {
@@ -4112,8 +4258,41 @@ struct NoAutofillTextView: UIViewRepresentable {
             }
         }
 
+        /// What was last drawn, so an unchanged field is left alone.
+        private var drawnMentions: (text: String, mentions: [String])?
+
+        /// Each picked mention in the text, in the tint on a light wash of it. Attributes
+        /// only, never the text, so the cursor and the binding stay as they are.
+        func drawMentions(_ textView: UITextView) {
+            let mentions = parent.mentions.filter { !$0.isEmpty }
+            if let drawn = drawnMentions, drawn.text == textView.text, drawn.mentions == mentions { return }
+            drawnMentions = (textView.text, mentions)
+            let storage = textView.textStorage
+            let whole = NSRange(location: 0, length: storage.length)
+            let tint: UIColor = textView.tintColor ?? .ripul(.text)
+            storage.beginEditing()
+            storage.removeAttribute(.backgroundColor, range: whole)
+            storage.addAttribute(.foregroundColor, value: UIColor.ripul(.text), range: whole)
+            let string = storage.string as NSString
+            for mention in Set(mentions) {
+                var from = 0
+                while from < string.length {
+                    let found = string.range(of: mention, options: [], range: NSRange(location: from, length: string.length - from))
+                    if found.location == NSNotFound { break }
+                    storage.addAttribute(.foregroundColor, value: tint, range: found)
+                    storage.addAttribute(.backgroundColor, value: tint.withAlphaComponent(0.14), range: found)
+                    from = found.location + found.length
+                }
+            }
+            storage.endEditing()
+            // What is typed next is plain text, not part of a mention.
+            textView.typingAttributes[.foregroundColor] = UIColor.ripul(.text)
+            textView.typingAttributes.removeValue(forKey: .backgroundColor)
+        }
+
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
+            drawMentions(textView)
             placeholderLabel?.isHidden = !textView.text.isEmpty
             recalcHeight(textView)
             parent.onTextChange?(textView.text)

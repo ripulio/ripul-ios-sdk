@@ -302,12 +302,25 @@ extension AgentBridge {
         public var id: String { correlationId }
     }
 
-    /// The messages people typed into a loaded chat, oldest first. Calls
-    /// `window.__ripulGetHumanChatAnchors`; nil when the page couldn't answer.
+    public struct HumanChatAnchorPage {
+        public let messages: [HumanChatAnchor]
+        public let nextCursor: String?
+        public let complete: Bool
+    }
+
+    /// The first saved message page, plus any messages already loaded locally.
     public func getHumanChatAnchors(sessionId: String) async -> [HumanChatAnchor]? {
-        let reply = await callPage("__ripulGetHumanChatAnchors", [sessionId], .ifMissing("{ error: 'not ready' }"))
+        await getHumanChatAnchorPage(sessionId: sessionId)?.messages
+    }
+
+    /// Each page includes messages accumulated by this read, coalescing CLI
+    /// echoes across page boundaries. Nil means a read failed, not an empty chat.
+    public func getHumanChatAnchorPage(sessionId: String, cursor: String? = nil) async -> HumanChatAnchorPage? {
+        var arguments: [Any] = [sessionId]
+        if let cursor { arguments.append(cursor) }
+        let reply = await callPage("__ripulGetHumanChatAnchors", arguments, .ifMissing("{ error: 'not ready' }"))
         guard let raw = reply.dictionary?["messages"] as? [[String: Any]] else { return nil }
-        return raw.compactMap { m in
+        let messages: [HumanChatAnchor] = raw.compactMap { m in
             guard let correlationId = m["correlationId"] as? String,
                   let text = m["text"] as? String else { return nil }
             let ms = (m["timestamp"] as? NSNumber)?.doubleValue
@@ -318,6 +331,9 @@ extension AgentBridge {
                 senderDisplayName: m["senderDisplayName"] as? String
             )
         }
+        let cursor = reply.dictionary?["nextCursor"] as? String
+        return HumanChatAnchorPage(messages: messages, nextCursor: cursor?.isEmpty == false ? cursor : nil,
+                                   complete: reply.dictionary?["complete"] as? Bool ?? false)
     }
 
     /// Scroll the chat to one message by its correlationId. A message the

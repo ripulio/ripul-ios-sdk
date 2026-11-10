@@ -12,7 +12,6 @@ public struct QuickCommandsSheet: View {
     @State private var commands: [SlashCommandInfo] = []
     @State private var isLoading = true
     @State private var searchText = ""
-    @AppStorage(RipulExperimentalFeatures.plansKey) private var plansEnabled = false
     @State private var showEvictConfirm = false
     @State private var evictStatus: String?
     @State private var isEvicting = false
@@ -20,22 +19,6 @@ public struct QuickCommandsSheet: View {
     public init(bridge: AgentBridge, debugMode: Bool = false) {
         self.bridge = bridge
         self.debugMode = debugMode
-    }
-
-    /// Plans resolve against the active chat's machine and working directory,
-    /// so without a chat there is nothing to look in.
-    @available(iOS 17.0, macOS 14.0, *)
-    @ViewBuilder
-    private var planReviewDestination: some View {
-        if let chatId = bridge.currentSourceChatId {
-            PlanReviewScreen(bridge: bridge.planReviewBridge(), chatId: chatId)
-        } else {
-            ContentUnavailableView(
-                themed: "No active chat",
-                systemImage: "bubble.left.and.exclamationmark.bubble.right",
-                description: Text("Plans are read from the working directory of the chat you're in. Open a session first.")
-            )
-        }
     }
 
     private var filteredCommands: [SlashCommandInfo] {
@@ -55,31 +38,6 @@ public struct QuickCommandsSheet: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        if plansEnabled, #available(iOS 17.0, macOS 14.0, *) {
-                            Section(themed: "Plans") {
-                                NavigationLink {
-                                    planReviewDestination
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: "checklist")
-                                            .font(.ripulIcon(size: 16))
-                                            .foregroundStyle(.tint)
-                                            .frame(width: 28)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text("Plan review").ripulText()
-                                                .font(.ripul(.body))
-                                                .fontWeight(.medium)
-                                            Text("Comments, tasks and lock state for this repo's plans")
-                                                .font(.ripul(.caption))
-                                                .foregroundStyle(.ripul(.textSecondary))
-                                        }
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-                                .uiKitIdentifier("QuickCommandsSheet.planReviewLink")
-                            }.ripulThemedListRows()
-                        }
-
                         if commands.isEmpty && !debugMode {
                             Section(themed: "Commands") {
                                 Label("No slash commands available.", systemImage: "bolt.slash")

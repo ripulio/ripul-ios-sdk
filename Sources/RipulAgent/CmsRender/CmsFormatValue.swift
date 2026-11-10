@@ -10,13 +10,24 @@ import Foundation
 public enum CmsFormatValue {
     /// Any y/M/d/H token marks a date pattern — twin of `isDatePattern`.
     public static func isDatePattern(_ pattern: String) -> Bool {
-        pattern.contains(where: { "yMdH".contains($0) })
+        unquoted(pattern).contains(where: { "yMdH".contains($0) })
+    }
+
+    /// The pattern without its quoted text (`"h"`, `'km'`): words kept as
+    /// written, never read as tokens. Twin of `unquoted` in formatValue.ts.
+    static func unquoted(_ pattern: String) -> String {
+        pattern.replacingOccurrences(of: #""[^"]*"|'[^']*'"#, with: "", options: .regularExpression)
+    }
+
+    /// Quoted text with its quotes taken off. Twin of `literal`.
+    static func literal(_ text: String) -> String {
+        text.replacingOccurrences(of: #""([^"]*)"|'([^']*)'"#, with: "$1$2", options: .regularExpression)
     }
 
     /// Duration pattern: lowercase h/m/s tokens only, no calendar tokens.
     /// Twin of `isDurationPattern` in formatValue.ts.
     public static func isDurationPattern(_ pattern: String) -> Bool {
-        !isDatePattern(pattern) && pattern.contains(where: { "hms".contains($0) })
+        !isDatePattern(pattern) && unquoted(pattern).contains(where: { "hms".contains($0) })
     }
 
     public static func apply(_ value: String, pattern: String) -> String {
@@ -24,7 +35,8 @@ public enum CmsFormatValue {
         if isDatePattern(pattern) {
             guard let date = toDate(value) else { return "" }
             let formatter = DateFormatter()
-            formatter.dateFormat = pattern
+            // DateFormatter quotes with single quotes; a pattern may use double.
+            formatter.dateFormat = pattern.replacingOccurrences(of: #""([^"]*)""#, with: "'$1'", options: .regularExpression)
             return formatter.string(from: date)
         }
         guard let number = Double(value.trimmingCharacters(in: .whitespaces)) else {
@@ -53,6 +65,25 @@ public enum CmsFormatValue {
     /// Parse a stored value for date formatting. Date-only strings parse as a
     /// LOCAL calendar date (never UTC midnight); naive datetimes parse as
     /// local wall-clock — matching the web's default (non-utc) behavior.
+    /// `naiveUTC`: a naive datetime (no zone) is UTC rather than local, the
+    /// web's `toDate(value, { utc: true })`. A bare date is always local.
+    /// `localZone`: the zone a local naive datetime is read in (the viewer's).
+    static func toDate(_ raw: String, naiveUTC: Bool, localZone: TimeZone = .current) -> Date? {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard s.count > 10,
+              s.range(of: #"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$"#, options: .regularExpression) != nil
+        else { return toDate(raw) }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = naiveUTC ? TimeZone(identifier: "UTC") : localZone
+        let normalized = s.replacingOccurrences(of: " ", with: "T")
+        for format in ["yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm"] {
+            f.dateFormat = format
+            if let d = f.date(from: normalized) { return d }
+        }
+        return toDate(raw)
+    }
+
     static func toDate(_ raw: String) -> Date? {
         let s = raw.trimmingCharacters(in: .whitespaces)
         var cal = Calendar(identifier: .gregorian)
@@ -102,12 +133,20 @@ public enum CmsFormatValue {
         let isPercent = pattern.hasSuffix("%")
         let p = isPercent ? String(pattern.dropLast()) : pattern
 
-        guard let coreRange = p.range(of: "[#0,.]+", options: .regularExpression) else {
+        // The numeric core is the first run of #0,. outside quotes: a unit in
+        // quotes rides along ('#,##0 "m"' → "1,285 m"; '0.##"h"' → "6h").
+        var coreRange: Range<String.Index>?
+        var search = p.startIndex
+        while let r = p.range(of: #""[^"]*"|'[^']*'|[#0,.]+"#, options: .regularExpression, range: search..<p.endIndex) {
+            if p[r.lowerBound] != "\"", p[r.lowerBound] != "'" { coreRange = r; break }
+            search = r.upperBound
+        }
+        guard let coreRange else {
             return formatted(n, minFrac: 0, maxFrac: 3, grouping: true)
         }
         let core = String(p[coreRange])
-        let prefix = String(p[p.startIndex..<coreRange.lowerBound])
-        let suffix = String(p[coreRange.upperBound...])
+        let prefix = literal(String(p[p.startIndex..<coreRange.lowerBound]))
+        let suffix = literal(String(p[coreRange.upperBound...]))
 
         let parts = core.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
         let intPart = String(parts[0])

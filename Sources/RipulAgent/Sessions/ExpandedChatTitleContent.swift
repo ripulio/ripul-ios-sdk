@@ -15,6 +15,9 @@ import SwiftUI
 ///
 /// The "previous user message" control exists ONLY here — the contracted bar
 /// has no scroll-up accessory, which is the width this expansion grows into.
+///
+/// Opened by the lozenge's Shortcuts button instead of its title, it shows
+/// the chat's key shortcuts alone (`shortcutsOnly`).
 @available(iOS 15.0, macOS 13.0, *)
 public struct ExpandedChatTitleContent: View {
     /// One metadata line — small icon + secondary text, leading-aligned.
@@ -46,6 +49,9 @@ public struct ExpandedChatTitleContent: View {
 
     var metadata: [MetadataRow]
     var shortcuts: [Shortcut]
+    /// Opened by the lozenge's Shortcuts button: the shortcuts alone, with
+    /// no metadata and no chat controls.
+    var shortcutsOnly: Bool
     var onOpenShortcut: (URL) -> Void
     var onPreviousUserMessage: () -> Void
     var onNextUserMessage: () -> Void
@@ -54,6 +60,7 @@ public struct ExpandedChatTitleContent: View {
     public init(
         metadata: [MetadataRow],
         shortcuts: [Shortcut] = [],
+        shortcutsOnly: Bool = false,
         onOpenShortcut: @escaping (URL) -> Void = { _ in },
         onPreviousUserMessage: @escaping () -> Void,
         onNextUserMessage: @escaping () -> Void,
@@ -61,6 +68,7 @@ public struct ExpandedChatTitleContent: View {
     ) {
         self.metadata = metadata
         self.shortcuts = shortcuts
+        self.shortcutsOnly = shortcutsOnly
         self.onOpenShortcut = onOpenShortcut
         self.onPreviousUserMessage = onPreviousUserMessage
         self.onNextUserMessage = onNextUserMessage
@@ -69,13 +77,15 @@ public struct ExpandedChatTitleContent: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !metadata.isEmpty {
+            if !shortcutsOnly && !metadata.isEmpty {
                 metadataBlock
             }
             if !shortcuts.isEmpty {
                 shortcutsBlock
             }
-            controlsRow
+            if !shortcutsOnly {
+                controlsRow
+            }
         }
         // The panel's width is pinned by its parent; fill it rather than
         // sizing to content, so metadata that rewrites itself during a tool

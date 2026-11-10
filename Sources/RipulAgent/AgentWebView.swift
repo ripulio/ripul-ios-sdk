@@ -244,18 +244,18 @@ public struct AgentWebView: NSViewRepresentable {
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
             if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return .cancel }
-            if standalone {
-                guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
-                      url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
-            }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", WebViewLogRedaction.url(url))
-                if !standalone, navigationAction.navigationType == .linkActivated,
+                if navigationAction.navigationType == .linkActivated,
                    AgentLinkRouting.leavesApp(url, from: replacedDocument(by: navigationAction, in: webView), baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external URL in browser: %@", url.absoluteString)
                     NSWorkspace.shared.open(url)
                     return .cancel
                 }
+            }
+            if standalone {
+                guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
+                      url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
             }
             return .allow
         }
@@ -268,13 +268,14 @@ public struct AgentWebView: NSViewRepresentable {
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
             if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return nil }
-            if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
                 if AgentLinkRouting.leavesApp(url, from: webView.url, baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external popup URL in browser: %@", url.absoluteString)
                     NSWorkspace.shared.open(url)
-                } else {
+                    return nil
+                }
+                if !standalone {
                     webView.load(navigationAction.request)
                 }
             }
@@ -434,15 +435,20 @@ public struct AgentWebView: View {
     public let configuration: AgentConfiguration
     public var bridge: AgentBridge
     var keyboardNavigationInset: CGFloat?
+    /// How far below its usual place the native composer rests (see
+    /// `ComposerRestingLayout`): the keyboard moves it, and the page, from there.
+    var keyboardRestingDrop: CGFloat = 0
 
     public init(configuration: AgentConfiguration, bridge: AgentBridge) {
         self.init(configuration: configuration, bridge: bridge, keyboardNavigationInset: nil)
     }
 
-    init(configuration: AgentConfiguration, bridge: AgentBridge, keyboardNavigationInset: CGFloat?) {
+    init(configuration: AgentConfiguration, bridge: AgentBridge, keyboardNavigationInset: CGFloat?,
+         keyboardRestingDrop: CGFloat = 0) {
         self.configuration = configuration
         self.bridge = bridge
         self.keyboardNavigationInset = keyboardNavigationInset
+        self.keyboardRestingDrop = keyboardRestingDrop
     }
 
     /// Where top chrome sits in this window, fed by `WindowTopChrome`.
@@ -453,8 +459,16 @@ public struct AgentWebView: View {
     @State private var topChrome = WindowTopChromeClearance()
 
     public var body: some View {
-        AgentWebViewRepresentable(configuration: configuration, bridge: bridge, keyboardNavigationInset: keyboardNavigationInset)
-            .background(WindowTopChrome { topChrome = $0 })
+        AgentWebViewRepresentable(configuration: configuration, bridge: bridge, keyboardNavigationInset: keyboardNavigationInset,
+                                  keyboardRestingDrop: keyboardRestingDrop)
+            .background(WindowTopChrome { clearance in
+                topChrome = clearance
+                // The page clears the same row (`--native-header-height`). The
+                // web view hears of a pose change from its own layout, but not
+                // of the camera's region moving with none (an island's Live
+                // Activity on the Duo): this reader does.
+                bridge.refreshNativeHeaderHeight()
+            })
             .overlay(alignment: .top) {
                 if !configuration.hostRendersMasthead, let config = bridge.mastheadConfig {
                     GlassMastheadView(config: config)
@@ -478,6 +492,7 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
     let configuration: AgentConfiguration
     let bridge: AgentBridge
     let keyboardNavigationInset: CGFloat?
+    let keyboardRestingDrop: CGFloat
 
     func makeCoordinator() -> AgentWebView.Coordinator {
         AgentWebView.Coordinator(bridge: bridge, baseHost: configuration.baseURL.host, standalone: configuration.standalone)
@@ -688,11 +703,12 @@ private struct AgentWebViewRepresentable: UIViewControllerRepresentable {
         webView.load(URLRequest(url: url))
 
         return KeyboardAttachedWebViewController(content: controller, bridge: bridge,
-                                                 navigationInset: keyboardNavigationInset)
+                                                 navigationInset: keyboardNavigationInset,
+                                                 restingDrop: keyboardRestingDrop)
     }
 
     func updateUIViewController(_ controller: KeyboardAttachedWebViewController, context: Context) {
-        controller.update(navigationInset: keyboardNavigationInset)
+        controller.update(navigationInset: keyboardNavigationInset, restingDrop: keyboardRestingDrop)
     }
 
     static func dismantleUIViewController(_ controller: KeyboardAttachedWebViewController, coordinator: AgentWebView.Coordinator) {
@@ -863,18 +879,18 @@ extension AgentWebView {
             decidePolicyFor navigationAction: WKNavigationAction
         ) async -> WKNavigationActionPolicy {
             if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return .cancel }
-            if standalone {
-                guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
-                      url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
-            }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Navigation: %@", WebViewLogRedaction.url(url))
-                if !standalone, navigationAction.navigationType == .linkActivated,
+                if navigationAction.navigationType == .linkActivated,
                    AgentLinkRouting.leavesApp(url, from: replacedDocument(by: navigationAction, in: webView), baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external URL in Safari: %@", url.absoluteString)
                     await UIApplication.shared.open(url)
                     return .cancel
                 }
+            }
+            if standalone {
+                guard let url = navigationAction.request.url, let local = BundledAgentRuntime.shared.baseURL,
+                      url.scheme == local.scheme, url.host == local.host, url.port == local.port else { return .cancel }
             }
             return .allow
         }
@@ -887,13 +903,14 @@ extension AgentWebView {
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
             if let url = navigationAction.request.url, RipulSecureConnection.open(url) { return nil }
-            if standalone { return nil }
             if let url = navigationAction.request.url {
                 NSLog("[AgentWebView] Popup request: %@", url.absoluteString)
                 if AgentLinkRouting.leavesApp(url, from: webView.url, baseHost: baseHost) {
                     NSLog("[AgentWebView] Opening external popup URL in Safari: %@", url.absoluteString)
                     UIApplication.shared.open(url)
-                } else {
+                    return nil
+                }
+                if !standalone {
                     webView.load(navigationAction.request)
                 }
             }
@@ -955,7 +972,7 @@ extension AgentWebView {
             let clearance = webView.window.map { WindowTopChromeLayout.clearance(for: $0) }
                 ?? WindowTopChromeClearance(top: 54, safeTop: 54)
             let insetTop = clearance.top
-            let totalHeight = hostRendersMasthead ? 0 : Int(clearance.contentClearance(below: 44))
+            let totalHeight = hostRendersMasthead ? 0 : Int(clearance.contentClearance(below: GlassTopBarLayout.outerBarHeight))
             let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
             webView.evaluateJavaScript(js) { _, error in
                 if let error {
@@ -1142,12 +1159,37 @@ extension AgentWebView {
 extension AgentWebView {
     /// Exposes the stable per-install identity to the web layer before any page
     /// JS runs. The web relay client uses it as its clientId suffix so an
-    /// install-over reconnects as the SAME relay client (see InstallationIdentity).
-    public static let installationIdentityScript = WKUserScript(
-        source: "window.__ripulInstallationId = \"\(InstallationIdentity.clientIdSegment)\";",
-        injectionTime: .atDocumentStart,
-        forMainFrameOnly: true
-    )
+    /// install-over reconnects as the SAME relay client (see InstallationIdentity),
+    /// and sends the device's fingerprint with it, so the relay can tell another
+    /// device that came with a copy of the id. Built afresh each time: a reset
+    /// gives the install a new id (`DeviceIdentityConflict`).
+    @MainActor public static var installationIdentityScript: WKUserScript {
+        WKUserScript(source: installationIdentitySource, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }
+
+    /// How the identity script begins, to find it among a web view's scripts.
+    static let installationIdentityPrefix = "window.__ripulInstallationId = "
+
+    @MainActor static var installationIdentitySource: String {
+        var source = "\(installationIdentityPrefix)\"\(InstallationIdentity.clientIdSegment)\";"
+        if let device = InstallationIdentity.deviceFingerprint {
+            source += " window.__ripulDeviceFingerprint = \"\(device)\";"
+        }
+        // The app's own name, which a device shared with someone else's chat is known by ("wac on iPhone").
+        if let app = hostAppName {
+            source += " window.__ripulHostAppName = \"\(app)\";"
+        }
+        return source
+    }
+
+    /// The host app's display name, kept to characters that need no escaping in a script.
+    static var hostAppName: String? {
+        let raw = (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? ""
+        let kept = String(raw.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || " .-_&+".unicodeScalars.contains($0) }
+            .map(Character.init)).trimmingCharacters(in: .whitespaces)
+        return kept.isEmpty ? nil : String(kept.prefix(60))
+    }
 
     /// Tells the page that this shell gives trackpad scrolls over a
     /// sideways-only scroller to the chat (`FullBleedWebView`), so the page

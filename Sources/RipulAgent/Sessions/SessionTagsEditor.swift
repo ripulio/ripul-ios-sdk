@@ -30,8 +30,8 @@ public struct SessionTagsEditor: View {
         self.session = session
         self.suggestions = suggestions
         self.onSave = onSave
-        self.hiddenTags = session.tags.filter { PlanTagConvention.isPlanTag($0) }
-        _tags = State(initialValue: PlanTagConvention.userTags(session.tags))
+        self.hiddenTags = session.tags.filter { SessionTagVisibility.isInternal($0) }
+        _tags = State(initialValue: SessionTagVisibility.userTags(session.tags))
     }
 
     private var atLimit: Bool { tags.count + hiddenTags.count >= maxTags }

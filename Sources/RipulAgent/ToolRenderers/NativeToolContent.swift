@@ -45,7 +45,7 @@ enum NativeToolNarrative {
 /// bridge supplies the web normalizer's canonical name; aliases here also cover
 /// CLI-native tools that intentionally keep their own names in the web stream.
 enum NativeToolRendererKind: String {
-    case terminal, read, write, edit, patch, grep, glob, logs, evaluate, todos, web, agent, agentComms, agentList, http, tools, host, image, secureConnection, fields
+    case terminal, read, write, edit, patch, grep, glob, logs, evaluate, todos, web, agent, agentComms, agentList, chatSearch, chatPresent, http, tools, host, image, secureConnection, fields
 
     static func resolve(_ toolName: String) -> Self {
         let name = toolName.replacingOccurrences(of: "^functions[._]+", with: "", options: .regularExpression)
@@ -66,6 +66,8 @@ enum NativeToolRendererKind: String {
         case "agent", "task", "runagent", "parallelagents": return .agent
         case "send_to_agent", "spawn_agent", "await_agent", "archive_agent": return .agentComms
         case "list_agents": return .agentList
+        case "search_chats": return .chatSearch
+        case "present_chats", "presentchats": return .chatPresent
         case "httprequest", "http_request": return .http
         case "iphone_inspect", "agentdiscovery", "device_list_targets": return .tools
         case "host_get_host_status": return .host
@@ -161,6 +163,14 @@ struct NativeToolSummary {
         case .agentList:
             heading = ["running": "Running agents", "all": "All agents"][first("status") ?? ""] ?? "Recent agents"
             detail = first("machine").map { "On \($0)" }
+            symbol = "bubble.left.and.bubble.right"
+        case .chatSearch:
+            heading = "Search chats"
+            detail = first("query", "path") ?? first("machine").map { "On \($0)" }
+            symbol = "bubble.left.and.bubble.right"
+        case .chatPresent:
+            heading = first("title") ?? "Present chats"
+            detail = nil
             symbol = "bubble.left.and.bubble.right"
         case .todos:
             let tasks = args["todos"]?.toolArray ?? args["plan"]?.toolArray ?? []

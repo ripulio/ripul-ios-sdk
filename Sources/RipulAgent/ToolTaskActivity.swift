@@ -96,7 +96,9 @@ struct ToolTaskStatus: View {
     var body: some View {
         HStack(spacing: 6) {
             if Self.isBusy(status) && !reduceMotion && !PerfSwitch.isOff("toolSpinner") {
-                ProgressView().controlSize(.mini).tint(color).frame(width: 12, height: 12)
+                // Paced, and still off the screen: a `ProgressView` turned at the
+                // display's rate in every mounted row (RenderServerAnimations).
+                RenderServerSpinner(color: color, size: 12)
             } else {
                 Image(systemName: symbol).font(.ripulIcon(size: 12)).frame(width: 12, height: 12)
             }

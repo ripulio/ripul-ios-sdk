@@ -52,6 +52,9 @@ public struct RipulSessionsConfiguration {
     /// Whether host-defined quick actions are discovered/executed on machine
     /// rows (the first-party app: on; a dev console: off).
     public var quickActionsEnabled: Bool
+    /// Embedded consoles keep machine controls here; apps with a dedicated
+    /// machine page turn this off so Agents contains only conversations.
+    public var showsMachinesPanel: Bool
     /// THE HOST'S TOOL REGISTRY — every native tool, registered once, tagged
     /// by audience (native-tool-registry phase 1).
     ///
@@ -107,6 +110,7 @@ public struct RipulSessionsConfiguration {
         theme: AgentTheme = .system,
         allowRipulAgents: Bool = false,
         quickActionsEnabled: Bool = false,
+        showsMachinesPanel: Bool = true,
         registry: RipulToolRegistry = RipulToolRegistry(),
         invitesSection: ((InvitesSectionActions) -> AnyView)? = nil,
         inviteManager: RipulInviteManager? = nil,
@@ -121,6 +125,7 @@ public struct RipulSessionsConfiguration {
         self.theme = theme
         self.allowRipulAgents = allowRipulAgents
         self.quickActionsEnabled = quickActionsEnabled
+        self.showsMachinesPanel = showsMachinesPanel
         self.registry = registry
         self.invitesSection = invitesSection
         self.inviteManager = inviteManager

@@ -1,4 +1,5 @@
 # Xcode
+.host-preview-harness/
 build/
 DerivedData/
 *.xcuserdata

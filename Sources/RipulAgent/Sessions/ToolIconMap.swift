@@ -33,8 +33,6 @@ enum ToolIconMap {
         // Plans / todos
         "TodoWrite": "checklist",
         "TodoRead": "checklist",
-        "ExitPlanMode": "list.bullet.clipboard",
-        "EnterPlanMode": "list.bullet.clipboard",
 
         // Agents / skills / MCP
         "Agent": "sparkles",
@@ -213,6 +211,10 @@ enum ToolIconMap {
         "resume_from_commit": "clock.arrow.circlepath",
         "consult_agent": "bubble.left.and.bubble.right",
         "list_agents": "bubble.left.and.bubble.right",
+        "search_chats": "bubble.left.and.bubble.right",
+        "present_chats": "bubble.left.and.bubble.right",
+        "presentChats": "bubble.left.and.bubble.right",
+        "read_chat": "bubble.left.and.bubble.right",
         "send_to_agent": "bubble.left.and.bubble.right",
         "spawn_agent": "bubble.left.and.bubble.right",
         "await_agent": "bubble.left.and.bubble.right",

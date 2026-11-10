@@ -4,10 +4,12 @@ import SwiftUI
 import WebKit
 
 /// The Claude sign-in browser on its own, with no Mac waiting: launch with
-/// `-ripul.claudeSignInLab render|callback|mismatch`.
+/// `-ripul.claudeSignInLab render|signout|callback|mismatch`.
 ///
 /// It opens the sheet's browser on a real claude.ai authorize address, of the
 /// shape `claude auth login` makes. `render` stops there, to see the page draw.
+/// `signout` then presses the page's Sign Out and waits for Claude's page to
+/// draw again, as it does when someone leaves the account the browser held.
 /// `callback` and `mismatch` then have the page itself navigate to Anthropic's
 /// code page, with this sign-in's `state` and with another one, and log what
 /// the browser made of it. The outcome goes to this lab, never to a machine, and
@@ -86,13 +88,38 @@ public struct ClaudeSignInBrowserLab: View {
             }
         }
         page = ClaudeSignInPage(url: authUrl)
+        guard let top = await drawnPage() else { return }
+        if mode == "signout" {
+            NSLog("[ClaudeSignInLab] pressing Sign Out")
+            await model.signOut()
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let again = await drawnPage() else { return }
+            guard again !== top else { return report("Sign Out left the old page in place") }
+            result = "Signed out; drawn again: \(again.url?.host ?? "")\(again.url?.path ?? "")"
+            return
+        }
+        guard mode == "callback" || mode == "mismatch" else { return }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        let sentState = mode == "callback" ? state : "ANOTHER-SIGN-IN"
+        var callback = URLComponents(url: ClaudeSignInBrowser.defaultCallback, resolvingAgainstBaseURL: false)!
+        callback.queryItems = [.init(name: "code", value: "LABCODE"), .init(name: "state", value: sentState)]
+        NSLog("[ClaudeSignInLab] page navigates to the callback with %@ state", mode == "callback" ? "this sign-in's" : "another sign-in's")
+        _ = try? await top.evaluateJavaScript("location.href = \(Self.jsString(callback.url!.absoluteString))")
+    }
+
+    /// The page on top once claude.ai has loaded and drawn in it, with what it
+    /// drew logged; nil, reported, when it does not within 90 seconds.
+    private func drawnPage() async -> WKWebView? {
         // The page has drawn once claude.ai's own document has finished loading.
         let deadline = Date().addingTimeInterval(60)
         while Date() < deadline {
             if let top = model.pages.first, !top.isLoading, top.url?.host?.hasSuffix("claude.ai") == true { break }
             try? await Task.sleep(nanoseconds: 300_000_000)
         }
-        guard let top = model.pages.first, !top.isLoading else { return report("the page did not finish loading in 60 s") }
+        guard let top = model.pages.first, !top.isLoading else {
+            report("the page did not finish loading in 60 s")
+            return nil
+        }
         // claude.ai is an app: its document finishes before it draws anything.
         var text = ""
         let drawBy = Date().addingTimeInterval(30)
@@ -104,13 +131,7 @@ public struct ClaudeSignInBrowserLab: View {
         let title = (try? await top.evaluateJavaScript("document.title")) as? String ?? ""
         NSLog("[ClaudeSignInLab] rendered %@%@ title=\"%@\" text=\"%@\"", top.url?.host ?? "", top.url?.path ?? "", title, text)
         result = "Rendered: \(top.url?.host ?? "")\(top.url?.path ?? "") — \(title)"
-        guard mode == "callback" || mode == "mismatch" else { return }
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        let sentState = mode == "callback" ? state : "ANOTHER-SIGN-IN"
-        var callback = URLComponents(url: ClaudeSignInBrowser.defaultCallback, resolvingAgainstBaseURL: false)!
-        callback.queryItems = [.init(name: "code", value: "LABCODE"), .init(name: "state", value: sentState)]
-        NSLog("[ClaudeSignInLab] page navigates to the callback with %@ state", mode == "callback" ? "this sign-in's" : "another sign-in's")
-        _ = try? await top.evaluateJavaScript("location.href = \(Self.jsString(callback.url!.absoluteString))")
+        return top
     }
 
     private func report(_ line: String) {

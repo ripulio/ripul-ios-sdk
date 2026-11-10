@@ -37,9 +37,26 @@ public struct UIViewCapture: UIViewRepresentable {
 
 public struct SlideEffect: GeometryEffect {
     public var offset: CGFloat
+    /// The offset the view rests at; the rest of `offset` is a slide carrying
+    /// it. Zero except where a view rests away from its origin (a split's
+    /// chat, beside the list).
+    var rest: CGFloat = 0
+    /// Told, as each frame is drawn, how far from `rest` that frame puts the
+    /// view (see `SlideDisplacement`).
+    var displacement: SlideDisplacement?
+    /// The display's pixels per point, to move by whole pixels; 0 moves by
+    /// whatever the frame gives.
+    var scale: CGFloat = 0
 
     public init(offset: CGFloat) {
         self.offset = offset
+    }
+
+    init(offset: CGFloat, rest: CGFloat, displacement: SlideDisplacement, scale: CGFloat = 0) {
+        self.offset = offset
+        self.rest = rest
+        self.displacement = displacement
+        self.scale = scale
     }
 
     public var animatableData: CGFloat {
@@ -48,7 +65,159 @@ public struct SlideEffect: GeometryEffect {
     }
 
     public func effectValue(size: CGSize) -> ProjectionTransform {
-        ProjectionTransform(CGAffineTransform(translationX: offset, y: 0))
+        // Every frame of a drag or a spring comes through here, with the
+        // offset that frame draws. By whole pixels: between two, the carried
+        // views' edges fall on the pixel grid separately and a page measured
+        // a pixel wider or narrower mid-slide (the Agents list, 382 to
+        // 382.33 pt, laid out again under the finger, 5 November 2026).
+        let drawn = scale > 0 ? (offset * scale).rounded() / scale : offset
+        let x = drawn - rest
+        if let displacement, displacement.x != x { SlideResizeWatch.moved(x) }
+        displacement?.x = x
+        return ProjectionTransform(CGAffineTransform(translationX: drawn, y: 0))
+    }
+}
+
+/// How far a slide draws the views it carries from where they rest, as of the
+/// frame last drawn. SwiftUI carries out a slide by moving the frames of the
+/// UIKit views it carries, not by transforming them (measured on the Duo
+/// simulator, 1 November 2026: no transform anywhere up the chain), so a view
+/// inside that asks UIKit where it is in its window (`RailGutters`, the
+/// composer's resting place) is told where the finger has it. Deciding a
+/// layout by that changed the layout under the finger: on an iPhone Duo the
+/// chat's back swipe carries it toward the tab rail, and the moment it moved
+/// the messages and composer lost 12pt of width and the composer rose 26pt,
+/// then all of it sprang back when the swipe was given up (Peter). Such a view
+/// takes `x` off what UIKit reports. Plain storage, not observable: writing it
+/// as each frame is drawn re-renders nothing. Public for a host's own slide
+/// of a screen holding the chat (Home's way back, in the Ripul app), which
+/// carries the chat's own slide: the views inside take off both (`total`).
+public final class SlideDisplacement {
+    public var x: CGFloat = 0
+    /// The slide carrying this one, if any.
+    weak var outer: SlideDisplacement?
+    /// How far every slide carrying the view has it from where it rests.
+    var total: CGFloat { x + (outer?.total ?? 0) }
+    public init() {}
+}
+
+private struct RipulSlideDisplacementKey: EnvironmentKey {
+    static let defaultValue: SlideDisplacement? = nil
+}
+
+extension EnvironmentValues {
+    /// The slide carrying this view, if any (see `SlideDisplacement`).
+    var ripulSlideDisplacement: SlideDisplacement? {
+        get { self[RipulSlideDisplacementKey.self] }
+        set { self[RipulSlideDisplacementKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Slides this view sideways by `offset`, as `SlideEffect` does, and tells
+    /// the views it carries how far that is from `rest` (`SlideDisplacement`),
+    /// so a view that places itself by where it is in the window keeps its
+    /// layout while it is carried.
+    public func slide(by offset: CGFloat, rest: CGFloat = 0, displacement: SlideDisplacement) -> some View {
+        modifier(CarriedSlide(offset: offset, rest: rest, displacement: displacement))
+    }
+}
+
+/// Accepts the proposed size during sizing while passing the full container
+/// bounds (including any safe area `.ignoresSafeArea` expanded into) to its
+/// child during placement, so adding `.safeAreaInset` inside `CarriedSlide`
+/// never widens a fixed-width caller such as `SessionChatColumns`.
+private struct CarriedSlideLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let size = subview.sizeThatFits(proposal)
+        return CGSize(width: proposal.width ?? size.width, height: proposal.height ?? size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let subview = subviews.first else { return }
+        subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// A slide that knows the slide carrying it, so the views inside take off
+/// both (`SlideDisplacement.total`), and pins the resting horizontal safe area
+/// across the slide so neither SwiftUI nor UIKit reflows the moving page as it
+/// crosses a side safe-area strip (such as the closed iPhone Duo's tab rail).
+private struct CarriedSlide: ViewModifier {
+    let offset: CGFloat
+    let rest: CGFloat
+    let displacement: SlideDisplacement
+    @Environment(\.ripulSlideDisplacement) private var outer
+    @Environment(\.displayScale) private var displayScale
+    @State private var leadingSafe: CGFloat = 0
+    @State private var trailingSafe: CGFloat = 0
+    /// A reading has been taken with nothing carrying the view: from then on
+    /// readings wait for rest (`take`).
+    @State private var settled = false
+    /// A reading that came while the view was carried, for when it rests.
+    @State private var pending: EdgeInsets?
+
+    func body(content: Content) -> some View {
+        // Plain storage, as `x` is: linking it re-renders nothing.
+        if displacement.outer !== outer, outer !== displacement { displacement.outer = outer }
+        let hasHorizontalSafeArea = rest == 0 && (leadingSafe > 0 || trailingSafe > 0)
+        return CarriedSlideLayout {
+            ZStack(alignment: .topLeading) {
+                if hasHorizontalSafeArea {
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                content
+            }
+            .safeAreaInset(edge: .leading, spacing: 0) {
+                Color.clear.frame(width: rest == 0 ? leadingSafe : 0).allowsHitTesting(false).accessibilityHidden(true)
+            }
+            .safeAreaInset(edge: .trailing, spacing: 0) {
+                Color.clear.frame(width: rest == 0 ? trailingSafe : 0).allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+        .environment(\.ripulSlideDisplacement, displacement)
+        .modifier(SlideEffect(offset: offset, rest: rest, displacement: displacement, scale: displayScale))
+        .ignoresSafeArea(.container, edges: hasHorizontalSafeArea ? .horizontal : [])
+        .background {
+            Color.clear
+                .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: { take($0) }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .onChange(of: abs(offset - rest) < 0.5) { _, atRest in
+            guard atRest, let waiting = pending else { return }
+            pending = nil
+            take(waiting, atRest: true)
+        }
+    }
+
+    /// The side insets where the view rests. In whole points: under a moving
+    /// slide the reading wandered by a sixth of a point either way (84.17,
+    /// 83.83), and each one laid the whole page out again under the finger
+    /// (the Agents list, a 210 ms stall on the Duo simulator, 5 November
+    /// 2026). Once read at rest, held while anything carries the view.
+    private func take(_ insets: EdgeInsets, atRest: Bool = false) {
+        let leading = insets.leading.rounded(), trailing = insets.trailing.rounded()
+        // At rest by this slide's own offset: its last frame may not have told the displacement yet.
+        let carried = !atRest && abs(displacement.total) >= 0.5
+        if carried && settled {
+            let waiting: EdgeInsets? = leading != leadingSafe || trailing != trailingSafe ? insets : nil
+            if pending != waiting { pending = waiting }
+            return
+        }
+        if !carried && !settled { settled = true }
+        guard leadingSafe != leading || trailingSafe != trailing else { return }
+        SlideResizeWatch.log("CarriedSlide rest \(rest) sides \(leadingSafe),\(trailingSafe) -> \(leading),\(trailing)")
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            leadingSafe = leading
+            trailingSafe = trailing
+        }
     }
 }
 
@@ -82,6 +251,7 @@ public struct SlidePanelOverlay<Content: View>: View {
     /// Keeps the view mounted during dismiss animation.
     @State private var keepMounted = false
     @State private var previousLayoutWidth: CGFloat?
+    @State private var slideDisplacement = SlideDisplacement()
 
     @State private var measuredWidth: CGFloat = 1
     private var screenWidth: CGFloat { max(1, containerWidth ?? measuredWidth) }
@@ -95,7 +265,7 @@ public struct SlidePanelOverlay<Content: View>: View {
         isPresented: Binding<Bool>,
         offset: Binding<CGFloat>,
         showsScrim: Bool = true,
-        topInset: CGFloat = 52,
+        topInset: CGFloat = GlassTopBarLayout.contentReservation,
         containerWidth: CGFloat? = nil,
         edgeSwipeEnabled: Bool = true,
         @ViewBuilder content: @escaping () -> Content
@@ -163,7 +333,7 @@ public struct SlidePanelOverlay<Content: View>: View {
                     .safeAreaInset(edge: .top) { Color.clear.frame(height: topInset) }
                     .background(Color.ripul(.canvas))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .modifier(SlideEffect(offset: offset))
+                    .slide(by: offset, displacement: slideDisplacement)
                     .overlay(alignment: .leading) {
                         if edgeSwipeEnabled {
                             InteractiveEdgeSwipeView(

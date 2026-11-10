@@ -7,7 +7,7 @@ extension AgentBridge {
     /// Run an async JS callable in the page world and hand back its raw result.
     ///
     /// `webView` is private to this file, so features living in their own files
-    /// (PlanReview, …) reach the page through here rather than widening the
+    /// reach the page through here rather than widening the
     /// property's access. Returns nil when the web view is not attached yet —
     /// callers surface that as "still starting up" rather than treating it as
     /// a failure of whatever they were asking for.

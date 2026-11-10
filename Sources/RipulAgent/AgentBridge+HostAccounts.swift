@@ -61,6 +61,7 @@ extension AgentBridge {
         return HostAuthBeginInfo(
             sessionId: dict["sessionId"] as? String,
             authUrl: dict["authUrl"] as? String,
+            returnUrl: dict["returnUrl"] as? String,
             error: dict["error"] as? String
         )
     }
@@ -143,6 +144,20 @@ extension AgentBridge {
             deferredBusySessions: dict["deferredBusySessions"] as? [String] ?? [],
             error: dict["error"] as? String
         )
+    }
+
+    /// Give a profile on the host a new display name. Only the label changes:
+    /// the sign-in stays with the profile's directory. `needsUpdate`: that
+    /// Mac's Ripul predates renaming.
+    public func renameClaudeAccount(machineId: String, slug: String, name: String) async -> (ok: Bool, name: String?, needsUpdate: Bool, error: String?) {
+        let reply = await hostAccountCall("__ripulRemoteClaudeAccountRename", [machineId, slug, name],
+                                          machineId: machineId, missing: "{ ok: false, needsUpdate: true, error: 'not ready' }")
+        if let reason = reply.failure() { return (false, nil, false, reason) }
+        guard let dict = reply.dictionary else { return (false, nil, false, "Unexpected result") }
+        if dict["ok"] as? Bool == true, dict["pushesAccountChanges"] as? Bool != true {
+            NotificationCenter.default.post(name: .ripulHostAccountsChanged, object: self, userInfo: ["machineId": machineId]) // theme-mapping: a notification name, not a font or colour
+        }
+        return (dict["ok"] as? Bool ?? false, dict["name"] as? String, dict["needsUpdate"] as? Bool ?? false, dict["error"] as? String)
     }
 
     /// Remove an account profile from the host (dir + manifest + best-effort Keychain entry). Deleting the ACTIVE profile switches the machine back to default first.

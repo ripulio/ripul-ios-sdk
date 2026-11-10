@@ -39,6 +39,14 @@ import UIKit
 // Move and resize both stay in UIKit and drive `transform` / constraints
 // directly, bypassing SwiftUI's state-and-render round-trip for 1:1 60fps
 // tracking under the finger.
+//
+// A pinch (`pinchesToResize`, for a panel that is only a picture) resizes about
+// the point between the fingers, so unlike the grip it moves the panel too. It
+// keeps out of both loops by working from the panel as the pinch found it: the
+// size is the size it started at times the pinch's scale, and the place is
+// worked out from that point and the size the panel has just been laid out at,
+// in that same layout pass (`viewDidLayoutSubviews`), never from where the
+// previous frame left it.
 
 /// A floating, draggable, resizable panel hosting SwiftUI content.
 ///
@@ -64,22 +72,38 @@ public struct RipulFloatingPanel<Content: View>: View {
     private let gripTint: UIColor
     private let store: UserDefaults
     private let aspectRatio: CGFloat?
+    private let toolbarHeight: CGFloat
     private let contentInsets: UIEdgeInsets
     private let avoidsKeyboard: Bool
+    private let movesToWindowEdges: Bool
     private let movesFromTopStrip: CGFloat?
     private let keepsTrailingEdge: Bool
+    private let pinchesToResize: Bool
     private let content: (CGSize) -> Content
+    /// Dragged into the window's right edge, the panel docks there (`PreviewDockState`).
+    private var docking: FloatingPanelDocking?
+    /// Told when one of the panel's own gestures takes it and when it has let go.
+    private var onGesture: ((Bool) -> Void)?
 
     /// Live size during a resize drag. nil until the persisted value is read.
     @State private var liveSize: CGSize?
 
-    /// `aspectRatio` locks width/height during resizing. `contentInsets` reserves
-    /// room for surrounding chrome; `avoidsKeyboard` keeps the panel above it.
+    /// `aspectRatio` locks width/height during resizing; `toolbarHeight` is a bar
+    /// of fixed height the content draws above the locked area, which the ratio
+    /// leaves out. `contentInsets` reserves room for surrounding chrome;
+    /// `avoidsKeyboard` keeps the panel above it.
+    /// `movesToWindowEdges` lets the panel be moved over the chrome
+    /// `contentInsets` keeps clear and down over the home indicator, short of
+    /// only the status bar and the camera's housing. Its size is still held to
+    /// the room between the chrome.
     /// `movesFromTopStrip` is for content that takes touches itself (a live
     /// screen): the panel is then moved only from that many points at its top.
     /// `keepsTrailingEdge` holds the panel's right edge still when its content
     /// changes width by itself, so a panel minimised from a button at its
     /// top-right shrinks into that button, and grows back out of it.
+    /// `pinchesToResize` lets two fingers on the panel resize it about the
+    /// point between them, for a panel that is only a picture: leave it off
+    /// while the content takes touches itself.
     public init(storageKey: String,
                 defaultSize: CGSize,
                 minSize: CGSize = CGSize(width: 220, height: 180),
@@ -87,10 +111,13 @@ public struct RipulFloatingPanel<Content: View>: View {
                 gripTint: UIColor = UIColor.ripul(system: .white).withAlphaComponent(0.55),
                 store: UserDefaults = .standard,
                 aspectRatio: CGFloat? = nil,
+                toolbarHeight: CGFloat = 0,
                 contentInsets: UIEdgeInsets = .zero,
                 avoidsKeyboard: Bool = false,
+                movesToWindowEdges: Bool = false,
                 movesFromTopStrip: CGFloat? = nil,
                 keepsTrailingEdge: Bool = false,
+                pinchesToResize: Bool = false,
                 @ViewBuilder content: @escaping (CGSize) -> Content) {
         self.storageKey = storageKey
         self.defaultSize = defaultSize
@@ -99,10 +126,13 @@ public struct RipulFloatingPanel<Content: View>: View {
         self.gripTint = gripTint
         self.store = store
         self.aspectRatio = aspectRatio
+        self.toolbarHeight = toolbarHeight
         self.contentInsets = contentInsets
         self.avoidsKeyboard = avoidsKeyboard
+        self.movesToWindowEdges = movesToWindowEdges
         self.movesFromTopStrip = movesFromTopStrip
         self.keepsTrailingEdge = keepsTrailingEdge
+        self.pinchesToResize = pinchesToResize
         self.content = content
     }
 
@@ -110,7 +140,7 @@ public struct RipulFloatingPanel<Content: View>: View {
         let storedSize = liveSize ?? persistedSize
         let size = aspectRatio.flatMap { ratio -> CGSize? in
             guard ratio.isFinite, ratio > 0 else { return nil }
-            return CGSize(width: storedSize.width, height: storedSize.width / ratio)
+            return CGSize(width: storedSize.width, height: storedSize.width / ratio + toolbarHeight)
         } ?? storedSize
         FloatingPanelHost(
             content: content(size),
@@ -122,13 +152,35 @@ public struct RipulFloatingPanel<Content: View>: View {
             posYKey: "\(storageKey).posY",
             store: store,
             aspectRatio: aspectRatio,
+            toolbarHeight: toolbarHeight,
             contentInsets: contentInsets,
             avoidsKeyboard: avoidsKeyboard,
+            movesToWindowEdges: movesToWindowEdges,
             movesFromTopStrip: movesFromTopStrip,
             keepsTrailingEdge: keepsTrailingEdge,
+            pinchesToResize: pinchesToResize,
+            onGesture: onGesture,
+            docking: docking,
             onResize: { liveSize = $0 },
             onResizeEnded: { persist($0) }
         )
+    }
+
+    /// The panel offers to dock as it is dragged into the window's right edge.
+    func docking(_ docking: FloatingPanelDocking?) -> Self {
+        var panel = self
+        panel.docking = docking
+        return panel
+    }
+
+    /// Told true when one of the panel's own gestures (a move, a resize from
+    /// the grip, a pinch) takes it, and false a moment after the last lets go:
+    /// the content's buttons ignore a press meanwhile, since a finger that
+    /// began on one lifts as a press of it.
+    func onGesture(_ changed: @escaping (Bool) -> Void) -> Self {
+        var panel = self
+        panel.onGesture = changed
+        return panel
     }
 
     private var persistedSize: CGSize {
@@ -158,6 +210,11 @@ public struct RipulFloatingPanel<Content: View>: View {
 /// button fades in, and only then does the panel take the button's size;
 /// expanding, the panel takes its full size first, under the button, and the
 /// picture grows out of the corner.
+///
+/// A `button` of 0 is for a host that keeps the minimised button in its own
+/// chrome (the iPhone Duo's side strip): the picture goes into its corner as
+/// before, and the panel then takes no room, so nothing floats and nothing
+/// takes a touch where it was.
 @available(iOS 17.0, *)
 struct FloatingPanelCollapse<Panel: View, Minimised: View>: View {
     let collapsed: Bool
@@ -189,8 +246,9 @@ struct FloatingPanelCollapse<Panel: View, Minimised: View>: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             if !held {
+                // Never quite 0, which is a singular transform.
                 panel()
-                    .scaleEffect(drawn ? button / max(expanded.width, button) : 1, anchor: .topTrailing)
+                    .scaleEffect(drawn ? max(button, 1) / max(expanded.width, button, 1) : 1, anchor: .topTrailing)
                     .opacity(drawn ? 0 : 1)
                     .allowsHitTesting(!drawn)
                     .accessibilityHidden(drawn)
@@ -236,10 +294,15 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
     let posYKey: String
     let store: UserDefaults
     let aspectRatio: CGFloat?
+    let toolbarHeight: CGFloat
     let contentInsets: UIEdgeInsets
     let avoidsKeyboard: Bool
+    let movesToWindowEdges: Bool
     let movesFromTopStrip: CGFloat?
     let keepsTrailingEdge: Bool
+    let pinchesToResize: Bool
+    let onGesture: ((Bool) -> Void)?
+    let docking: FloatingPanelDocking?
     let onResize: (CGSize) -> Void
     let onResizeEnded: (CGSize) -> Void
 
@@ -254,6 +317,7 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
             posYKey: posYKey,
             store: store,
             aspectRatio: aspectRatio,
+            toolbarHeight: toolbarHeight,
             contentInsets: contentInsets,
             avoidsKeyboard: avoidsKeyboard,
             onResize: onResize,
@@ -262,12 +326,17 @@ private struct FloatingPanelHost<Content: View>: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: RipulFloatingPanelController<Content>, context: Context) {
+        vc.movesToWindowEdges = movesToWindowEdges
         vc.movesFromTopStrip = movesFromTopStrip
         vc.keepsTrailingEdge = keepsTrailingEdge
+        vc.pinchesToResize = pinchesToResize
+        vc.onGesture = onGesture
+        vc.docking = docking
         vc.update(content: content,
                   size: size,
                   showsResizeGrip: showsResizeGrip,
                   aspectRatio: aspectRatio,
+                  toolbarHeight: toolbarHeight,
                   onResize: onResize,
                   onResizeEnded: onResizeEnded)
     }
@@ -322,10 +391,31 @@ private final class FloatingPanelGripView: UIView {
 /// Pan that fails outright when a touch ends without ever panning, so taps still
 /// reach the SwiftUI buttons inside the panel. (UIPanGestureRecognizer supplies the
 /// movement slop itself; this only adds the fail-on-tap.)
-private final class ThresholdPanGesture: UIPanGestureRecognizer {
+final class ThresholdPanGesture: UIPanGestureRecognizer {
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         if state == .possible { state = .failed }
         super.touchesEnded(touches, with: event)
+    }
+}
+
+/// The same for a pinch: a finger lifted before any pinch is a tap, and goes
+/// to the button under it at once.
+private final class ThresholdPinchGesture: UIPinchGestureRecognizer {
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        if state == .possible { state = .failed }
+        super.touchesEnded(touches, with: event)
+    }
+}
+
+/// Where a pinched panel goes.
+enum FloatingPanelPinch {
+    /// The top-left for `size` that keeps the point between the fingers
+    /// (`anchor`) where it was on the panel as the pinch found it (`start`),
+    /// before the panel is held inside the safe area.
+    static func origin(start: CGRect, anchor: CGPoint, size: CGSize) -> CGPoint {
+        let fx = start.width > 0 ? min(max((anchor.x - start.minX) / start.width, 0), 1) : 0.5
+        let fy = start.height > 0 ? min(max((anchor.y - start.minY) / start.height, 0), 1) : 0.5
+        return CGPoint(x: anchor.x - fx * size.width, y: anchor.y - fy * size.height)
     }
 }
 
@@ -349,6 +439,8 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     private let store: UserDefaults
     private let minSize: CGSize
     private var aspectRatio: CGFloat?
+    /// A bar of this height above the area `aspectRatio` locks.
+    private var toolbarHeight: CGFloat
     private let contentInsets: UIEdgeInsets
     private let avoidsKeyboard: Bool
     private var keyboardFrame: CGRect = .zero
@@ -368,12 +460,49 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     private var hasRestoredPosition = false
     private var isDragging = false
     private var isResizing = false
+    /// The panel may be moved over the host's bars and the home indicator,
+    /// rather than kept inside the safe area and `contentInsets`
+    /// (`movementRegion`). Turning it off brings the panel back inside at the
+    /// next layout.
+    var movesToWindowEdges = false {
+        didSet { if movesToWindowEdges != oldValue { viewIfLoaded?.setNeedsLayout() } }
+    }
     /// Content that takes touches leaves the panel to be moved from its top strip only.
     var movesFromTopStrip: CGFloat?
     /// The right edge stays put when the content changes width by itself.
     var keepsTrailingEdge = false
     /// The panel's width at the last layout, to see the content change it.
     private var laidOutWidth: CGFloat = 0
+    /// Docking into the window's right edge, where the panel can.
+    var docking: FloatingPanelDocking?
+    /// The drag is in the dock's edge: letting go docks.
+    private var overDock = false
+    private lazy var dockFeedback = UIImpactFeedbackGenerator(style: .medium)
+    /// Two fingers resize the panel about the point between them. Turning it
+    /// off mid-pinch ends the pinch where it is. (SwiftUI sets it on every
+    /// update, a pinch's own included.)
+    var pinchesToResize = false {
+        didSet { if pinchesToResize != oldValue { pinch?.isEnabled = pinchesToResize } }
+    }
+    private var move: UIPanGestureRecognizer?
+    private var resize: UIPanGestureRecognizer?
+    private var pinch: UIPinchGestureRecognizer?
+    /// The panel's frame as the pinch found it, and the point between the
+    /// fingers, both in `view`. Set while a pinch has the panel.
+    private var pinchStart: (frame: CGRect, anchor: CGPoint)?
+    /// The size the pinch last asked for.
+    private var pinchedSize: CGSize?
+    /// Told when one of the panel's own gestures takes it (true), and a moment
+    /// after the last lets go (false), for the content's buttons: SwiftUI draws
+    /// a `Button` inside the hosting view, out of reach of a recognizer's
+    /// cancelling of touches, and Close, under a finger a pinch began with,
+    /// closed the panel as the fingers lifted (UI test, 2 November 2026).
+    var onGesture: ((Bool) -> Void)?
+    private var holdsButtons = false
+    private var gesturesEnded = 0
+    static var buttonsHeldAfterGesture: TimeInterval { 0.3 }
+    /// A move, a resize from the grip or a pinch has the panel.
+    private var hasGesture: Bool { isDragging || isResizing || pinchStart != nil }
 
     init(content: Content,
          size: CGSize,
@@ -384,6 +513,7 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
          posYKey: String,
          store: UserDefaults,
          aspectRatio: CGFloat? = nil,
+         toolbarHeight: CGFloat = 0,
          contentInsets: UIEdgeInsets = .zero,
          avoidsKeyboard: Bool = false,
          onResize: @escaping (CGSize) -> Void,
@@ -394,6 +524,7 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         self.posYKey = posYKey
         self.store = store
         self.aspectRatio = aspectRatio
+        self.toolbarHeight = toolbarHeight
         self.contentInsets = contentInsets
         self.avoidsKeyboard = avoidsKeyboard
         self.onResize = onResize
@@ -428,6 +559,13 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         panelView.addSubview(hosting.view)
         hosting.didMove(toParent: self)
         hosting.sizingOptions = .intrinsicContentSize
+        // The content is the panel wherever the panel is. Over an inset (the
+        // home indicator, with `movesToWindowEdges`), SwiftUI made it taller by
+        // the inset, and so it did for every panel's first layout, made at the
+        // window's top-left, under the status bar, before the panel is placed:
+        // a panel left at the foot of its room came back higher by that inset
+        // (unit test, 3 November 2026).
+        hosting.safeAreaRegions = []
 
         grip.translatesAutoresizingMaskIntoConstraints = false
         panelView.addSubview(grip)
@@ -452,10 +590,19 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         move.maximumNumberOfTouches = 1
         move.delegate = self
         panelView.addGestureRecognizer(move)
+        self.move = move
 
         let resize = UIPanGestureRecognizer(target: self, action: #selector(handleResize(_:)))
         resize.maximumNumberOfTouches = 1
+        resize.delegate = self
         grip.addGestureRecognizer(resize)
+        self.resize = resize
+
+        let pinch = ThresholdPinchGesture(target: self, action: #selector(handlePinch(_:)))
+        pinch.delegate = self
+        pinch.isEnabled = pinchesToResize
+        panelView.addGestureRecognizer(pinch)
+        self.pinch = pinch
 
         (view as? RipulFloatingPanelRootView)?.panelView = panelView
         if avoidsKeyboard {
@@ -479,6 +626,11 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         // taken for the content changing width.
         let widthBefore = laidOutWidth
         laidOutWidth = width
+        // A pinch places the panel for the size this pass has just given it.
+        if let pinchStart {
+            placeForPinch(pinchStart)
+            return
+        }
         // Never re-position under an active gesture: during a resize this is
         // feedback loop #2, and during a move the pan already owns the transform.
         guard !isDragging, !isResizing else { return }
@@ -487,8 +639,11 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         if !hasRestoredPosition {
             guard view.window != nil else { return }
             hasRestoredPosition = true
-            proposed = CGPoint(x: store.double(forKey: posXKey),
-                               y: store.double(forKey: posYKey))
+            // A panel never placed starts at the top-left of the room it is
+            // sized in, clear of the host's bars, even one that may go over them.
+            let start = availableRegion.origin
+            proposed = CGPoint(x: store.object(forKey: posXKey) == nil ? start.x : store.double(forKey: posXKey),
+                               y: store.object(forKey: posYKey) == nil ? start.y : store.double(forKey: posYKey))
         } else {
             // Rotation / content-size change (e.g. unfolding near an edge):
             // re-clamp so the panel can never be stranded in a safe area.
@@ -510,9 +665,10 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     /// Clamp a proposed top-left translation so the panel stays fully within the safe
     /// area — never under the notch, status bar, home indicator, or landscape sensor
     /// housing. We read the window's insets because SwiftUI can zero out a child
-    /// controller's own insets under `.ignoresSafeArea()`.
+    /// controller's own insets under `.ignoresSafeArea()`. With `movesToWindowEdges`,
+    /// within `movementRegion` instead: over the host's bars and the home indicator.
     private func clampedTranslation(_ proposed: CGPoint) -> CGPoint {
-        let region = availableRegion
+        let region = movementRegion
         let panel = panelView.bounds.size
         let minX = region.minX
         let minY = region.minY
@@ -529,22 +685,61 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         switch gesture.state {
         case .began:
             isDragging = true
+            gestureBegan()
             dragStartTransform = panelView.transform
+            if docking != nil { dockFeedback.prepare() }
         case .changed:
             // Clamp live so the panel hard-stops at the safe-area edge rather than
             // being draggable under the notch and snapped back on release.
             let t = gesture.translation(in: view)
-            let clamped = clampedTranslation(CGPoint(x: dragStartTransform.tx + t.x,
-                                                     y: dragStartTransform.ty + t.y))
+            let proposed = CGPoint(x: dragStartTransform.tx + t.x, y: dragStartTransform.ty + t.y)
+            let clamped = clampedTranslation(proposed)
             panelView.transform = CGAffineTransform(translationX: clamped.x, y: clamped.y)
+            updateDock(finger: gesture.location(in: view), pushed: proposed.x - clamped.x)
         case .ended, .cancelled:
             let t = gesture.translation(in: view)
             let clamped = clampedTranslation(CGPoint(x: dragStartTransform.tx + t.x,
                                                      y: dragStartTransform.ty + t.y))
             isDragging = false
+            gestureEnded()
             applyPosition(clamped)
+            let docks = gesture.state == .ended && overDock
+            setOverDock(false, feedback: false)
+            if docks { docking?.drop() }
         default:
             isDragging = false
+            gestureEnded()
+            setOverDock(false, feedback: false)
+        }
+    }
+
+    // MARK: Docking
+
+    /// A drag that reaches the window's right edge, or keeps pushing once the
+    /// panel has stopped at it, is offered the dock (`PreviewDockIndicator`).
+    private func updateDock(finger: CGPoint, pushed: CGFloat) {
+        guard let docking, docking.canDock(view.bounds.width) else {
+            setOverDock(false, feedback: false)
+            return
+        }
+        setOverDock(FloatingPanelDocking.isOver(edgeDistance: view.bounds.maxX - finger.x,
+                                                pushed: pushed, wasOver: overDock), feedback: true)
+    }
+
+    /// In the dock's edge the panel shrinks back a little, as if already going in.
+    private func setOverDock(_ over: Bool, feedback: Bool) {
+        guard over != overDock else { return }
+        overDock = over
+        docking?.hover(over)
+        if over, feedback { dockFeedback.impactOccurred() }
+        let scaled = over ? CGAffineTransform(scaleX: 0.9, y: 0.9) : .identity
+        if UIAccessibility.isReduceMotionEnabled {
+            hosting.view.alpha = over ? 0.8 : 1
+        } else {
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.hosting.view.transform = scaled
+                self.hosting.view.alpha = over ? 0.8 : 1
+            }
         }
     }
 
@@ -553,18 +748,22 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     /// Clamp a proposed size against the panel's CURRENT top-left. Resizing never
     /// moves the panel — it only grows or shrinks toward the bottom-right, stopping
     /// at the safe-area edge. That's what keeps the grip still under the finger.
+    /// A panel that moves to the window's edges stops where it may move, and
+    /// grows no bigger than the safe-area region either.
     func clampedSize(_ proposed: CGSize) -> CGSize {
         let region = availableRegion
+        let room = movementRegion
         let origin = CGPoint(x: panelView.transform.tx, y: panelView.transform.ty)
-        let maxW = max(minSize.width, region.maxX - origin.x)
-        let maxH = max(minSize.height, region.maxY - origin.y)
+        let maxW = max(minSize.width, min(region.width, room.maxX - origin.x))
+        let maxH = max(minSize.height, min(region.height, room.maxY - origin.y))
 
         if let ratio = aspectRatio, ratio.isFinite, ratio > 0 {
-            let maxWidth = min(maxW, maxH * ratio)
-            let minWidth = min(maxWidth, max(minSize.width, minSize.height * ratio))
-            let projectedWidth = (proposed.width * ratio + proposed.height) * ratio / (ratio * ratio + 1)
+            let bar = toolbarHeight
+            let maxWidth = min(maxW, max(0, maxH - bar) * ratio)
+            let minWidth = min(maxWidth, max(minSize.width, max(0, minSize.height - bar) * ratio))
+            let projectedWidth = (proposed.width * ratio + (proposed.height - bar)) * ratio / (ratio * ratio + 1)
             let width = min(max(projectedWidth, minWidth), maxWidth)
-            return CGSize(width: width, height: width / ratio)
+            return CGSize(width: width, height: width / ratio + bar)
         }
 
         return CGSize(width: min(max(proposed.width, minSize.width), maxW),
@@ -582,17 +781,118 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
         switch gesture.state {
         case .began:
             isResizing = true
+            gestureBegan()
             sizeAtResizeStart = size
         case .changed:
             onResize(clampedSize(proposed))
         case .ended, .cancelled:
             let final = clampedSize(proposed)
             isResizing = false
+            gestureEnded()
             onResize(final)
             onResizeEnded(final)
         default:
             isResizing = false
+            gestureEnded()
         }
+    }
+
+    // MARK: Pinch
+
+    /// The size a pinch asks for: the size it started at times its scale,
+    /// from the smallest size up to the whole available region. Unlike the
+    /// grip's, it is not held to the room right and below the panel: the
+    /// panel moves to make room (`placeForPinch`).
+    func pinchedSize(from start: CGSize, scale: CGFloat) -> CGSize {
+        let region = availableRegion
+        let scale = scale.isFinite && scale > 0 ? scale : 1
+        if let ratio = aspectRatio, ratio.isFinite, ratio > 0 {
+            let bar = toolbarHeight
+            let maxWidth = max(minSize.width, min(region.width, max(0, region.height - bar) * ratio))
+            let minWidth = min(maxWidth, max(minSize.width, max(0, minSize.height - bar) * ratio))
+            let width = min(max(start.width * scale, minWidth), maxWidth)
+            return CGSize(width: width, height: width / ratio + bar)
+        }
+        return CGSize(width: min(max(start.width * scale, minSize.width), max(minSize.width, region.width)),
+                      height: min(max(start.height * scale, minSize.height), max(minSize.height, region.height)))
+    }
+
+    /// The panel's place for the size it has now: the point between the
+    /// fingers stays where it was on the panel, unless that would take the
+    /// panel out of the safe area (or out of `movementRegion`).
+    private func placeForPinch(_ start: (frame: CGRect, anchor: CGPoint)) {
+        let origin = FloatingPanelPinch.origin(start: start.frame, anchor: start.anchor, size: panelView.bounds.size)
+        let clamped = clampedTranslation(origin)
+        panelView.transform = CGAffineTransform(translationX: clamped.x, y: clamped.y)
+    }
+
+    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            // A finger that had started moving the panel, or resizing it from
+            // the grip (a pinch begun at the corners), hands it to the pinch.
+            for other in [move, resize] {
+                if let other, other.state == .began || other.state == .changed {
+                    other.isEnabled = false
+                    other.isEnabled = true
+                }
+            }
+            let origin = CGPoint(x: panelView.transform.tx, y: panelView.transform.ty)
+            pinchStart = (CGRect(origin: origin, size: panelView.bounds.size), gesture.location(in: view))
+            gestureBegan()
+            pinchedSize = nil
+            pinchChanged(gesture)
+        case .changed:
+            pinchChanged(gesture)
+        case .ended, .cancelled, .failed:
+            guard let start = pinchStart else { return }
+            placeForPinch(start)
+            pinchStart = nil
+            applyPosition(CGPoint(x: panelView.transform.tx, y: panelView.transform.ty))
+            if let final = pinchedSize { onResizeEnded(final) }
+            pinchedSize = nil
+            gestureEnded()
+        default:
+            break
+        }
+    }
+
+    // MARK: Buttons held
+
+    /// One of the panel's own gestures has taken it: the content's buttons
+    /// ignore a press until a moment after the last lets go (`onGesture`).
+    private func gestureBegan() {
+        guard !holdsButtons else { return }
+        holdsButtons = true
+        onGesture?(true)
+    }
+
+    /// A moment after, since SwiftUI hands a button its release after the
+    /// touch event; and told even if the panel has gone meanwhile, or its
+    /// buttons would be held for good.
+    private func gestureEnded() {
+        guard holdsButtons else { return }
+        gesturesEnded += 1
+        let ended = gesturesEnded, onGesture = onGesture
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.buttonsHeldAfterGesture) { [weak self] in
+            if let self {
+                guard !self.hasGesture, self.gesturesEnded == ended else { return }
+                self.holdsButtons = false
+            }
+            onGesture?(false)
+        }
+    }
+
+    /// The size goes through SwiftUI, as a resize's does; the place follows
+    /// in the layout pass that gives the panel that size.
+    private func pinchChanged(_ gesture: UIPinchGestureRecognizer) {
+        // One of the two fingers lifted: the size holds until both have. (A
+        // trackpad's pinch has no touches at all.)
+        guard let start = pinchStart, gesture.numberOfTouches != 1 else { return }
+        let next = pinchedSize(from: start.frame.size, scale: gesture.scale)
+        guard next != pinchedSize else { return }
+        pinchedSize = next
+        onResize(next)
     }
 
     // MARK: Updates
@@ -601,30 +901,59 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
                 size: CGSize,
                 showsResizeGrip: Bool,
                 aspectRatio: CGFloat? = nil,
+                toolbarHeight: CGFloat = 0,
                 onResize: @escaping (CGSize) -> Void,
                 onResizeEnded: @escaping (CGSize) -> Void) {
         self.size = size
         self.aspectRatio = aspectRatio
+        self.toolbarHeight = toolbarHeight
         self.onResize = onResize
         self.onResizeEnded = onResizeEnded
         grip.isHidden = !showsResizeGrip
         hosting.rootView = content
     }
 
+    /// The room the panel is sized in, and kept in unless it moves to the
+    /// window's edges: the safe area less `contentInsets`, above the keyboard.
     private var availableRegion: CGRect {
         let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
         var bottom = view.bounds.maxY - insets.bottom
-        if avoidsKeyboard, let window = view.window, !keyboardFrame.isEmpty {
-            let local = view.convert(keyboardFrame, from: window.screen.coordinateSpace)
-            if local.intersects(view.bounds), local.maxY >= view.bounds.maxY - insets.bottom {
-                bottom = min(bottom, local.minY)
-            }
-        }
+        if let keyboardTop { bottom = min(bottom, keyboardTop) }
         let left = insets.left + contentInsets.left + 8
         let top = insets.top + contentInsets.top + 8
         return CGRect(x: left, y: top,
             width: max(0, view.bounds.width - insets.right - contentInsets.right - 8 - left),
             height: max(0, bottom - contentInsets.bottom - 8 - top))
+    }
+
+    /// Where the panel may be. With `movesToWindowEdges`, over the host's bars
+    /// (Peter, 3 November 2026: the simulator's panel goes over the chat's
+    /// title and its bottom bar) and down over the home indicator to the
+    /// window's foot. It stops at the status bar and the camera's housing (the
+    /// safe area's top and sides), where the system takes every touch: a
+    /// toolbar under the clock could be neither pressed nor dragged back (UI
+    /// test, 3 November 2026). While the keyboard is up it keeps clear of the
+    /// keyboard and of the bar above it, as before, so the panel never hides
+    /// what is being typed.
+    private var movementRegion: CGRect {
+        guard movesToWindowEdges else { return availableRegion }
+        let window = view.bounds
+        let insets = view.window?.safeAreaInsets ?? view.safeAreaInsets
+        let top = window.minY + insets.top
+        let bottom = keyboardTop.map { $0 - contentInsets.bottom - 8 } ?? window.maxY
+        return CGRect(x: window.minX + insets.left, y: top,
+                      width: max(0, window.width - insets.left - insets.right),
+                      height: max(0, bottom - top))
+    }
+
+    /// The top of a keyboard docked at the window's foot, in `view`, while
+    /// the panel avoids it.
+    private var keyboardTop: CGFloat? {
+        guard avoidsKeyboard, let window = view.window, !keyboardFrame.isEmpty else { return nil }
+        let insets = window.safeAreaInsets
+        let local = view.convert(keyboardFrame, from: window.screen.coordinateSpace)
+        guard local.intersects(view.bounds), local.maxY >= view.bounds.maxY - insets.bottom else { return nil }
+        return local.minY
     }
 
     @objc private func keyboardChanged(_ notification: Notification) {
@@ -636,12 +965,34 @@ final class RipulFloatingPanelController<Content: View>: UIViewController, UIGes
     // MARK: Gesture arbitration
 
     /// The grip owns its corner: reject move-pan touches that land on it, so dragging
-    /// the corner resizes rather than repositioning.
+    /// the corner resizes rather than repositioning. A pinch takes its fingers
+    /// anywhere on the panel.
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard g === move else { return true }
         let point = touch.location(in: panelView)
         if !grip.isHidden, grip.frame.contains(point) { return false }
         if let strip = movesFromTopStrip { return point.y <= strip }
         return true
+    }
+
+    /// No move or grip resize while a pinch has the panel: a finger left on
+    /// it once the other lifts doesn't drag it.
+    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        if g === pinch { return pinchesToResize }
+        if g === move || g === resize { return pinchStart == nil }
+        return true
+    }
+
+    /// A second finger can come down after the first has started moving the
+    /// panel, or a pinch can start with a finger on the grip or on one of the
+    /// content's buttons: the pinch is let start, and takes the panel over.
+    /// With a finger on Close, the content's own gestures had otherwise shut
+    /// the pinch out (UI test, 2 November 2026).
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        let single: (UIGestureRecognizer) -> Bool = { $0 === self.move || $0 === self.resize }
+        let content: (UIGestureRecognizer) -> Bool = { $0.view?.isDescendant(of: self.hosting.view) == true }
+        return (g === pinch && (single(other) || content(other))) || ((single(g) || content(g)) && other === pinch)
     }
 }
 #endif

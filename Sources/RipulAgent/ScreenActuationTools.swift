@@ -1881,6 +1881,7 @@ public struct TapElementTool: NativeTool {
         if let reason = TouchSynthesizer.unavailableReason {
             result["success"] = false
             result["error"] = "Real touches are unavailable: \(reason)"
+            result["code"] = TouchSynthesizer.unavailableCode ?? "touch_left_out"
             return result
         }
         let window = target.window

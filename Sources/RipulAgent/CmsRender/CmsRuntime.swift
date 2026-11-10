@@ -25,9 +25,17 @@ public final class CmsRuntime: ObservableObject {
     public let cmsId: String
     public let client: CmsClient
 
+    /// What the host app does for a card's `open: { host: <name> }` (`CmsAppView(hostActions:)`).
+    public var hostActions: [String: @MainActor () -> Void] = [:]
+
     /// Query metadata (paramSources) — set by the page loader from the
     /// fetched definition before any block renders.
     public var queryDefs: [String: CmsQueryDef] = [:]
+    /// The site's views (`CmsDefinition.views`), by slug. A view's slug works
+    /// wherever a query's does (CmsViews.swift).
+    public var viewDefs: [String: CmsViewDef] = [:]
+    /// Each loaded view's rows and per-row source statuses, as they stream in.
+    @Published private(set) var viewResults: [String: CmsViewResult] = [:]
     /// Shared column views (columnViewRef target), keyed by slug — set by the
     /// loader from the definition; blocks resolve their `columnViewRef`.
     public var columnViews: [String: CmsColumnView] = [:]
@@ -46,6 +54,15 @@ public final class CmsRuntime: ObservableObject {
     /// An `agentChat` with `fab` on this page: the page draws its floating
     /// button. Registered by the block while it is on screen.
     @Published public var floatingChat: CmsBlock?
+    /// The shell's floating chat, which an app with no shell (CmsAppView)
+    /// keeps on every tab, as the web's pill is on every page. A page's own
+    /// floating chat comes first.
+    @Published public var shellChat: CmsBlock?
+    /// The shell's chat is in the tab bar's bottom accessory (iOS 26): the
+    /// floating button is not drawn for it.
+    @Published public var shellChatInAccessory = false
+    /// The accessory's tap: CmsAppView presents the shell's chat.
+    @Published public var shellChatOpen = false
     /// Blocks each Page tabs block hides (closed tabs) and floats (a chat as
     /// the floating button), by block id or slug — pageTabsStore.ts. Hidden
     /// blocks stay mounted, so they keep what they loaded.
@@ -93,17 +110,38 @@ public final class CmsRuntime: ObservableObject {
     @Published public var barHostsMenu = false
     /// Host hook for the account menu's Sign out; nil hides the item.
     public var onSignOut: (() -> Void)?
+    /// The site's own sign-in by an emailed code, when its site key's
+    /// `portalAuth` is 'email' (CmsSiteSignIn.swift): made by the loader.
+    @Published public internal(set) var siteSignIn: CmsSiteSignIn?
+    /// Ask for the sign-in sheet (CmsSiteSignInViews.swift), then open
+    /// `returnTo` once signed in: a page that needs a signed-in member.
+    @Published public var signInRequest: CmsSignInRequest?
+    /// Counts sign-ins and sign-outs that changed who the person is, once the
+    /// loader has read their pages again: the app's tabs and stacks follow it.
+    @Published public internal(set) var signInGeneration = 0
+
+    /// The booking routes for this site, as the signed-in person.
+    public var bookings: CmsBookingsClient? {
+        guard let signIn = siteSignIn else { return nil }
+        return CmsBookingsClient(site: cmsId, token: { await MainActor.run { signIn.token() } })
+    }
     /// Saved mutations, keyed by slug — set by the loader; action blocks run them.
     public var mutationDefs: [String: CmsMutationDef] = [:]
+    /// Site calculation functions (`CmsDefinition.functions`), keyed by slug —
+    /// record forms evaluate `fn.<slug>(...)` against them off the main thread.
+    public var functionDefs: [String: CmsFunctionDef] = [:]
     /// Page-scoped shared column definitions (columnDefsRef target), keyed by
     /// block slug — populated at page-display time from the page's columnDefs
     /// blocks. Native twin of the web's GridApiRegistry pub-sub at render time.
     public var columnDefs: [String: [CmsJSON]] = [:]
     /// Portal theme — `color.*` tokens resolve against it. Set by the loader.
-    public var theme = CmsPortalTheme(config: nil)
+    /// Published, so a colour-scheme change redraws every block that reads it
+    /// (before it was, only views that happened to redraw for another reason
+    /// followed, and a screen was left half light, half dark).
+    @Published public var theme = CmsPortalTheme(config: nil)
     /// Raw portal theme config, kept so the runtime can recompute `theme`
     /// when the OS color scheme changes (system mode follows `effectiveDark`).
-    public internal(set) var themeConfig: CmsPortalThemeConfig?
+    @Published public internal(set) var themeConfig: CmsPortalThemeConfig?
     /// Current effective dark-mode flag (OS color scheme) for system-mode themes.
     public private(set) var effectiveDark: Bool = false
 
@@ -119,6 +157,11 @@ public final class CmsRuntime: ObservableObject {
         theme.resolve(value)
     }
 
+    /// Text's colour: the value, else the site's text colour (never the system's black).
+    public func textColor(_ value: String?) -> Color {
+        theme.textColor(value)
+    }
+
     /// Resolve a background fill: `color.gradient` → brand gradient, else a colour.
     public func fill(_ value: String?) -> AnyShapeStyle? {
         theme.fill(value)
@@ -130,6 +173,12 @@ public final class CmsRuntime: ObservableObject {
     }
 
     @Published public private(set) var queries: [String: QueryState] = [:]
+    /// A choice list's rows for one set of its params (`optionsQuery.params`),
+    /// keyed by `optionListKey`: run once and shared, so a form row that SwiftUI
+    /// rebuilds while the request is out joins it rather than sending another.
+    /// (A Form row on iPhone restarted its task every frame and sent 120 a
+    /// second, each cancelled before it came back, 30 October 2026.)
+    @Published public private(set) var optionLists: [String: QueryState] = [:]
     /// Selected rows per query slug. Control blocks also publish their output
     /// rows here under their block slug (calendar bounds, etc.).
     @Published public private(set) var selections: [String: [[String: CmsJSON]]] = [:]
@@ -185,36 +234,122 @@ public final class CmsRuntime: ObservableObject {
     }
     @Published public var openDrawer: DrawerRequest?
 
-    /// Close the drawer through the one path that honours its dismiss hook.
-    /// Slides the panel out via `drawerOpenOffset` (a guaranteed animation)
-    /// then removes it — a plain `openDrawer = nil` relies on the removal
-    /// transition, which a Liquid Glass panel doesn't animate reliably, so it
-    /// looked like the drawer never slid back on scrim tap / item select.
-    public func closeDrawer() {
-        guard let dismissed = openDrawer else { return }
-        let hidden: CGFloat = dismissed.edge == .leading
-            ? -CmsDrawerOverlay.panelWidth
-            : CmsDrawerOverlay.panelWidth
-        // Removal uses the identity transition (no second slide) since the
-        // panel is already off-screen by the time we clear it.
-        drawerInteractiveOpen = true
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-            drawerOpenOffset = hidden
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
-            self.openDrawer = nil
-            self.drawerInteractiveOpen = false
-            self.drawerOpenOffset = 0
-            dismissed.onDismiss?()
+    /// A choice list's choice, kept here by its slug so every copy of the
+    /// list (the page's offstage one that publishes at load, the drawer's)
+    /// shows and keeps the same choice.
+    public struct ChoiceState: Equatable {
+        public var selection: [String]
+        public var range: [String]?
+    }
+    @Published public var listChoices: [String: ChoiceState] = [:]
+
+    /// A short note at the foot of the page: a form's `successMessage`, and
+    /// a run's `warning` (a follow-up call that failed) beside it.
+    public struct Notice: Equatable {
+        public var message: String?
+        public var warning: String?
+    }
+    @Published public var notice: Notice?
+    private var noticeStamp = 0
+
+    /// The success message; a warning already showing stays beside it.
+    /// Set by `CmsAppView`: pushes a record form opened as a page onto the
+    /// selected tab's stack (CmsMasthead.swift); false where it can't (a host
+    /// tab), and the form opens as a sheet instead.
+    var pushFormPage: ((UUID, @escaping () -> AnyView) -> Bool)?
+    /// Pops a pushed record form, and the steps pushed after it.
+    var closeFormPage: ((UUID) -> Void)?
+    /// The pushed forms' views, by their route's id.
+    var formPages: [UUID: () -> AnyView] = [:]
+
+    public func showNotice(_ text: String) {
+        guard !text.isEmpty else { return }
+        DispatchQueue.main.async {
+            withAnimation { self.notice = Notice(message: text, warning: self.notice?.warning) }
+            self.scheduleNoticeEnd()
         }
     }
-    /// Interactive-open state: while an edge swipe is in flight the panel
-    /// tracks the finger via this offset (0 = fully open; ±panelWidth =
-    /// hidden at its edge). The edge strip drives it; the overlay applies it.
-    @Published public var drawerOpenOffset: CGFloat = 0
-    /// True while an edge swipe is opening the drawer — the overlay skips
-    /// its edge-slide insertion transition (the finger IS the animation).
-    public var drawerInteractiveOpen = false
+
+    /// A run's warning: shown at once, beside any message, and longer (6 s).
+    public func showWarning(_ text: String) {
+        guard !text.isEmpty else { return }
+        DispatchQueue.main.async {
+            withAnimation { self.notice = Notice(message: self.notice?.message, warning: text) }
+            self.scheduleNoticeEnd()
+        }
+    }
+
+    private func scheduleNoticeEnd() {
+        noticeStamp += 1
+        let stamp = noticeStamp
+        let seconds: Double = notice?.warning != nil ? 6 : 3
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            if self.noticeStamp == stamp { withAnimation { self.notice = nil } }
+        }
+    }
+
+    /// `openSidebar`: the current page's side region on that edge (`left`,
+    /// the default, or `right`) as a drawer, as the edge swipe opens it.
+    /// Nothing when the page has no region there.
+    public func openSidebar(edge: String?) {
+        let leading = edge != "right"
+        guard let slot = leading ? edgeSwipeLeftSlot : edgeSwipeRightSlot else { return }
+        openDrawer = .init(edge: leading ? .leading : .trailing, slot: slot)
+    }
+
+    /// Close the drawer through the one path that honours its dismiss hook:
+    /// it springs to its edge (from wherever it is, mid-drag included), then
+    /// goes.
+    public func closeDrawer() {
+        guard openDrawer != nil else { return }
+        #if os(iOS)
+        if let controller = drawerTrack.controller {
+            drawerTrack.grab()
+            drawerTrack.settle(open: false, width: controller.width) { [weak self] in self?.finishClosingDrawer() }
+            return
+        }
+        #endif
+        finishClosingDrawer()
+    }
+
+    /// The drawer has reached its edge: SwiftUI removes it.
+    func finishClosingDrawer() {
+        guard let dismissed = openDrawer else { return }
+        openDrawer = nil
+        drawerTrack.progress = 0
+        dismissed.onDismiss?()
+    }
+
+    /// Where the drawer is. Not published: a finger moves it in UIKit, and
+    /// SwiftUI hears only that it opened (`openDrawer`) and that it closed.
+    public let drawerTrack = CmsDrawerTrack()
+
+    /// An edge pan has taken hold: the drawer appears at its edge, placed by
+    /// the finger from here on (`dragDrawer`, `releaseDrawer`).
+    func beginInteractiveDrawer(edge: DrawerRequest.Edge, slot: CmsPageBlocks) {
+        drawerTrack.grab()
+        drawerTrack.progress = 0
+        drawerTrack.startsInteractive = true
+        openDrawer = .init(edge: edge, slot: slot)
+    }
+
+    /// How far the drawer is pulled, in points along its width.
+    func dragDrawer(pulled: CGFloat, edge: DrawerRequest.Edge) {
+        drawerTrack.drag(to: pulled / drawerWidth(edge))
+    }
+
+    /// The opening finger lifts, `velocity` points a second toward open.
+    func releaseDrawer(velocity: CGFloat, edge: DrawerRequest.Edge) {
+        drawerTrack.release(velocity: velocity, width: drawerWidth(edge)) { [weak self] in self?.finishClosingDrawer() }
+    }
+
+    /// The drawer's width: its view's once made, else its region's.
+    func drawerWidth(_ edge: DrawerRequest.Edge) -> CGFloat {
+        #if os(iOS)
+        if let width = drawerTrack.controller?.width { return width }
+        #endif
+        return (edge == .leading ? edgeSwipeLeftWidth : edgeSwipeRightWidth) ?? CmsDrawerOverlay.panelWidth
+    }
 
     // MARK: - Page navigation (native routing)
 
@@ -225,6 +360,21 @@ public final class CmsRuntime: ObservableObject {
         public let pageSlug: String
     }
     @Published public var pendingNavigation: PageNavigation?
+
+    /// A run whose mutation has an `action.after` (a countdown, a summary, a
+    /// page): CmsAppView draws it (CmsMutationAfterOverlay) and clears it.
+    public struct PendingAfter: Identifiable, Equatable {
+        public let id = UUID()
+        public let after: CmsMutationAfter
+        public let result: CmsJSON?
+    }
+    @Published public var pendingAfter: PendingAfter?
+
+    private func announceAfter(_ slug: String, result: CmsJSON?) {
+        if let after = CmsMutationAfter(mutationDefs[slug]?.action?.after) {
+            pendingAfter = PendingAfter(after: after, result: result)
+        }
+    }
     /// Slug of the page currently rendered — drives nav active states.
     @Published public var currentPageSlug: String?
     /// Shell pattern: the routed page rendered inside the shell page's
@@ -241,6 +391,15 @@ public final class CmsRuntime: ObservableObject {
     /// nested scroll views). Cleared on page swap.
     @Published public var edgeSwipeLeftSlot: CmsPageBlocks?
     @Published public var edgeSwipeRightSlot: CmsPageBlocks?
+    /// Which sidebar layout registered each slot: a layout releases only
+    /// its own registration (a copy replaced as a page first loads used to
+    /// clear its successor's equal slot as it disappeared).
+    public var edgeSwipeLeftOwner: UUID?
+    public var edgeSwipeRightOwner: UUID?
+    /// The registered regions' drawer widths (the sidebar layout's
+    /// `sidebarWidth`s); nil = the drawer's default.
+    public var edgeSwipeLeftWidth: CGFloat?
+    public var edgeSwipeRightWidth: CGFloat?
     /// Left-edge recognizer status for the runtime inspector.
     @Published public var leftEdgeDebug: String = "not installed"
 
@@ -363,6 +522,44 @@ public final class CmsRuntime: ObservableObject {
 
     // MARK: - Loading
 
+    public func optionList(_ querySlug: String, params: [String: CmsJSON]) -> QueryState {
+        optionLists[Self.optionListKey(querySlug, params: params)] ?? .idle
+    }
+
+    /// Runs a choice list's query for these params unless it has run or is
+    /// running (a failure stays until `reload`, so a rebuilt row can't retry
+    /// in a loop); `reload` runs it again, e.g. after a choice is added.
+    public func ensureOptionList(_ querySlug: String, params: [String: CmsJSON], reload: Bool = false) {
+        guard !querySlug.isEmpty else { return }
+        let key = Self.optionListKey(querySlug, params: params)
+        if !reload, optionLists[key] != nil { return }
+        optionLists[key] = .loading
+        let typed = Self.textParams(params)
+        Task {
+            do {
+                let result = try await client.runSavedQuery(cmsId: cmsId, querySlug: querySlug, params: typed)
+                optionLists[key] = .ok(result)
+            } catch {
+                optionLists[key] = .error(error.localizedDescription)
+            }
+        }
+    }
+
+    /// A choice list's params (and its create mutation's) as the web sends
+    /// them: each `{ type: 'string', value }`, the value as text or null. The
+    /// query and mutation routes drop a bare value.
+    public static func textParams(_ params: [String: CmsJSON]) -> [String: CmsJSON] {
+        params.mapValues { value in
+            if case .null = value { return .object(["type": .string("string"), "value": .null]) }
+            return .object(["type": .string("string"), "value": .string(CmsCards.text(value))])
+        }
+    }
+
+    public static func optionListKey(_ querySlug: String, params: [String: CmsJSON]) -> String {
+        querySlug + "?" + params.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(CmsCards.text($0.value))" }.joined(separator: "&")
+    }
+
     /// Lazy fetch — first caller triggers the run, others observe.
     public func ensureLoaded(_ querySlug: String) {
         guard !querySlug.isEmpty else { return }
@@ -371,6 +568,15 @@ public final class CmsRuntime: ObservableObject {
     }
 
     private func runQuery(_ querySlug: String) {
+        if let view = viewDefs[querySlug] {
+            // A view's params are its base query's.
+            switch resolveParams(for: view.base) {
+            case .waiting(let reason): queries[querySlug] = .waiting(reason)
+            case .static: startViewRun(view, params: nil)
+            case .ready(let params): startViewRun(view, params: params)
+            }
+            return
+        }
         let resolution = resolveParams(for: querySlug)
         switch resolution {
         case .waiting(let reason):
@@ -383,30 +589,154 @@ public final class CmsRuntime: ObservableObject {
         }
     }
 
+    /// Each query's or view's latest run. Only the latest run's answer is
+    /// applied: an older one arriving last would put back rows from before a
+    /// save (Multi-add refreshes seven queries at once; WAC Next's calendar
+    /// lost the two new days that way on Android, 3 November 2026).
+    private var runNumbers: [String: Int] = [:]
+
+    private func nextRun(_ slug: String) -> Int {
+        let n = (runNumbers[slug] ?? 0) + 1
+        runNumbers[slug] = n
+        return n
+    }
+
+    private func isLatestRun(_ slug: String, _ n: Int) -> Bool { runNumbers[slug] == n }
+
     private func startRun(_ querySlug: String, params: [String: CmsJSON]?, hash: String) {
         // Keep old rows visible during a param-driven refetch; only show the
         // spinner on first load.
         if case .ok = state(for: querySlug) {} else { queries[querySlug] = .loading }
+        let run = nextRun(querySlug)
         Task {
             do {
                 let result = try await client.runSavedQuery(cmsId: cmsId, querySlug: querySlug, params: params)
+                guard self.isLatestRun(querySlug, run) else { return }
                 self.schemas[querySlug] = result.schema
                 self.appliedParamsHash[querySlug] = hash
                 self.queries[querySlug] = .ok(result)
             } catch {
+                guard self.isLatestRun(querySlug, run) else { return }
                 self.queries[querySlug] = .error(error.localizedDescription)
             }
         }
     }
 
+    // MARK: - Views
+
+    /// Run a view, reading its answer as it streams: the base rows are the
+    /// view's rows at once, and each source's columns join them as they come.
+    private func startViewRun(_ view: CmsViewDef, params: [String: CmsJSON]?) {
+        let slug = view.slug
+        if case .ok = state(for: slug) {} else { queries[slug] = .loading }
+        let run = nextRun(slug)
+        Task {
+            var result = CmsViewResult(key: view.key)
+            do {
+                for try await json in client.runView(cmsId: cmsId, viewSlug: slug, params: params) {
+                    // A newer run of this view has started: this one's answer is stale.
+                    guard self.isLatestRun(slug, run) else { return }
+                    for event in Self.viewEvents(json) {
+                        result.apply(event, view: view)
+                        if case .error(let message) = event, result.rows.isEmpty {
+                            self.viewResults[slug] = result
+                            self.queries[slug] = .error(message)
+                            return
+                        }
+                    }
+                    self.publishView(slug, result)
+                }
+                guard self.isLatestRun(slug, run) else { return }
+                result.failRemainingPending("Couldn't load this")
+                self.publishView(slug, result)
+            } catch {
+                guard self.isLatestRun(slug, run) else { return }
+                if result.rows.isEmpty {
+                    self.queries[slug] = .error(error.localizedDescription)
+                } else {
+                    result.failRemainingPending(error.localizedDescription)
+                    self.publishView(slug, result)
+                }
+            }
+        }
+    }
+
+    /// Ask for these rows' per-row sources: rows that came back `later` as
+    /// their cards come into view, or a failed row's Try again. The rows
+    /// already shown stay; only those sources' columns arrive.
+    public func requestViewRows(_ slug: String, keys: [String]) {
+        guard let view = viewDefs[slug], var result = viewResults[slug], !keys.isEmpty else { return }
+        let perRow = Set((view.sources ?? []).filter(\.isPerRow).map(\.alias))
+        var asked: [String] = []
+        for key in keys {
+            guard var statuses = result.status[key] else { continue }
+            var changed = false
+            for (alias, status) in statuses where perRow.contains(alias) {
+                switch status {
+                case .later, .failed: statuses[alias] = .pending; changed = true
+                default: break
+                }
+            }
+            if changed { result.status[key] = statuses; asked.append(key) }
+        }
+        guard !asked.isEmpty else { return }
+        publishView(slug, result)
+        let params: [String: CmsJSON]?
+        if case .ready(let p) = resolveParams(for: view.base) { params = p } else { params = nil }
+        Task {
+            do {
+                for try await json in client.runView(cmsId: cmsId, viewSlug: slug, params: params, keys: asked) {
+                    for event in Self.viewEvents(json) {
+                        guard case .source(let alias, let results) = event, var current = self.viewResults[slug] else { continue }
+                        current.merge(alias: alias, results: results)
+                        self.publishView(slug, current)
+                    }
+                }
+            } catch {}
+            if var current = self.viewResults[slug] {
+                current.failRemainingPending("Couldn't load this", keys: Set(asked))
+                self.publishView(slug, current)
+            }
+        }
+    }
+
+    /// Try again for one row: its per-row sources again, or the whole view
+    /// when a matched source failed.
+    public func retryViewRow(_ slug: String, key: String) {
+        guard let view = viewDefs[slug], let statuses = viewResults[slug]?.status[key] else { return }
+        let failedMatched = (view.sources ?? []).contains { source in
+            if case .failed? = statuses[source.alias] { return !source.isPerRow }
+            return false
+        }
+        if failedMatched { invalidate(slug) } else { requestViewRows(slug, keys: [key]) }
+    }
+
+    /// A source's status for a row of a view; `ready` for anything that isn't one.
+    public func viewSourceStatus(_ slug: String, row: [String: CmsJSON], alias: String) -> CmsViewSourceStatus {
+        viewResults[slug]?.status(row: row, alias: alias) ?? .ready
+    }
+
+    private func publishView(_ slug: String, _ result: CmsViewResult) {
+        viewResults[slug] = result
+        schemas[slug] = result.schema
+        queries[slug] = .ok(CmsQueryResult(rows: result.rows, schema: result.schema))
+    }
+
+    private static func viewEvents(_ json: CmsJSON) -> [CmsViewEvent] {
+        if json.objectValue?["type"] == nil { return CmsViewEvent.events(fromWhole: json) }
+        return CmsViewEvent.parse(json).map { [$0] } ?? []
+    }
+
     // MARK: - Mutations
 
     /// `invalidateByQuerySlug`: a query some block has loaded runs again with
-    /// its current params; one nobody has asked for stays idle.
+    /// its current params; one nobody has asked for stays idle. A loaded view
+    /// that reads the query (as its base or a source) runs again too.
     public func invalidate(_ querySlug: String) {
-        guard case .idle = state(for: querySlug) else {
-            runQuery(querySlug)
-            return
+        if case .idle = state(for: querySlug) {} else { runQuery(querySlug) }
+        for (slug, view) in viewDefs where slug != querySlug && view.queries.contains(querySlug) {
+            if case .idle = state(for: slug) { continue }
+            runQuery(slug)
         }
     }
 
@@ -461,8 +791,13 @@ public final class CmsRuntime: ObservableObject {
     public func runMutation(_ slug: String, params: [String: CmsJSON]?) async -> MutationOutcome {
         let def = mutationDefs[slug]
         do {
-            let affected = try await client.runSavedMutation(cmsId: cmsId, mutationSlug: slug, params: params)
+            let result = try await client.runSavedMutationResult(cmsId: cmsId, mutationSlug: slug, params: params)
+            let affected = result.affectedRows
+            // A follow-up call that failed: the run still succeeded, so the
+            // warning shows beside the success message, for longer.
+            if let warning = result.warning { showWarning(warning) }
             for querySlug in def?.invalidateQueries ?? [] { invalidate(querySlug) }
+            announceAfter(slug, result: result.result)
             let message = def?.successMessage.flatMap { $0.isEmpty ? nil : $0 }
                 ?? "Done — \(affected) row(s) affected"
             return .done(affectedRows: affected, message: message)
@@ -473,6 +808,23 @@ public final class CmsRuntime: ObservableObject {
             return .failed(message)
         } catch {
             return .failed(error.localizedDescription)
+        }
+    }
+
+    /// Runs a mutation and hands back its run's `result` (a creatable
+    /// choice reads the new value from it); its invalidations run as usual.
+    public func runMutationResult(_ slug: String, params: [String: CmsJSON]?) async -> Result<CmsJSON?, CmsMutationRefusal> {
+        do {
+            let run = try await client.runSavedMutationResult(cmsId: cmsId, mutationSlug: slug, params: params)
+            if let warning = run.warning { showWarning(warning) }
+            for querySlug in mutationDefs[slug]?.invalidateQueries ?? [] { invalidate(querySlug) }
+            announceAfter(slug, result: run.result)
+            return .success(run.result)
+        } catch CmsClientError.http(_, let body) {
+            let message = (try? JSONDecoder().decode([String: CmsJSON].self, from: Data(body.utf8)))?.string("error") ?? body
+            return .failure(CmsMutationRefusal(message: message))
+        } catch {
+            return .failure(CmsMutationRefusal(message: error.localizedDescription))
         }
     }
 
@@ -813,4 +1165,9 @@ public final class CmsRuntime: ObservableObject {
         }
         return result
     }
+}
+
+/// Why a mutation was refused, in words for the person.
+public struct CmsMutationRefusal: Error, Equatable {
+    public var message: String
 }

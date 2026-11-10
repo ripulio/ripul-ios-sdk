@@ -25,7 +25,9 @@ public struct CmsBrowserView: View {
         let cmsId: String
         let pageSlug: String
         let visitorKey: String?
-        var id: String { "\(cmsId)|\(pageSlug)|\(visitorKey ?? "owner")" }
+        /// Open the site as a whole app (`CmsAppView`, its tab bar).
+        var asApp = false
+        var id: String { "\(cmsId)|\(pageSlug)|\(visitorKey ?? "owner")|\(asApp)" }
     }
 
     public init(clientConfig: CmsClientConfig) {
@@ -65,6 +67,23 @@ public struct CmsBrowserView: View {
                             Label("Open site", systemImage: "rectangle.portrait.and.arrow.forward")
                         }
                         .cmsInspectorID("CmsBrowser.openSite.\(definition.id)")
+                        #if os(iOS)
+                        // The site as an app: its tab bar as the system's.
+                        Button {
+                            presented = PortalPresentation(
+                                cmsId: definition.id,
+                                pageSlug: "",
+                                visitorKey: visitorKeyByCms[definition.id],
+                                asApp: true
+                            )
+                        } label: {
+                            Label("Open as app", systemImage: "menubar.dock.rectangle")
+                        }
+                        .cmsInspectorID("CmsBrowser.openApp.\(definition.id)")
+                        #endif
+                        NavigationLink {
+                            SiteDomainsScreen(clientConfig: clientConfig, cmsId: definition.id)
+                        } label: { Label("Domains", systemImage: "globe") }
                         ForEach(definition.pages ?? []) { page in
                             pageRow(definition: definition, page: page)
                         }
@@ -78,32 +97,69 @@ public struct CmsBrowserView: View {
         .onAppear {
             loader.load()
             // Developer convenience for simulator runs: open a site at once.
-            // `defaults write io.ripul.app io.ripul.cms.testBed.autoOpen "<cmsId>[|<pageSlug>]"`
-            if presented == nil, let auto = UserDefaults.standard.string(forKey: "io.ripul.cms.testBed.autoOpen"), !auto.isEmpty {
-                let parts = auto.split(separator: "|", maxSplits: 1).map(String.init)
-                presented = PortalPresentation(cmsId: parts[0], pageSlug: parts.count > 1 ? parts[1] : "", visitorKey: nil)
+            // `defaults write io.ripul.app io.ripul.cms.testBed.autoOpen "<cmsId>[|<pageSlug>[|<pk_…>]]"`;
+            // an `app:` prefix opens the site as an app (CmsAppView), and a
+            // publishable key opens it as that key's visitor (no sign-in needed).
+            if presented == nil, var auto = UserDefaults.standard.string(forKey: "io.ripul.cms.testBed.autoOpen"), !auto.isEmpty {
+                let asApp = auto.hasPrefix("app:")
+                if asApp { auto.removeFirst(4) }
+                let parts = auto.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+                presented = PortalPresentation(
+                    cmsId: parts[0],
+                    pageSlug: parts.count > 1 ? parts[1] : "",
+                    visitorKey: parts.count > 2 && !parts[2].isEmpty ? parts[2] : nil,
+                    asApp: asApp
+                )
             }
         }
         .portalCover(item: $presented) { portal in
-            CmsPageView(
-                cmsId: portal.cmsId,
-                pageSlug: portal.pageSlug,
-                clientConfig: clientConfig,
-                visitorSiteKey: portal.visitorKey,
-                onEdgeExit: { presented = nil }
-            )
-            .overlay(alignment: .bottomLeading) {
-                Button {
-                    presented = nil
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.footnote)
-                        .padding(8)
-                        .background(Circle().fill(Color.secondary.opacity(0.15)))
-                }
-                .buttonStyle(.plain)
-                .padding(12)
+            #if os(iOS)
+            if portal.asApp {
+                CmsAppView(
+                    cmsId: portal.cmsId,
+                    clientConfig: clientConfig,
+                    visitorSiteKey: portal.visitorKey,
+                    hostTabs: [
+                        // A host tab, as WAC Next's Account tab will be.
+                        CmsAppHostTab(id: "testbed", title: "Test Bed", systemImage: "hammer") {
+                            List {
+                                Button("Close app") { presented = nil }
+                                    .cmsInspectorID("CmsBrowser.closeApp")
+                            }
+                            .navigationTitle("Test Bed")
+                        }
+                    ],
+                    initialPageSlug: portal.pageSlug,
+                    showsDeveloperTools: true
+                )
+            } else {
+                portalPage(portal)
             }
+            #else
+            portalPage(portal)
+            #endif
+        }
+    }
+
+    private func portalPage(_ portal: PortalPresentation) -> some View {
+        CmsPageView(
+            cmsId: portal.cmsId,
+            pageSlug: portal.pageSlug,
+            clientConfig: clientConfig,
+            visitorSiteKey: portal.visitorKey,
+            onEdgeExit: { presented = nil }
+        )
+        .overlay(alignment: .bottomLeading) {
+            Button {
+                presented = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.footnote)
+                    .padding(8)
+                    .background(Circle().fill(Color.secondary.opacity(0.15)))
+            }
+            .buttonStyle(.plain)
+            .padding(12)
         }
     }
 

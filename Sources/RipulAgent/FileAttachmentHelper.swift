@@ -42,7 +42,11 @@ public enum FileAttachmentHelper {
 
     /// What the Files picker offers: broad families, plus the system's type
     /// for each code extension, so a .swift or .ipynb file can be chosen.
-    public static var allowedContentTypes: [UTType] {
+    /// Built once. The composer passes it to its file picker on every redraw,
+    /// and each build asked the system's type database about every text
+    /// extension: 200-490 ms on the main thread on Peter's Duo, several times
+    /// a minute while a chat streamed (5 November 2026).
+    public static let allowedContentTypes: [UTType] = {
         var types: [UTType] = [.image, .pdf, .text, .sourceCode, .json, .commaSeparatedText, .tabSeparatedText, .spreadsheet, .presentation]
         let documents = ["org.openxmlformats.wordprocessingml.document", "org.openxmlformats.presentationml.presentation",
                          "com.microsoft.word.doc", "com.microsoft.powerpoint.ppt",
@@ -52,7 +56,7 @@ public enum FileAttachmentHelper {
         types += textExtensions.sorted().compactMap { UTType(filenameExtension: $0) }
         var seen = Set<String>()
         return types.filter { seen.insert($0.identifier).inserted }
-    }
+    }()
 
     /// What follows a name's last dot, as the web reads it: ".env" is an env
     /// file, though Foundation gives it no extension.

@@ -39,6 +39,51 @@ public struct NativeContextTag: Equatable, Identifiable {
     }
 }
 
+/// Context picked in the composer and sent with a user message (an element, the
+/// screen, saved instructions). Labelled web-side, so both chats name it alike.
+public struct NativeContextAttachment: Equatable, Identifiable {
+    public enum Icon: String {
+        case instructions, element, screen, app
+
+        /// The composer's own symbols for each kind (`ComposerContextViews`).
+        var systemImage: String {
+            switch self {
+            case .instructions: return "text.badge.checkmark"
+            case .element: return "scope"
+            case .screen: return "rectangle.inset.filled"
+            case .app: return "doc.text"
+            }
+        }
+    }
+
+    public let id: String
+    public let title: String
+    /// "Screen element · WAC Beta · Reference"
+    public let source: String
+    public let icon: Icon
+    /// "Included with this message"
+    public let scope: String
+    public let capturedAt: String
+    public let content: String
+
+    public init(id: String, title: String, source: String, icon: Icon, scope: String, capturedAt: String, content: String) {
+        self.id = id
+        self.title = title
+        self.source = source
+        self.icon = icon
+        self.scope = scope
+        self.capturedAt = capturedAt
+        self.content = content
+    }
+
+    /// When it was captured, in the reader's locale; the raw value when it is not a date.
+    var capturedLabel: String {
+        let date = (try? Date(capturedAt, strategy: .iso8601))
+            ?? (try? Date(capturedAt, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+        return date?.formatted(.dateTime.month(.abbreviated).day().hour().minute()) ?? capturedAt
+    }
+}
+
 public struct NativeChatImageAttachment: Equatable, Identifiable {
     public let id: String
     public let mediaType: String
@@ -81,6 +126,20 @@ public struct NativeChatFileAttachment: Equatable, Identifiable {
     }
 }
 
+public struct NativeChatVideoAttachment: Equatable, Identifiable {
+    public let id: String
+    public let url: String
+    public let posterUrl: String?
+    public let name: String?
+    public let width: Int?
+    public let height: Int?
+
+    public init(id: String, url: String, posterUrl: String? = nil, name: String? = nil, width: Int? = nil, height: Int? = nil) {
+        self.id = id; self.url = url; self.posterUrl = posterUrl; self.name = name
+        self.width = width; self.height = height
+    }
+}
+
 public struct NativeMessageTab: Equatable, Identifiable {
     public var id: String { label }
     public let label: String
@@ -111,6 +170,17 @@ public struct NativeMessageTable: Equatable {
     public init(columns: [Column], rows: [[String: String]]) {
         self.columns = columns
         self.rows = rows
+    }
+
+    /// The same first-column label matching used by the web TableRows card.
+    func matchingOption(for row: [String: String], options: [NativeAskUser.Option]) -> NativeAskUser.Option? {
+        guard let key = columns.first?.key else { return nil }
+        let value = (row[key] ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return options.first {
+            let label = $0.label.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return label == value || label.hasPrefix(value) || value.hasPrefix(label)
+        }
     }
 }
 
@@ -159,7 +229,10 @@ public struct NativeAskUser: Equatable {
     public let severity: String?
     public var expectsResponse: Bool
     public var enableChatInput: Bool
+    public var passwordInput: Bool
     public var completed: Bool
+    public var submitting: Bool
+    public var submissionError: String?
     public var answer: String?
     public var selectedValues: [String]
     public var responseKey: String?
@@ -176,7 +249,10 @@ public struct NativeAskUser: Equatable {
         severity: String?,
         expectsResponse: Bool = true,
         enableChatInput: Bool = false,
+        passwordInput: Bool = false,
         completed: Bool = false,
+        submitting: Bool = false,
+        submissionError: String? = nil,
         answer: String? = nil,
         selectedValues: [String] = [],
         responseKey: String? = nil,
@@ -192,7 +268,10 @@ public struct NativeAskUser: Equatable {
         self.severity = severity
         self.expectsResponse = expectsResponse
         self.enableChatInput = enableChatInput
+        self.passwordInput = passwordInput
         self.completed = completed
+        self.submitting = submitting
+        self.submissionError = submissionError
         self.answer = answer
         self.selectedValues = selectedValues
         self.responseKey = responseKey
@@ -201,6 +280,21 @@ public struct NativeAskUser: Equatable {
         self.dateInput = dateInput
         self.tabs = tabs
         self.table = table
+    }
+
+    /// Answer text that is not already shown by the choices or date picker.
+    public var freeTextAnswer: String? {
+        guard completed, dateInput == nil, let answer, !answer.isEmpty else { return nil }
+        func matchesOption(_ value: String) -> Bool {
+            options.contains { $0.value == value || $0.label == value }
+        }
+        if matchesOption(answer) { return nil }
+        // selectedValues mirrors the transport answer, including arbitrary
+        // text. Only suppress text when the choices show the entire answer.
+        let shownByChoices = !selectedValues.isEmpty
+            && selectedValues.allSatisfy(matchesOption)
+            && selectedValues.joined(separator: ", ") == answer
+        return shownByChoices ? nil : answer
     }
 }
 
@@ -421,13 +515,17 @@ public struct NativeChatMessage: Identifiable, Equatable {
     public var mergedIntoQuestionId: String? = nil
     public var replyQuote: NativeReplyQuote? = nil
     public var contextTags: [NativeContextTag] = []
+    public var contextAttachments: [NativeContextAttachment] = []
     public var imageAttachments: [NativeChatImageAttachment] = []
+    public var videoAttachments: [NativeChatVideoAttachment] = []
     public var fileAttachments: [NativeChatFileAttachment] = []
     public var isVoice: Bool = false
     public var isGroupChat: Bool = false
     public var isOwnMessage: Bool = true
     public var avatarUrl: String? = nil
     public var senderUserId: String? = nil
+    /// Incoming agent messages keep their source chat identity for icons and actions.
+    public var senderAgent: NativeChatAgentSender? = nil
     public var deliveryStatus: String? = nil
     public var respondent: NativeRespondentInfo? = nil
     public var tabs: [NativeMessageTab] = []
@@ -438,6 +536,7 @@ public struct NativeChatMessage: Identifiable, Equatable {
     public var errorInfo: NativeErrorInfo? = nil
     public var cliEvent: NativeCliEventInfo? = nil
     var toolCall: NativeToolCallSummary? = nil
+    var speech: NativeChatSpeech? = nil
 
     public init(
         id: String,
@@ -483,7 +582,7 @@ public struct NativeChatMessage: Identifiable, Equatable {
 
     /// Whether this message represents a tool invocation / sub-agent / workflow row that groups into a tool strip.
     var isToolRow: Bool {
-        if artefactRef != nil { return false }
+        if artefactRef != nil || speech != nil { return false }
         if toolCall != nil { return true }
         guard role == .assistant,
               content.isEmpty,
@@ -590,10 +689,41 @@ public struct NativeChatScrollPosition: Equatable {
 }
 
 public enum NativeChatScrollCommand: Equatable {
+    /// The chat was opened: show its end, and keep it there while it settles.
+    case enter
     case bottom(animated: Bool)
     case userMessage(direction: String)
     case message(id: String, highlight: Bool)
     case restore(NativeChatScrollPosition)
+}
+
+/// History readiness is independent of whether any visible messages have arrived.
+public struct NativeChatLoadingState: Equatable {
+    public enum Phase: String { case loading, ready, failed }
+    public let phase: Phase
+    public let label: String
+    public let detail: String?
+    public let fraction: Double?
+
+    public static let loading = NativeChatLoadingState(phase: .loading, label: "Loading chat…", detail: nil, fraction: nil)
+    public static let ready = NativeChatLoadingState(phase: .ready, label: "", detail: nil, fraction: nil)
+
+    public init?(wire: [String: Any]) {
+        guard let rawPhase = wire["phase"] as? String, let phase = Phase(rawValue: rawPhase) else { return nil }
+        self.phase = phase
+        label = wire["label"] as? String ?? (phase == .failed ? "Couldn’t load this chat’s messages" : "Loading chat…")
+        detail = wire["detail"] as? String
+        if let number = (wire["fraction"] as? NSNumber)?.doubleValue, number.isFinite {
+            fraction = min(1, max(0, number))
+        } else { fraction = nil }
+    }
+
+    private init(phase: Phase, label: String, detail: String?, fraction: Double?) {
+        self.phase = phase
+        self.label = label
+        self.detail = detail
+        self.fraction = fraction
+    }
 }
 
 /// Leaf `ObservableObject` backing the native chat scroller.
@@ -610,15 +740,22 @@ public enum NativeChatScrollCommand: Equatable {
 @MainActor
 public final class NativeChatMessageStore: ObservableObject {
     @Published public private(set) var messages: [NativeChatMessage] = []
-    public private(set) var rows: [NativeChatRow] = [] {
-        didSet {
-            webRowIdByNativeRowId = Self.buildWebRowIdMap(for: rows)
-        }
-    }
+    public private(set) var rows: [NativeChatRow] = []
+    /// Row IDs mutated by the most recent incremental update (`nil` when all rows were rebuilt).
+    public private(set) var lastChangedRowIds: Set<String>? = nil
     public private(set) var truncatedCount: Int = 0
     public private(set) var currentChatId: String? = nil
+    public private(set) var loadingState: NativeChatLoadingState = .loading
 
-    /// Scroll restoration captured from Web Chat when toggling or switching into Native Chat.
+    /// Progress changes publish without rebuilding messages or their layout.
+    public func applyLoadingState(_ state: NativeChatLoadingState, chatId: String) {
+        guard chatId == currentChatId, state != loadingState else { return }
+        loadingState = state
+        objectWillChange.send()
+    }
+
+    /// The web chat's place, kept when Native Chat is turned on from it. A chat
+    /// that is entered has none: it opens at its end.
     public var pendingScrollRestoration: NativeChatScrollPosition? = nil
     /// Latest scroll snapshot recorded by `NativeChatView` for syncing back to Web Chat.
     public var lastScrollSnapshot: NativeChatScrollPosition? = nil
@@ -630,30 +767,134 @@ public final class NativeChatMessageStore: ObservableObject {
         awaitingWebToggleRestore = true
     }
 
+    /// The app opened a chat: it shows its end (`NativeChatScrollCommand.enter`),
+    /// and a place kept from the web chat no longer applies. The app turns
+    /// Native Chat on from its saved setting at launch, which marks a web-chat
+    /// switch; without this the first chat opened after a launch restored the
+    /// page's saved place for it instead of opening at its end.
+    public func enterChat() {
+        awaitingWebToggleRestore = false
+        pendingScrollRestoration = nil
+        scrollCommands.send(.enter)
+    }
+
     /// What this store takes from the page's forwarder, passed whenever forwarding
     /// is turned on. A page only sends a `patch` to an app that says so here: an
     /// older app logs one as malformed and drops it.
-    nonisolated public static let forwardingFeaturesJSON = "{ patch: true }"
+    /// Lean forwarding: while Native Chat draws, the page stops its own chat
+    /// pipeline and sends coalesced changes at most every 33 ms. On by default
+    /// (27 October 2026, the native chat CPU work); Settings > Debug > Native
+    /// Chat Performance, or `-perfOff leanForwarding` in a debug build, asks
+    /// for the old forwarding to compare.
+    nonisolated public static var forwardingFeaturesJSON: String {
+        PerfSwitch.isOff("leanForwarding") || !NativeChatPerformance.isEnabled(.leanForwarding)
+            ? "{ patch: true, loading: true }"
+            : "{ patch: true, loading: true, lean: true, flushMs: 33 }"
+    }
 
     /// Imperative scroll commands from `AgentBridge` or in-chat interactions.
     public let scrollCommands = PassthroughSubject<NativeChatScrollCommand, Never>()
 
     /// id → index into `messages`, so add/update are O(1) instead of O(n).
-    private var indexById: [String: Int] = []
-        .reduce(into: [String: Int]()) { _, _ in }
+    private var indexById: [String: Int] = [:]
+
+    /// Native row id (`NativeChatRow.id`) → index into `rows` for O(1) in-place row updates.
+    private var rowIndexById: [String: Int] = [:]
+
+    /// Raw IDs of current `.toolGroup` rows (`group.id`), used to map `.thinking` rows to `header_` vs `thinking_`.
+    private var toolGroupRawIds: Set<String> = []
 
     /// Native row id (`NativeChatRow.id`) → web row id (`header_…`, `thinking_…`, `gap_…`, or message id),
-    /// rebuilt whenever `rows` changes so `resolveWebRowId(forNativeRowId:)` is O(1).
+    /// kept in sync whenever `rows` changes so `resolveWebRowId(forNativeRowId:)` is O(1).
     private var webRowIdByNativeRowId: [String: String] = [:]
+
+    /// Accumulated dirty row IDs since the window coordinator last consumed them.
+    private var accumulatedDirtyRowIds: Set<String> = []
+    private var dirtyRowsRequireFullScan: Bool = true
 
     public init() {}
 
-    private static func buildWebRowIdMap(for rows: [NativeChatRow]) -> [String: String] {
-        var toolGroupRawIds = Set<String>()
-        for row in rows {
+    /// Consumes the union of row IDs that changed since the last call, or returns `nil`
+    /// if a full rebuild/backfill occurred and all rows must be re-evaluated.
+    public func consumeDirtyRowIds() -> Set<String>? {
+        guard NativeChatPerformance.isEnabled(.incrementalRows) else {
+            dirtyRowsRequireFullScan = true
+            accumulatedDirtyRowIds.removeAll(keepingCapacity: true)
+            return nil
+        }
+        if dirtyRowsRequireFullScan {
+            dirtyRowsRequireFullScan = false
+            accumulatedDirtyRowIds.removeAll(keepingCapacity: true)
+            return nil
+        }
+        let dirty = accumulatedDirtyRowIds
+        accumulatedDirtyRowIds.removeAll(keepingCapacity: true)
+        return dirty
+    }
+
+    /// Marks dirty-row tracking as requiring a full scan on the next consumption
+    /// (for example when a view holds intermediate row publications during a scroll coast).
+    public func invalidateDirtyRowTracking() {
+        dirtyRowsRequireFullScan = true
+        accumulatedDirtyRowIds.removeAll(keepingCapacity: true)
+    }
+
+    private func replaceAllRows(_ newRows: [NativeChatRow], dirtyRowIds: Set<String>? = nil) {
+        rows = newRows
+        var nextRowIndex: [String: Int] = [:]
+        nextRowIndex.reserveCapacity(newRows.count)
+        var nextToolGroupRawIds = Set<String>()
+        for (idx, row) in newRows.enumerated() {
+            nextRowIndex[row.id] = idx
             if case .toolGroup(let group) = row {
-                toolGroupRawIds.insert(group.id)
+                nextToolGroupRawIds.insert(group.id)
             }
+        }
+        rowIndexById = nextRowIndex
+        toolGroupRawIds = nextToolGroupRawIds
+        webRowIdByNativeRowId = Self.buildWebRowIdMap(for: newRows, toolGroupRawIds: nextToolGroupRawIds)
+        if let dirtyRowIds {
+            lastChangedRowIds = dirtyRowIds
+            if !dirtyRowsRequireFullScan {
+                accumulatedDirtyRowIds.formUnion(dirtyRowIds)
+            }
+        } else {
+            lastChangedRowIds = nil
+            dirtyRowsRequireFullScan = true
+            accumulatedDirtyRowIds.removeAll(keepingCapacity: true)
+        }
+    }
+
+    private func updateWebRowIdEntry(for row: NativeChatRow) {
+        switch row {
+        case .toolGroup(let group):
+            webRowIdByNativeRowId[row.id] = "header_\(group.id)"
+        case .thinking(let msg):
+            let webId = toolGroupRawIds.contains(msg.id) ? "header_\(msg.id)" : "thinking_\(msg.id)"
+            webRowIdByNativeRowId[row.id] = webId
+            webRowIdByNativeRowId[msg.id] = webId
+        case .gap(let gap):
+            webRowIdByNativeRowId[row.id] = "gap_\(gap.id)"
+        case .user, .note, .assistant, .taskNotification, .systemStatus, .error, .cliEvent:
+            webRowIdByNativeRowId[row.id] = row.id
+        }
+    }
+
+    private static func buildWebRowIdMap(
+        for rows: [NativeChatRow],
+        toolGroupRawIds: Set<String>? = nil
+    ) -> [String: String] {
+        let resolvedToolGroupIds: Set<String>
+        if let toolGroupRawIds {
+            resolvedToolGroupIds = toolGroupRawIds
+        } else {
+            var set = Set<String>()
+            for row in rows {
+                if case .toolGroup(let group) = row {
+                    set.insert(group.id)
+                }
+            }
+            resolvedToolGroupIds = set
         }
         var map: [String: String] = [:]
         map.reserveCapacity(rows.count * 2)
@@ -662,7 +903,7 @@ public final class NativeChatMessageStore: ObservableObject {
             case .toolGroup(let group):
                 map[row.id] = "header_\(group.id)"
             case .thinking(let msg):
-                let webId = toolGroupRawIds.contains(msg.id) ? "header_\(msg.id)" : "thinking_\(msg.id)"
+                let webId = resolvedToolGroupIds.contains(msg.id) ? "header_\(msg.id)" : "thinking_\(msg.id)"
                 map[row.id] = webId
                 map[msg.id] = webId
             case .gap(let gap):
@@ -749,7 +990,8 @@ public final class NativeChatMessageStore: ObservableObject {
         _ entries: [[String: Any]],
         truncatedCount newTruncatedCount: Int = 0,
         chatId: String? = nil,
-        scrollPosition: [String: Any]? = nil
+        scrollPosition: [String: Any]? = nil,
+        loadingState newLoadingState: NativeChatLoadingState = .ready
     ) {
         let incoming = entries.compactMap(Self.parseMessage)
         var dedupById: [String: Int] = [:]
@@ -775,26 +1017,32 @@ public final class NativeChatMessageStore: ObservableObject {
         let isToggleRestore = awaitingWebToggleRestore
         awaitingWebToggleRestore = false
         let resolvedChatId = chatId ?? currentChatId ?? sorted.last?.chatId
-        if chatChanged && scrollPosition == nil {
+        // A chat that is entered opens at its end (Peter, 27 Oct 2026), so the
+        // place the page saved for it is not restored. Only turning Native Chat
+        // on from the web chat keeps the reader's place.
+        if chatChanged && !isToggleRestore {
             pendingScrollRestoration = nil
+            if let cid = resolvedChatId, !cid.isEmpty {
+                lastScrollSnapshot = NativeChatScrollPosition(chatId: cid, webRowId: nil, offset: 0, following: true)
+            }
         }
         var parsedScroll: NativeChatScrollPosition? = nil
-        if let scrollPosition, let cid = resolvedChatId, !cid.isEmpty {
+        if isToggleRestore, let scrollPosition, let cid = resolvedChatId, !cid.isEmpty {
             let following = (scrollPosition["following"] as? Bool) ?? true
             let rawRowId = scrollPosition["rowId"] as? String
             let rowId = (rawRowId?.isEmpty == false) ? rawRowId : nil
             let offset = (scrollPosition["offset"] as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0
             let pos = NativeChatScrollPosition(chatId: cid, webRowId: rowId, offset: offset, following: following)
             lastScrollSnapshot = pos
-            if chatChanged || wasEmpty || isToggleRestore {
-                pendingScrollRestoration = pos
-                parsedScroll = pos
-            }
+            pendingScrollRestoration = pos
+            parsedScroll = pos
         } else if wasEmpty, let pending = pendingScrollRestoration, pending.chatId == resolvedChatId {
+            // A switch whose first rows arrived empty (the chat was still loading).
             parsedScroll = pending
         }
 
-        guard sorted != messages || newTruncatedCount != truncatedCount || chatChanged else {
+        let loadingChanged = newLoadingState != loadingState
+        guard sorted != messages || newTruncatedCount != truncatedCount || chatChanged || loadingChanged else {
             if isToggleRestore, let parsedScroll, !rows.isEmpty {
                 scrollCommands.send(.restore(parsedScroll))
             }
@@ -805,8 +1053,9 @@ public final class NativeChatMessageStore: ObservableObject {
             indexById[msg.id] = idx
         }
         truncatedCount = newTruncatedCount
+        loadingState = newLoadingState
         if let chatId { currentChatId = chatId }
-        rows = Self.buildRows(from: sorted, previousRows: chatChanged ? [] : rows)
+        replaceAllRows(Self.buildRows(from: sorted, previousRows: chatChanged ? [] : rows), dirtyRowIds: nil)
         if #available(iOS 16.0, macOS 14.0, *) {
             NativeChatImagePreloader.shared.preload(messages: sorted)
         }
@@ -817,6 +1066,16 @@ public final class NativeChatMessageStore: ObservableObject {
         }
         if let parsedScroll, !rows.isEmpty {
             scrollCommands.send(.restore(parsedScroll))
+        }
+    }
+
+    private static func isTerminalStatus(_ status: String?) -> Bool {
+        guard let lower = status?.lowercased() else { return false }
+        switch lower {
+        case "complete", "completed", "success", "error", "failed", "cancelled", "canceled", "stopped", "done", "killed", "ended", "orphaned":
+            return true
+        default:
+            return false
         }
     }
 
@@ -834,51 +1093,117 @@ public final class NativeChatMessageStore: ObservableObject {
         truncatedCount newTruncatedCount: Int = 0,
         chatId: String? = nil
     ) {
+        if let chatId, let currentChatId, chatId != currentChatId { return }
         if messages.isEmpty || currentChatId == nil {
-            applyBackfill(entries, truncatedCount: newTruncatedCount, chatId: chatId)
+            applyBackfill(entries, truncatedCount: newTruncatedCount, chatId: chatId, loadingState: loadingState)
             return
         }
-        if let chatId, chatId != currentChatId { return }
         let incoming = entries.compactMap(Self.parseMessage)
         var next = messages
         var changed = false
+        var addedAny = false
+        var removedAny = false
+        var timestampChanged = false
+        var appendedOutOfOrder = false
+        var changedIndices: [Int] = []
+        var dirtyMessageIds: Set<String> = []
+
         if !removedIds.isEmpty {
             let removed = Set(removedIds)
             let before = next.count
             next.removeAll { removed.contains($0.id) }
-            changed = next.count != before
+            if next.count != before {
+                changed = true
+                removedAny = true
+                dirtyMessageIds.formUnion(removed)
+            }
         }
-        var position: [String: Int] = [:]
-        for (idx, msg) in next.enumerated() { position[msg.id] = idx }
+
+        let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
+        let canUseExistingIndex = incremental && !removedAny
+        var fallbackPosition: [String: Int] = [:]
+        if !canUseExistingIndex {
+            for (idx, msg) in next.enumerated() { fallbackPosition[msg.id] = idx }
+        }
+
         for msg in incoming {
-            if let idx = position[msg.id] {
+            if let idx = canUseExistingIndex ? indexById[msg.id] : fallbackPosition[msg.id] {
+                let existing = next[idx]
                 var merged = msg
-                merged.thinking = msg.thinking ?? next[idx].thinking
-                if msg.thinking == nil { merged.isThinkingStreaming = next[idx].isThinkingStreaming }
-                if msg.content.isEmpty { merged.content = next[idx].content }
-                if merged != next[idx] {
+                merged.thinking = msg.thinking ?? existing.thinking
+                if msg.status == nil { merged.status = existing.status }
+                if Self.isTerminalStatus(merged.status) {
+                    merged.isThinkingStreaming = false
+                } else if msg.thinking == nil {
+                    merged.isThinkingStreaming = existing.isThinkingStreaming
+                }
+                if msg.content.isEmpty { merged.content = existing.content }
+                if merged != existing {
+                    if merged.timestamp != existing.timestamp {
+                        timestampChanged = true
+                    }
                     next[idx] = merged
                     changed = true
+                    changedIndices.append(idx)
+                    dirtyMessageIds.insert(merged.id)
                 }
             } else {
-                position[msg.id] = next.count
-                next.append(msg)
+                var inserted = msg
+                if Self.isTerminalStatus(inserted.status) {
+                    inserted.isThinkingStreaming = false
+                }
+                if let lastTs = next.last?.timestamp, inserted.timestamp < lastTs {
+                    appendedOutOfOrder = true
+                }
+                let newIdx = next.count
+                if canUseExistingIndex {
+                    indexById[inserted.id] = newIdx
+                } else {
+                    fallbackPosition[inserted.id] = newIdx
+                }
+                next.append(inserted)
                 changed = true
+                addedAny = true
+                dirtyMessageIds.insert(inserted.id)
             }
         }
         let countChanged = newTruncatedCount != truncatedCount
         guard changed || countChanged else { return }
-        // Chronological, ties in the order held (a new row after its equals), as a backfill sorts.
-        next = next.enumerated().sorted { lhs, rhs in
-            if lhs.element.timestamp != rhs.element.timestamp {
-                return lhs.element.timestamp < rhs.element.timestamp
-            }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
-        indexById = [:]
-        for (idx, msg) in next.enumerated() { indexById[msg.id] = idx }
+
+        let needsSortAndReindex = !incremental || removedAny || timestampChanged || appendedOutOfOrder
+        if needsSortAndReindex {
+            // Chronological, ties in the order held (a new row after its equals), as a backfill sorts.
+            next = next.enumerated().sorted { lhs, rhs in
+                if lhs.element.timestamp != rhs.element.timestamp {
+                    return lhs.element.timestamp < rhs.element.timestamp
+                }
+                return lhs.offset < rhs.offset
+            }.map(\.element)
+            indexById = [:]
+            for (idx, msg) in next.enumerated() { indexById[msg.id] = idx }
+        }
+
         truncatedCount = newTruncatedCount
-        rows = Self.buildRows(from: next, previousRows: rows)
+
+        if incremental, !needsSortAndReindex, !addedAny, !changedIndices.isEmpty,
+           tryInPlaceRowUpdate(from: messages, to: next, changedIndices: changedIndices) {
+            if #available(iOS 16.0, macOS 14.0, *) {
+                NativeChatImagePreloader.shared.preload(messages: incoming)
+            }
+            if next == messages {
+                objectWillChange.send()
+            } else {
+                messages = next
+            }
+            return
+        }
+
+        let built = Self.buildRowsWithDirtyIds(
+            from: next,
+            previousRows: rows,
+            dirtyMessageIds: (!incremental || needsSortAndReindex) ? nil : dirtyMessageIds
+        )
+        replaceAllRows(built.rows, dirtyRowIds: incremental ? built.dirtyRowIds : nil)
         if #available(iOS 16.0, macOS 14.0, *) {
             NativeChatImagePreloader.shared.preload(messages: incoming)
         }
@@ -897,34 +1222,45 @@ public final class NativeChatMessageStore: ObservableObject {
         let streaming = thinking?["isStreaming"] as? Bool ?? false
 
         if let idx = indexById[id] {
-            var updated = messages[idx]
-            if let content { updated.thinking = content }
-            updated.isThinkingStreaming = streaming
-            if updated != messages[idx] {
+            let existing = messages[idx]
+            var updated = existing
+            if let content, !content.isEmpty || existing.thinking == nil {
+                updated.thinking = content
+            }
+            updated.isThinkingStreaming = streaming && !Self.isTerminalStatus(updated.status)
+            if updated != existing {
+                let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
                 var next = messages
                 next[idx] = updated
-                rows = Self.buildRows(from: next, previousRows: rows)
+                if !incremental || !tryInPlaceRowUpdate(from: messages, to: next, changedIndices: [idx]) {
+                    let built = Self.buildRowsWithDirtyIds(from: next, previousRows: rows, dirtyMessageIds: incremental ? [id] : nil)
+                    replaceAllRows(built.rows, dirtyRowIds: incremental ? built.dirtyRowIds : nil)
+                }
                 messages = next
             }
         } else {
             // Update before add — materialise a placeholder so streaming is visible.
+            let status = msg["status"] as? String
             let placeholder = NativeChatMessage(
                 id: id,
                 chatId: msg["chatId"] as? String,
                 role: .assistant,
                 content: "",
+                status: status,
                 thinking: content,
-                isThinkingStreaming: streaming,
+                isThinkingStreaming: streaming && !Self.isTerminalStatus(status),
                 timestamp: (msg["timestamp"] as? NSNumber)?.doubleValue ?? Date().timeIntervalSince1970 * 1000
             )
             upsert(placeholder)
         }
     }
 
-    /// Optimistically mark an `askUser` question as answered from `NativeChatView`.
+    /// Record an acknowledged answer (live cards wait for the web transport snapshot).
     public func markQuestionAnswered(messageId: String, answer: String, selectedValues: [String] = []) {
         guard let idx = indexById[messageId], var ask = messages[idx].askUser else { return }
         ask.completed = true
+        ask.submitting = false
+        ask.submissionError = nil
         ask.answer = answer
         if !selectedValues.isEmpty {
             ask.selectedValues = selectedValues
@@ -934,17 +1270,46 @@ public final class NativeChatMessageStore: ObservableObject {
         var updated = messages[idx]
         updated.askUser = ask
         updated.status = "complete"
+        updated.isThinkingStreaming = false
         if updated != messages[idx] {
+            let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
             var next = messages
             next[idx] = updated
-            rows = Self.buildRows(from: next, previousRows: rows)
+            if !incremental || !tryInPlaceRowUpdate(from: messages, to: next, changedIndices: [idx]) {
+                let built = Self.buildRowsWithDirtyIds(from: next, previousRows: rows, dirtyMessageIds: incremental ? [messageId] : nil)
+                replaceAllRows(built.rows, dirtyRowIds: incremental ? built.dirtyRowIds : nil)
+            }
             messages = next
         }
     }
 
+    /// Settle any remaining `isThinkingStreaming` flags when a chat's turn ends,
+    /// preserving accumulated `thinking` text.
+    public func settleStreaming(chatId: String? = nil) {
+        if let chatId, let currentChatId, chatId != currentChatId { return }
+        var changedIndices: [Int] = []
+        var next = messages
+        for idx in next.indices where next[idx].isThinkingStreaming {
+            if let chatId, let msgChatId = next[idx].chatId, msgChatId != chatId {
+                continue
+            }
+            next[idx].isThinkingStreaming = false
+            changedIndices.append(idx)
+        }
+        guard !changedIndices.isEmpty else { return }
+        let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
+        if !incremental || !tryInPlaceRowUpdate(from: messages, to: next, changedIndices: changedIndices) {
+            let dirtyIds = Set(changedIndices.map { next[$0].id })
+            let built = Self.buildRowsWithDirtyIds(from: next, previousRows: rows, dirtyMessageIds: incremental ? dirtyIds : nil)
+            replaceAllRows(built.rows, dirtyRowIds: incremental ? built.dirtyRowIds : nil)
+        }
+        messages = next
+    }
+
     public func clear() {
-        guard !messages.isEmpty || truncatedCount != 0 else { return }
-        rows = []
+        guard !messages.isEmpty || truncatedCount != 0 || loadingState != .loading else { return }
+        loadingState = .loading
+        replaceAllRows([], dirtyRowIds: nil)
         truncatedCount = 0
         indexById.removeAll()
         messages.removeAll()
@@ -956,52 +1321,237 @@ public final class NativeChatMessageStore: ObservableObject {
         }
         if let idx = indexById[msg.id] {
             // Merge — never clobber accumulated streaming state with an empty add.
+            let existing = messages[idx]
             var merged = msg
-            merged.thinking = msg.thinking ?? messages[idx].thinking
-            if msg.thinking == nil { merged.isThinkingStreaming = messages[idx].isThinkingStreaming }
-            if msg.content.isEmpty { merged.content = messages[idx].content }
-            if merged != messages[idx] {
+            merged.thinking = msg.thinking ?? existing.thinking
+            if msg.status == nil { merged.status = existing.status }
+            if Self.isTerminalStatus(merged.status) {
+                merged.isThinkingStreaming = false
+            } else if msg.thinking == nil {
+                merged.isThinkingStreaming = existing.isThinkingStreaming
+            }
+            if msg.content.isEmpty { merged.content = existing.content }
+            if merged != existing {
+                let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
                 var next = messages
                 next[idx] = merged
-                rows = Self.buildRows(from: next, previousRows: rows)
+                if incremental,
+                   merged.timestamp == existing.timestamp,
+                   tryInPlaceRowUpdate(from: messages, to: next, changedIndices: [idx]) {
+                    messages = next
+                    return
+                }
+                let timestampChanged = merged.timestamp != existing.timestamp
+                if timestampChanged {
+                    // An update-before-add placeholder uses arrival time. The
+                    // persisted add must restore transcript order, as patches do.
+                    next = next.enumerated().sorted { lhs, rhs in
+                        if lhs.element.timestamp != rhs.element.timestamp {
+                            return lhs.element.timestamp < rhs.element.timestamp
+                        }
+                        return lhs.offset < rhs.offset
+                    }.map(\.element)
+                    indexById = [:]
+                    for (i, item) in next.enumerated() {
+                        indexById[item.id] = i
+                    }
+                }
+                let built = Self.buildRowsWithDirtyIds(
+                    from: next,
+                    previousRows: rows,
+                    dirtyMessageIds: (!incremental || timestampChanged) ? nil : [merged.id]
+                )
+                replaceAllRows(built.rows, dirtyRowIds: incremental ? built.dirtyRowIds : nil)
                 messages = next
             }
         } else {
+            let incremental = NativeChatPerformance.isEnabled(.incrementalRows)
+            var inserted = msg
+            if Self.isTerminalStatus(inserted.status) {
+                inserted.isThinkingStreaming = false
+            }
             var next = messages
-            if msg.timestamp > 0, let insertIdx = next.firstIndex(where: { $0.timestamp > msg.timestamp }) {
-                next.insert(msg, at: insertIdx)
+            var insertedOutOfOrder = false
+            if inserted.timestamp > 0, let insertIdx = next.firstIndex(where: { $0.timestamp > inserted.timestamp }) {
+                next.insert(inserted, at: insertIdx)
+                insertedOutOfOrder = true
                 indexById = [:]
                 for (i, item) in next.enumerated() {
                     indexById[item.id] = i
                 }
             } else {
-                indexById[msg.id] = next.count
-                next.append(msg)
+                indexById[inserted.id] = next.count
+                next.append(inserted)
             }
-            rows = Self.buildRows(from: next, previousRows: rows)
+            let built = Self.buildRowsWithDirtyIds(
+                from: next,
+                previousRows: rows,
+                dirtyMessageIds: (!incremental || insertedOutOfOrder) ? nil : [inserted.id]
+            )
+            replaceAllRows(built.rows, dirtyRowIds: incremental ? built.dirtyRowIds : nil)
             messages = next
         }
+    }
+
+    // MARK: - In-Place Content / Thinking Row Fast Path
+
+    /// Computes the non-tool row(s) produced by a single message in isolation (excluding conversation gap rows).
+    /// Returns `nil` if the message is a tool row or would change visibility.
+    private static func singleNonToolRows(for msg: NativeChatMessage) -> [NativeChatRow]? {
+        if msg.hiddenInChat || msg.mergedIntoQuestionId != nil || msg.isToolRow {
+            return nil
+        }
+        if msg.taskNotification != nil {
+            return [.taskNotification(msg)]
+        } else if msg.isNote || msg.method == "user-note" || msg.artefactRef != nil {
+            var out: [NativeChatRow] = []
+            if let thinking = msg.thinking, !thinking.isEmpty {
+                out.append(.thinking(msg))
+            }
+            out.append(.note(msg))
+            return out
+        } else if msg.role == .user {
+            return [.user(msg)]
+        } else if msg.systemStatus != nil || msg.method == "system-status" {
+            return [.systemStatus(msg)]
+        } else if let cliEvent = msg.cliEvent {
+            if cliEvent.kind == "rate_limit" && !UserDefaults.standard.bool(forKey: "ripul.showNativeHiddenPanels") {
+                return []
+            }
+            return [.cliEvent(msg)]
+        } else if (msg.method ?? "").hasPrefix("cli.") {
+            return []
+        } else if msg.errorInfo != nil || (msg.status == "error" && msg.askUser == nil && msg.content.isEmpty) {
+            return [.error(msg)]
+        } else if msg.content.isEmpty && msg.askUser == nil && msg.table == nil && msg.tabs.isEmpty && msg.imageAttachments.isEmpty && msg.videoAttachments.isEmpty {
+            if let thinking = msg.thinking, !thinking.isEmpty {
+                return [.thinking(msg)]
+            } else {
+                return [.assistant(msg)]
+            }
+        } else {
+            return [.assistant(msg)]
+        }
+    }
+
+    /// Attempts to update `rows` in-place when only existing messages changed content/thinking/status
+    /// without altering row IDs, row count, timestamps, or tool-group structure.
+    private func tryInPlaceRowUpdate(
+        from oldMessages: [NativeChatMessage],
+        to newMessages: [NativeChatMessage],
+        changedIndices: [Int]
+    ) -> Bool {
+        guard NativeChatPerformance.isEnabled(.incrementalRows) else { return false }
+        var pendingRowUpdates: [(rowIdx: Int, newRow: NativeChatRow)] = []
+        var dirtyRowIds: Set<String> = []
+
+        for idx in changedIndices {
+            let oldMsg = oldMessages[idx]
+            let newMsg = newMessages[idx]
+            guard oldMsg.timestamp == newMsg.timestamp,
+                  oldMsg.role == newMsg.role,
+                  oldMsg.isNote == newMsg.isNote,
+                  oldMsg.hiddenInChat == newMsg.hiddenInChat,
+                  oldMsg.mergedIntoQuestionId == newMsg.mergedIntoQuestionId,
+                  oldMsg.isToolRow == newMsg.isToolRow else {
+                return false
+            }
+
+            if newMsg.isToolRow {
+                // Fast path for streaming thinking updates on a tool row when tool fields didn't change
+                let oldHasThinking = !(oldMsg.thinking ?? "").isEmpty
+                let newHasThinking = !(newMsg.thinking ?? "").isEmpty
+                guard oldHasThinking && newHasThinking,
+                      oldMsg.chatId == newMsg.chatId,
+                      oldMsg.toolCall == newMsg.toolCall,
+                      oldMsg.status == newMsg.status,
+                      oldMsg.label == newMsg.label,
+                      oldMsg.method == newMsg.method,
+                      oldMsg.summary == newMsg.summary else {
+                    return false
+                }
+                let updatedRow = NativeChatRow.thinking(newMsg)
+                let thinkingRowId = updatedRow.id
+                guard let rowIdx = rowIndexById[thinkingRowId] else { return false }
+                pendingRowUpdates.append((rowIdx, updatedRow))
+                dirtyRowIds.insert(thinkingRowId)
+                continue
+            }
+
+            guard let oldMessageRows = Self.singleNonToolRows(for: oldMsg),
+                  let newMessageRows = Self.singleNonToolRows(for: newMsg),
+                  oldMessageRows.count == newMessageRows.count else {
+                return false
+            }
+
+            for (oldRow, newRow) in zip(oldMessageRows, newMessageRows) {
+                guard oldRow.id == newRow.id,
+                      let rowIdx = rowIndexById[newRow.id] else {
+                    return false
+                }
+                if oldRow != newRow {
+                    pendingRowUpdates.append((rowIdx, newRow))
+                    dirtyRowIds.insert(newRow.id)
+                }
+            }
+        }
+
+        var nextRows = rows
+        for (rowIdx, newRow) in pendingRowUpdates {
+            nextRows[rowIdx] = newRow
+            updateWebRowIdEntry(for: newRow)
+        }
+        lastChangedRowIds = dirtyRowIds
+        if !dirtyRowsRequireFullScan {
+            accumulatedDirtyRowIds.formUnion(dirtyRowIds)
+        }
+        rows = nextRows
+        return true
     }
 
     // MARK: - Row Builder (Conversations Gaps + Tool Strip Grouping)
 
     static func buildRows(from messages: [NativeChatMessage], previousRows: [NativeChatRow] = []) -> [NativeChatRow] {
+        buildRowsWithDirtyIds(from: messages, previousRows: previousRows, dirtyMessageIds: nil).rows
+    }
+
+    static func buildRowsWithDirtyIds(
+        from messages: [NativeChatMessage],
+        previousRows: [NativeChatRow] = [],
+        dirtyMessageIds: Set<String>? = nil
+    ) -> (rows: [NativeChatRow], dirtyRowIds: Set<String>?) {
+        let effectiveDirtyMessageIds = NativeChatPerformance.isEnabled(.incrementalRows) ? dirtyMessageIds : nil
         var result: [NativeChatRow] = []
+        result.reserveCapacity(previousRows.count + 4)
         var pendingTools: [NativeChatMessage] = []
         var previousTimestamp: Double? = nil
         var existingGroupIdByCallId: [String: String] = [:]
+        var existingGroupByCallIds: [[String]: NativeChatToolGroup] = [:]
+        var previousRowById: [String: NativeChatRow] = [:]
+        previousRowById.reserveCapacity(previousRows.count)
         var usedGroupIds: Set<String> = []
         for row in previousRows {
+            previousRowById[row.id] = row
             if case .toolGroup(let group) = row {
                 for callId in group.allCallIds {
                     existingGroupIdByCallId[callId] = group.id
+                }
+                if effectiveDirtyMessageIds != nil {
+                    existingGroupByCallIds[group.allCallIds] = group
                 }
             }
         }
 
         func flushTools() {
             guard !pendingTools.isEmpty else { return }
-            if let group = buildToolGroup(
+            if let effectiveDirtyMessageIds,
+               pendingTools.allSatisfy({ !effectiveDirtyMessageIds.contains($0.id) }),
+               let reusable = existingGroupByCallIds[pendingTools.map(\.id)],
+               pendingTools.contains(where: { $0.id == reusable.id }),
+               !usedGroupIds.contains(reusable.id) {
+                usedGroupIds.insert(reusable.id)
+                result.append(.toolGroup(reusable))
+            } else if let group = buildToolGroup(
                 from: pendingTools,
                 existingGroupIdByCallId: existingGroupIdByCallId,
                 usedGroupIds: &usedGroupIds
@@ -1061,7 +1611,7 @@ public final class NativeChatMessageStore: ObservableObject {
                 continue
             } else if msg.errorInfo != nil || (msg.status == "error" && msg.askUser == nil && msg.content.isEmpty) {
                 result.append(.error(msg))
-            } else if msg.content.isEmpty && msg.askUser == nil && msg.table == nil && msg.tabs.isEmpty && msg.imageAttachments.isEmpty {
+            } else if msg.content.isEmpty && msg.askUser == nil && msg.table == nil && msg.tabs.isEmpty && msg.imageAttachments.isEmpty && msg.videoAttachments.isEmpty {
                 if let thinking = msg.thinking, !thinking.isEmpty {
                     result.append(.thinking(msg))
                 } else {
@@ -1073,7 +1623,45 @@ public final class NativeChatMessageStore: ObservableObject {
         }
 
         flushTools()
-        return result
+
+        var seenRowIds = Set<String>(minimumCapacity: result.count)
+        var hasDuplicateRowId = false
+        for row in result {
+            if !seenRowIds.insert(row.id).inserted {
+                hasDuplicateRowId = true
+                break
+            }
+        }
+        if hasDuplicateRowId {
+            seenRowIds.removeAll(keepingCapacity: true)
+            result = result.filter { seenRowIds.insert($0.id).inserted }
+            return (result, nil)
+        }
+
+        guard effectiveDirtyMessageIds != nil, !previousRows.isEmpty else {
+            return (result, nil)
+        }
+        var dirtyRowIds: Set<String> = []
+        if result.count != previousRows.count {
+            for row in result {
+                if previousRowById[row.id] != row {
+                    dirtyRowIds.insert(row.id)
+                }
+            }
+            for oldRow in previousRows where !seenRowIds.contains(oldRow.id) {
+                dirtyRowIds.insert(oldRow.id)
+            }
+        } else {
+            for (oldRow, newRow) in zip(previousRows, result) {
+                if oldRow.id != newRow.id {
+                    dirtyRowIds.insert(oldRow.id)
+                    dirtyRowIds.insert(newRow.id)
+                } else if oldRow != newRow {
+                    dirtyRowIds.insert(newRow.id)
+                }
+            }
+        }
+        return (result, dirtyRowIds)
     }
 
     private static func buildToolGroup(
@@ -1103,26 +1691,23 @@ public final class NativeChatMessageStore: ObservableObject {
         for msg in messages {
             allCallIds.append(msg.id)
             if let tc = msg.toolCall {
-                if let detail = tc.detail {
-                    calls.append(detail)
-                } else {
-                    calls.append(Self.FallbackToolDetail(for: msg))
-                }
+                let resolvedDetail = tc.detail ?? Self.FallbackToolDetail(for: msg)
+                calls.append(resolvedDetail)
                 if let run = tc.taskRun, let kind = tc.taskRunKind {
-                    taskRuns.append(NativeChatTaskRunItem(id: run.id, kind: kind, snapshot: run))
+                    taskRuns.append(NativeChatTaskRunItem(id: resolvedDetail.id, kind: kind, snapshot: run))
                 } else if let comms = tc.agentComms {
                     agentComms.append(
                         NativeChatAgentCommsItem(
-                            id: msg.id,
+                            id: resolvedDetail.id,
                             timestamp: msg.timestamp,
                             presentation: comms,
-                            detail: tc.detail ?? Self.FallbackToolDetail(for: msg)
+                            detail: resolvedDetail
                         )
                     )
                 } else {
                     stripCandidates.append(
                         RawCallItem(
-                            id: tc.id,
+                            id: resolvedDetail.id,
                             label: tc.label,
                             rendererName: tc.rendererName,
                             symbol: tc.symbol,
@@ -1199,10 +1784,25 @@ public final class NativeChatMessageStore: ObservableObject {
             callIdsByToolId[firstId] = entry.callIds
         }
 
-        let stableGroupId = allCallIds
+        // Only reuse an existing group ID if that ID is actually a member of THIS
+        // group's `allCallIds`. Otherwise, when a group `[call-1, call-2]` (whose ID
+        // was `"call-2"`) splits into `[call-1]` and `[call-2]` (or when `[call-1, call-2]`
+        // reorders across a thinking peer), the first subgroup would steal `"call-2"`
+        // via `existingGroupIdByCallId` and force the second subgroup `["call-2"]` to
+        // fall back to `first.id == "call-2"`, producing duplicate `"toolGroup:call-2"` row IDs.
+        let callIdSet = Set(allCallIds)
+        var stableGroupId = allCallIds
             .compactMap { existingGroupIdByCallId[$0] }
-            .first(where: { !usedGroupIds.contains($0) })
-            ?? (usedGroupIds.contains(first.id) ? (allCallIds.first(where: { !usedGroupIds.contains($0) }) ?? first.id) : first.id)
+            .first(where: { callIdSet.contains($0) && !usedGroupIds.contains($0) })
+            ?? allCallIds.first(where: { !usedGroupIds.contains($0) })
+            ?? first.id
+        if usedGroupIds.contains(stableGroupId) {
+            var suffix = 2
+            while usedGroupIds.contains("\(first.id)#\(suffix)") {
+                suffix += 1
+            }
+            stableGroupId = "\(first.id)#\(suffix)"
+        }
         usedGroupIds.insert(stableGroupId)
 
         return NativeChatToolGroup(
@@ -1238,6 +1838,18 @@ public final class NativeChatMessageStore: ObservableObject {
         )
     }
 
+    private static let sameYearGapFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE, d MMM · HH:mm"
+        return formatter
+    }()
+
+    private static let differentYearGapFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE, d MMM yyyy · HH:mm"
+        return formatter
+    }()
+
     /// Mirrors `conversationGaps.ts`: returns a formatted separator string if the day changed
     /// or at least 1 hour passed between `previousMs` and `currentMs`.
     static func conversationGapText(previousMs: Double, currentMs: Double) -> String? {
@@ -1255,9 +1867,8 @@ public final class NativeChatMessageStore: ObservableObject {
             return hours <= 1 ? "1 hour later" : "\(hours) hours later"
         }
 
-        let formatter = DateFormatter()
         let sameYear = calendar.component(.year, from: prevDate) == calendar.component(.year, from: currDate)
-        formatter.dateFormat = sameYear ? "EEE, d MMM · HH:mm" : "EEE, d MMM yyyy · HH:mm"
+        let formatter = sameYear ? sameYearGapFormatter : differentYearGapFormatter
         return formatter.string(from: currDate)
     }
 
@@ -1266,12 +1877,14 @@ public final class NativeChatMessageStore: ObservableObject {
     private static func parseMessage(_ msg: [String: Any]) -> NativeChatMessage? {
         guard let id = msg["messageId"] as? String, !id.isEmpty else { return nil }
         let role = NativeChatMessage.Role(rawValue: msg["role"] as? String ?? "") ?? .assistant
+        let status = msg["status"] as? String
+        let rawStreaming = (msg["thinking"] as? [String: Any])?["isStreaming"] as? Bool ?? false
         var incoming = NativeChatMessage(
             id: id,
             chatId: msg["chatId"] as? String,
             role: role,
             content: msg["content"] as? String ?? "",
-            status: msg["status"] as? String,
+            status: status,
             method: msg["method"] as? String,
             label: msg["label"] as? String,
             summary: msg["summary"] as? String,
@@ -1279,7 +1892,7 @@ public final class NativeChatMessageStore: ObservableObject {
             taskNotification: Self.parseTaskNotification(msg["taskNotification"]),
             senderLabel: msg["senderLabel"] as? String,
             thinking: (msg["thinking"] as? [String: Any])?["content"] as? String,
-            isThinkingStreaming: (msg["thinking"] as? [String: Any])?["isStreaming"] as? Bool ?? false,
+            isThinkingStreaming: rawStreaming && !Self.isTerminalStatus(status),
             timestamp: (msg["timestamp"] as? NSNumber)?.doubleValue ?? Date().timeIntervalSince1970 * 1000
         )
 
@@ -1287,7 +1900,13 @@ public final class NativeChatMessageStore: ObservableObject {
         incoming.mergedIntoQuestionId = msg["mergedIntoQuestionId"] as? String
         incoming.replyQuote = Self.parseReplyQuote(msg["replyQuote"])
         incoming.contextTags = Self.parseContextTags(msg["contextTags"])
+        incoming.contextAttachments = Self.parseContextAttachments(msg["contextAttachments"])
         incoming.imageAttachments = Self.parseImageAttachments(msg["imageAttachments"])
+        incoming.videoAttachments = (msg["videoAttachments"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let id = item["id"] as? String, let url = item["url"] as? String, !id.isEmpty, !url.isEmpty else { return nil }
+            return NativeChatVideoAttachment(id: id, url: url, posterUrl: item["posterUrl"] as? String,
+                                             name: item["name"] as? String, width: item["width"] as? Int, height: item["height"] as? Int)
+        }
         incoming.fileAttachments = Self.parseFileAttachments(msg["fileAttachments"])
         incoming.isVoice = msg["isVoice"] as? Bool ?? false
         incoming.isGroupChat = msg["isGroupChat"] as? Bool ?? false
@@ -1296,6 +1915,7 @@ public final class NativeChatMessageStore: ObservableObject {
         }
         incoming.avatarUrl = msg["avatarUrl"] as? String
         incoming.senderUserId = msg["senderUserId"] as? String
+        incoming.senderAgent = (msg["senderAgent"] as? [String: Any]).flatMap(NativeChatAgentSender.init)
         incoming.deliveryStatus = msg["deliveryStatus"] as? String
         incoming.respondent = Self.parseRespondent(msg["respondent"])
         incoming.tabs = Self.parseTabs(msg["tabs"])
@@ -1306,6 +1926,10 @@ public final class NativeChatMessageStore: ObservableObject {
         incoming.errorInfo = Self.parseErrorInfo(msg["errorInfo"])
         incoming.cliEvent = Self.parseCliEvent(msg["cliEvent"])
         incoming.toolCall = Self.parseToolCall(msg["toolCall"])
+        if role == .assistant, let call = incoming.toolCall?.detail, let speech = NativeChatSpeech(call) {
+            incoming.speech = speech
+            incoming.content = speech.text
+        }
         return incoming
     }
 
@@ -1352,17 +1976,22 @@ public final class NativeChatMessageStore: ObservableObject {
         }
         let tabs = parseTabs(dict["tabs"])
         let table = parseTable(dict["table"])
+        let responseKey = dict["responseKey"] as? String
+        let passwordInput = (dict["passwordInput"] as? Bool ?? false) || (responseKey?.hasPrefix("owner_browser_access_secret_") ?? false)
         return NativeAskUser(
             question: question,
             options: options,
             multiSelect: dict["multiSelect"] as? Bool ?? false,
             severity: dict["severity"] as? String,
-            expectsResponse: dict["expectsResponse"] as? Bool ?? (!options.isEmpty || dateInput != nil),
+            expectsResponse: dict["expectsResponse"] as? Bool ?? (!options.isEmpty || dateInput != nil || passwordInput),
             enableChatInput: dict["enableChatInput"] as? Bool ?? false,
+            passwordInput: passwordInput,
             completed: dict["completed"] as? Bool ?? (answerString != nil),
+            submitting: dict["submitting"] as? Bool ?? false,
+            submissionError: dict["submissionError"] as? String,
             answer: answerString,
             selectedValues: selectedValues,
-            responseKey: dict["responseKey"] as? String,
+            responseKey: responseKey,
             threadId: dict["threadId"] as? String,
             actionId: dict["actionId"] as? String,
             dateInput: dateInput,
@@ -1389,6 +2018,22 @@ public final class NativeChatMessageStore: ObservableObject {
             let label = item["label"] as? String ?? tagName
             let content = item["content"] as? String ?? ""
             return NativeContextTag(tagName: tagName, label: label, content: content)
+        }
+    }
+
+    private static func parseContextAttachments(_ raw: Any?) -> [NativeContextAttachment] {
+        guard let list = raw as? [[String: Any]] else { return [] }
+        return list.enumerated().compactMap { index, item in
+            guard let title = item["title"] as? String else { return nil }
+            return NativeContextAttachment(
+                id: "\(index)",
+                title: title,
+                source: item["source"] as? String ?? "",
+                icon: NativeContextAttachment.Icon(rawValue: item["icon"] as? String ?? "") ?? .app,
+                scope: item["scope"] as? String ?? "",
+                capturedAt: item["capturedAt"] as? String ?? "",
+                content: item["content"] as? String ?? ""
+            )
         }
     }
 
@@ -1592,7 +2237,7 @@ public final class NativeChatMessageStore: ObservableObject {
                 ]
             }
             let synthesized: [String: Any] = [
-                "id": taskId,
+                "id": id,
                 "title": taskTitle,
                 "detail": detailStr,
                 "state": mappedState,

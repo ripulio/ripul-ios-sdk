@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 
 private struct RipulBottomBarFrameKey: EnvironmentKey {
     static let defaultValue: CGRect? = nil
@@ -43,6 +44,31 @@ enum SessionsPanelLayout {
     }
 }
 
+/// A clearance measured by `SessionsScrollBoundsReader`, held by reference so
+/// a new measurement redraws only what reads it (`MeasuredBottomPadding`),
+/// not the list that owns it. Kept as the list's own state, every move of the
+/// bar redrew every row: a turn of the open Duo moves it two or three times
+/// (6 November 2026).
+@MainActor @Observable
+final class MeasuredClearance {
+    var value: CGFloat = 0
+
+    /// Write only a real change: a write of the same value still counts as a
+    /// change for anything reading it.
+    func set(_ newValue: CGFloat) {
+        if value != newValue { value = newValue }
+    }
+}
+
+/// Bottom padding by a `MeasuredClearance`, read here and nowhere else.
+struct MeasuredBottomPadding: ViewModifier {
+    let clearance: MeasuredClearance
+
+    func body(content: Content) -> some View {
+        content.padding(.bottom, clearance.value)
+    }
+}
+
 extension View {
     /// Lets a scroll view's last content scroll clear of floating bottom
     /// navigation (`ripulBottomBarFrame`). Measured against the view's real
@@ -61,7 +87,6 @@ extension View {
 struct SessionsScrollClearance: ViewModifier {
     var actionBarHeight: CGFloat = 0
     var gap: CGFloat = SessionsPanelLayout.bottomGap
-    @Environment(\.ripulBottomBarFrame) private var bottomBar
     @State private var measuredInset: CGFloat?
 
     func body(content: Content) -> some View {
@@ -70,7 +95,7 @@ struct SessionsScrollClearance: ViewModifier {
         content
             .contentMargins(.bottom, bottomInset + actionBarHeight, for: .scrollContent)
             .contentMargins(.bottom, bottomInset + actionBarHeight, for: .scrollIndicators)
-            .background(SessionsScrollBoundsReader(bottomBar: bottomBar, gap: gap) { measuredInset = $0 })
+            .background(SessionsScrollBoundsReader(gap: gap) { measuredInset = $0 })
         #else
         content
         #endif
@@ -81,12 +106,18 @@ struct SessionsScrollClearance: ViewModifier {
 import UIKit
 
 struct SessionsScrollBoundsReader: UIViewRepresentable {
-    let bottomBar: CGRect?
     var gap: CGFloat = SessionsPanelLayout.bottomGap
     let onChange: (CGFloat) -> Void
+    /// The bar to clear, read here rather than handed in by the view that
+    /// uses the inset. A list that read it redrew every row each time the
+    /// bar moved: two or three times in every turn of the open Duo, inside
+    /// the turn itself (6 November 2026, `docs/main-thread.md`).
+    @Environment(\.ripulBottomBarFrame) private var bottomBar
     /// Read here, not by the views that use the inset, so covering and
     /// uncovering the session list updates this reader alone.
     @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+    /// The slide carrying the list, if any: measured where the list rests.
+    @Environment(\.ripulSlideDisplacement) private var slide
 
     func makeUIView(context: Context) -> ReaderView {
         let view = ReaderView()
@@ -99,6 +130,7 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
         view.gap = gap
         view.onChange = onChange
         view.holds = !listCanBeSeen
+        view.slide = slide
         view.scheduleReport()
     }
 
@@ -113,6 +145,11 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
         /// redrew the whole list behind the chat (19 October 2026). The first
         /// inset still goes through, and uncovering the list reports again.
         var holds = false
+        /// Where a slide has the list, against where it rests. Carried toward
+        /// the Duo's rail, the list met the bar it clears, and the inset it
+        /// reported mid-slide laid the whole list out again under the finger
+        /// (5 November 2026).
+        weak var slide: SlideDisplacement?
         private var scheduled = false
         private var lastInset: CGFloat?
 
@@ -146,7 +183,8 @@ struct SessionsScrollBoundsReader: UIViewRepresentable {
                 // its own padding as more to clear and grew without end: past
                 // 10,000 points and 85 a second on 11 October 2026, the whole
                 // list redrawn each time and one core at 100%.
-                let visible = self.convert(self.bounds, to: window).intersection(window.bounds)
+                let resting = self.convert(self.bounds, to: window).offsetBy(dx: -(self.slide?.total ?? 0), dy: 0)
+                let visible = resting.intersection(window.bounds)
                 guard !visible.isNull, !visible.isEmpty else { return }
                 let inset = SessionsPanelLayout.scrollBottomInset(
                     view: visible,

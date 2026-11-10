@@ -3,7 +3,7 @@ import RipulAgent
 
 struct ContentView: View {
     @StateObject private var calendarService = CalendarService.shared
-    @StateObject private var bridge = AgentBridge()
+    @State private var bridge = AgentBridge()
     @StateObject private var searchHandler = SearchClickHandler()
     @State private var showAgent = false
     @State private var selectedTab = 0
@@ -83,16 +83,18 @@ struct ContentView: View {
                 .animation(.spring(response: 0.35, dampingFraction: 0.86), value: showAgent)
         }
         .task {
-            bridge.register(YourTools.all)
+            bridge.registry.register(YourTools.all, audience: .endUser)
+            #if targetEnvironment(simulator) && (DEBUG || RIPUL_DEVELOPER_TOOLS || RIPUL_DEVELOPER_BUILD)
+            // Agents on this Mac can connect to a simulator build with
+            // device_connect_simulator_app; without that launch it does nothing.
+            RipulSimulatorTools.start(registry: bridge.registry)
+            #endif
             bridge.searchClickDelegate = searchHandler
             searchHandler.onNavigate = { resultType, resultId in
                 // Minimize the agent panel so the user sees the native content
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
                     showAgent = false
                 }
-            }
-            if #available(iOS 26, *) {
-                bridge.setLLMProvider(AppleFoundationModelProvider())
             }
             let granted = await calendarService.requestAccess()
             if !granted { permissionDenied = true }
@@ -112,7 +114,7 @@ struct ContentView: View {
     // MARK: - Prompt Launch
 
     private func launchAgentWithPrompt(_ prompt: String) {
-        bridge.startNewChat(prompt: prompt)
+        Task { await bridge.startNewChat(prompt: prompt) }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
             showAgent = true
         }

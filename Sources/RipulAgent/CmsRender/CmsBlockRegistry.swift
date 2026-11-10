@@ -32,6 +32,11 @@ public enum CmsBlockRegistry {
         renderers[type] != nil
     }
 
+    /// What this renderer draws beyond block types, sent with every CMS request
+    /// as `X-Ripul-Cms-Capabilities`: the primitives container (`layout@1`)
+    /// and `node.<kind>` for each primitive kind (CmsPrimitives).
+    public nonisolated static let capabilities: [String] = CmsPrimitives.capabilities
+
     public static var supportedTypes: [String] {
         renderers.keys.sorted()
     }
@@ -64,8 +69,16 @@ public enum CmsBlockRegistry {
         map["gridViewSwitcher"] = { block, _ in AnyView(CmsGridViewSwitcherBlockView(block: block)) }
         map["agentChat"] = { block, _ in AnyView(CmsAgentChatBlockView(block: block)) }
         map["sidebarNav"] = { block, _ in AnyView(CmsSidebarNavBlockView(block: block)) }
+        map["listSelector"] = { block, _ in AnyView(CmsListSelectorBlockView(block: block)) }
         map["topNav"] = { block, _ in AnyView(CmsTopNavBlockView(block: block)) }
+        map["linkList"] = { block, _ in AnyView(CmsLinkListBlockView(block: block)) }
+        map["masthead"] = { block, _ in AnyView(CmsMastheadBlockView(block: block)) }
+        map["elapsedTimer"] = { block, _ in AnyView(CmsElapsedTimerBlockView(block: block)) }
+        map["deviceSetting"] = { block, _ in AnyView(CmsDeviceSettingBlockView(block: block)) }
+        map["cards"] = { block, _ in AnyView(CmsCardsBlockView(block: block)) }
         map["pageOutlet"] = { block, _ in AnyView(CmsPageOutletBlockView(block: block)) }
+        // Drawn by CmsAppView as the system tab bar; nothing in a page.
+        map["tabBar"] = { _, _ in AnyView(EmptyView()) }
         map["detailHeader"] = { block, _ in AnyView(CmsDetailHeaderBlockView(block: block)) }
         map["fieldGrid"] = { block, _ in AnyView(CmsFieldGridBlockView(block: block)) }
         map["modal"] = { block, _ in AnyView(CmsModalBlockView(block: block)) }
@@ -88,6 +101,19 @@ public enum CmsBlockRegistry {
         map["rotaTeam"] = { block, _ in AnyView(CmsRotaTeamBlockView(block: block)) }
         map["rotaBuilder"] = { block, _ in AnyView(CmsRotaBuilderBlockView(block: block)) }
         map["resourceTimeline"] = { block, _ in AnyView(CmsResourceTimelineBlockView(block: block)) }
+        map["banner"] = { block, _ in AnyView(CmsBannerBlockView(block: block)) }
+        map["dropdown"] = { block, _ in AnyView(CmsDropdownBlockView(block: block)) }
+        map["layout"] = { block, _ in AnyView(CmsLayoutBlockView(block: block)) }
+        map["textEntry"] = { block, _ in AnyView(CmsTextEntryBlockView(block: block)) }
+        #if os(iOS)
+        map["gallery"] = { block, _ in AnyView(CmsGalleryBlockView(block: block)) }
+        map["availabilityCalendar"] = { block, _ in AnyView(CmsAvailabilityCalendarBlockView(block: block)) }
+        // A site's own sign-in by an emailed code, and its bookings (CmsSiteSignIn.swift, CmsBookings.swift).
+        map["authForm"] = { block, _ in AnyView(CmsAuthFormBlockView(block: block)) }
+        map["guestBookings"] = { block, _ in AnyView(CmsGuestBookingsBlockView(block: block)) }
+        map["websiteBookings"] = { block, _ in AnyView(CmsWebsiteBookingsBlockView(block: block)) }
+        map["extraNights"] = { block, _ in AnyView(CmsExtraNightsBlockView(block: block)) }
+        #endif
         return map
     }
 }
@@ -129,6 +155,13 @@ struct CmsBlockView: View {
             let content = CmsBlockRegistry.render(block, axis: axis)
                 .modifier(CmsBlockFrameModifier(frame: block.frame, axis: axis, resolve: { runtime.color($0) },
                                                 fill: { runtime.fill($0) }, radius: { runtime.radius($0) }))
+                // `bleed`: the page's side margins given back (and, first on a
+                // title-hidden page, the room under the status bar).
+                .modifier(CmsBleedModifier(block: block))
+                // `overlap`: what follows starts higher, over the block's grown surface.
+                .modifier(CmsOverlapModifier(block: block))
+                // `pin: 'behind'`: an invisible copy holds the pinned block's place.
+                .modifier(CmsPinnedPlaceModifier(block: block))
                 // View Explorer: every block reports `Cms.<type>.<slug>` so the
                 // inspector can name it (the native twin of `data-ui`).
                 .cmsInspectorID("Cms.\(block.type).\(block.slug ?? block.id)")
@@ -241,8 +274,10 @@ struct CmsBlockContainerView: View {
         let frame = container.containerFrame
         Group {
             switch container {
-            case .list(let items, _), .canvas(let items, _, _, _), .carousel(let items, _):
+            case .list(let items, _), .canvas(let items, _, _, _):
                 stack(items: items, frame: frame)
+            case .carousel(let items, _):
+                carousel(items: items)
             case .sidebar(let variant, let slots, let sidebarFrame):
                 CmsSidebarLayoutView(variant: variant, slots: slots, frame: sidebarFrame)
             case .template(_, let slots, _):
@@ -265,6 +300,11 @@ struct CmsBlockContainerView: View {
     /// renders such blocks off-screen.
     private func offstage(_ block: CmsBlock) -> Bool {
         if runtime.isTabHidden(block) { return true }
+        // The tab bar is drawn by CmsAppView as the system's own bar, never
+        // inside a page: in a shell drawn the old way it takes no space.
+        if block.type == CmsTabBarConfig.blockType && !runtime.isDesignMode { return true }
+        // A floating action button is drawn over the page; its own place takes no room.
+        if CmsLevers.isFloatingButton(block) && !runtime.isDesignMode { return true }
         guard !runtime.isDesignMode else { return false }
         if block.hidden == true { return true }
         if let on = block.visibleOn, !on.isEmpty, !on.contains("mobile") { return true }
@@ -285,6 +325,24 @@ struct CmsBlockContainerView: View {
                 VStack(alignment: frame?.horizontalAlignment ?? .leading, spacing: gap) {
                     ForEach(shown) { CmsBlockView(block: $0, axis: .vertical) }
                 }
+                .environment(\.cmsStackGap, gap)
+            }
+        }
+        .background(alignment: .topLeading) {
+            ZStack { ForEach(away) { CmsBlockView(block: $0, axis: .vertical) } }
+        }
+    }
+
+    /// A section's carousel: its blocks as pages of a paged sideways scroll
+    /// view with the system's page dots, as the `cards` block's carousel.
+    @ViewBuilder
+    private func carousel(items: [CmsBlock]) -> some View {
+        let shown = items.filter { !offstage($0) }
+        let away = items.filter(offstage)
+        CmsPagedCarousel(ids: shown.map(\.id), options: CmsCardsProps.Carousel(indicator: "dots"),
+                         style: CmsResolvedCardStyle(config: runtime.themeConfig, block: nil, theme: runtime.theme)) { id in
+            if let block = shown.first(where: { $0.id == id }) {
+                CmsBlockView(block: block, axis: .vertical)
             }
         }
         .background(alignment: .topLeading) {

@@ -302,6 +302,7 @@ public final class VoiceModeController: ObservableObject {
     ) {
         guard phase == .inactive else { return }
         guard #available(iOS 26.0, macOS 26.0, *) else { return }
+        NativeChatReadAloudController.shared.stop()
         self.bridge = bridge
         commandRouter = commands
         microphoneWarning = nil
@@ -1494,25 +1495,35 @@ public final class VoiceModeController: ObservableObject {
         // no longer earning its keep — hand playback a real media session.
         VoiceAudioSession.conversationPlayback()
         // Voice rider protocol: prefer the model's purpose-composed <spoken>
-        // block; fall back to sanitizing the full reply when absent.
-        let spoken: String
-        if let composed = Self.extractSpokenBlock(text) {
-            spoken = Self.sanitizeForSpeech(composed)
-        } else {
-            spoken = Self.sanitizeForSpeech(text)
+        // block; otherwise summarize complex panels through Haiku (falling back
+        // to sanitizing the reply when offline).
+        let explicitSpoken = Self.extractSpokenBlock(text).map(Self.sanitizeForSpeech)
+        if let explicitSpoken {
+            guard !explicitSpoken.isEmpty else {
+                beginListening(keepText: false)
+                return
+            }
+            spokenNow = explicitSpoken
         }
-        // A reply that is nothing but a code block now sanitizes to nothing —
-        // the "Code block omitted." placeholder used to guarantee this was
-        // non-empty. Handing an empty string to the synthesizer never fires
-        // onPlaybackEnd, which would strand the loop in .speaking with a dead
-        // mic. Nothing to say, so hand the mic straight back.
-        guard !spoken.isEmpty else {
-            beginListening(keepText: false)
-            return
-        }
-        spokenNow = spoken
+        let currentBridge = bridge
         Task { @MainActor [weak self] in
             guard let self else { return }
+            let spoken: String
+            if let explicitSpoken {
+                spoken = explicitSpoken
+            } else {
+                spoken = await NativeChatReadAloudController.shared.summarizeForSpeech(
+                    panelText: text,
+                    messageId: "",
+                    bridge: currentBridge
+                )
+            }
+            guard !Task.isCancelled, self.phase == .speaking || (self.phase == .paused && self.pausedFrom == .speaking) else { return }
+            guard !spoken.isEmpty else {
+                self.beginListening(keepText: false)
+                return
+            }
+            self.spokenNow = spoken
             let resume: @MainActor () -> Void = { [weak self] in
                 guard let self, self.phase == .speaking else { return }
                 self.beginListening(keepText: false)
@@ -1628,6 +1639,7 @@ public final class VoiceModeController: ObservableObject {
         text = text.replacingOccurrences(of: "`([^`]+)`", with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: "!\\[[^\\]]*\\]\\([^)]*\\)", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "\\[([^\\]]+)\\]\\([^)]*\\)", with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?m)^\\s*\\|?[\\s:-]+\\|[\\s|:-]*$", with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^#{1,6}\\s+", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "[*_~|]+", with: "", options: .regularExpression)
         text = text.replacingOccurrences(of: "(?m)^>\\s?", with: "", options: .regularExpression)

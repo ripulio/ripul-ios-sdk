@@ -6,6 +6,45 @@ import XCTest
 /// Driven the way the app drives them, by messages arriving on the bridge.
 @MainActor
 final class AgentTurnPushTests: XCTestCase {
+    func testStaleCompletionCannotSettleANewerNativeTurn() {
+        let bridge = bridge()
+        bridge.nativeChat.applyBackfill([["messageId": "m", "chatId": "chat", "timestamp": 1.0,
+                                          "thinking": ["content": "Working", "isStreaming": true]]], chatId: "chat")
+        turn(bridge, "Started", chat: "chat", sequence: 10)
+        turn(bridge, "Completed", chat: "chat", sequence: 9)
+        XCTAssertTrue(bridge.nativeChat.messages[0].isThinkingStreaming)
+        turn(bridge, "Completed", chat: "other", sequence: 11)
+        XCTAssertTrue(bridge.nativeChat.messages[0].isThinkingStreaming)
+        turn(bridge, "Completed", chat: "chat", sequence: 12)
+        XCTAssertFalse(bridge.nativeChat.messages[0].isThinkingStreaming)
+    }
+
+    func testCompletionResolvesDeclaredSharedAndRemoteTabAliases() {
+        for localId in ["shared_123_random", "remote-open_123"] {
+            let bridge = bridge()
+            bridge.sessions = [ChatSession(id: localId, sourceChatId: localId, displayName: "Shared",
+                                           createdAt: Date(), hostChatId: "cli_owner")]
+            bridge.nativeChat.applyBackfill([["messageId": "m", "chatId": localId, "timestamp": 1.0,
+                                              "thinking": ["content": "Working", "isStreaming": true]]], chatId: localId)
+            turn(bridge, "Started", chat: localId, sequence: 10)
+            turn(bridge, "Completed", chat: "cli_owner", sequence: 9)
+            XCTAssertTrue(bridge.nativeChat.messages[0].isThinkingStreaming)
+            turn(bridge, "Completed", chat: "cli_unrelated", sequence: 11)
+            XCTAssertTrue(bridge.nativeChat.messages[0].isThinkingStreaming)
+            turn(bridge, "Failed", chat: "cli_owner", sequence: 12)
+            XCTAssertFalse(bridge.nativeChat.messages[0].isThinkingStreaming)
+            XCTAssertEqual(bridge.nativeChat.messages[0].thinking, "Working")
+        }
+    }
+
+    func testTerminalSnapshotAlsoSettlesNativeThinking() {
+        let bridge = bridge()
+        bridge.nativeChat.applyBackfill([["messageId": "m", "chatId": "chat", "timestamp": 1.0,
+                                          "thinking": ["content": "Working", "isStreaming": true]]], chatId: "chat")
+        bridge.handleMessage(["type": "agent-framework:agent:stateSnapshot", "chatId": "chat", "phase": "completed", "sequence": 1])
+        XCTAssertFalse(bridge.nativeChat.messages[0].isThinkingStreaming)
+    }
+
     private func bridge(synced: Bool = true) -> AgentBridge {
         let bridge = AgentBridge()
         bridge.sessionCache = UserDefaultsSessionCache(suiteName: "io.ripul.tests.turnpush.\(UUID().uuidString)")

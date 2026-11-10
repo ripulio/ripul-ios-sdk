@@ -22,6 +22,8 @@ public enum RipulInspection {
 /// Surfaced to a remote agent over the relay as `device_inspect_screen`.
 public struct InspectScreenTool: NativeTool {
     public let name = "inspect_screen"
+    /// What is on screen, text included: shared only when the person shares their screen.
+    public let access: NativeToolAccess = .readsScreen
     public let description = "Inspect the running app's on-screen native (UIKit/SwiftUI) view tree. "
         + "Returns elements with class name, role (button/field/cell/list/… — the vocabulary the actuation "
         + "tools' role predicate matches), window-space frame, accessibility id / uiKitIdentifier stamp, "

@@ -28,10 +28,12 @@ enum CmsCss {
         return CGFloat(n) * scale
     }
 
-    /// Parse CSS padding shorthand (1–4 values) into EdgeInsets.
-    static func insets(_ value: String?) -> EdgeInsets? {
+    /// Parse CSS padding shorthand (1–4 values) into EdgeInsets. Each value may
+    /// be a length, a spacing token, or a CSS expression (`max(24px, calc(50% - 580px))`)
+    /// read at `width` (percentages are of it).
+    static func insets(_ value: String?, width: CGFloat = 390) -> EdgeInsets? {
         guard let value, !value.isEmpty else { return nil }
-        let parts = value.split(separator: " ").map { points(String($0)) ?? 0 }
+        let parts = topLevelParts(value).map { points($0) ?? CmsCssLength.points($0, viewport: width, percentOf: width) ?? 0 }
         switch parts.count {
         case 1: return EdgeInsets(top: parts[0], leading: parts[0], bottom: parts[0], trailing: parts[0])
         case 2: return EdgeInsets(top: parts[0], leading: parts[1], bottom: parts[0], trailing: parts[1])
@@ -39,6 +41,21 @@ enum CmsCss {
         case 4: return EdgeInsets(top: parts[0], leading: parts[3], bottom: parts[2], trailing: parts[1])
         default: return nil
         }
+    }
+
+    /// A CSS value list split at its top-level spaces, so `max(24px, calc(50% - 580px))` stays one part.
+    static func topLevelParts(_ value: String) -> [String] {
+        var parts: [String] = [], current = "", depth = 0
+        for ch in value {
+            if ch == "(" { depth += 1 } else if ch == ")" { depth = max(0, depth - 1) }
+            if ch == " " && depth == 0 {
+                if !current.isEmpty { parts.append(current); current = "" }
+            } else {
+                current.append(ch)
+            }
+        }
+        if !current.isEmpty { parts.append(current) }
+        return parts
     }
 
     /// Parse #rgb/#rrggbb/#rrggbbaa hex and rgb()/rgba() colours. Theme
@@ -118,6 +135,11 @@ struct CmsBlockFrameModifier: ViewModifier {
     var fill: ((String?) -> AnyShapeStyle?)? = nil
     /// Radius resolver (`radius.*` tokens + CSS lengths). Defaults to CSS-only.
     var radius: (String?) -> CGFloat? = { CmsCss.points($0) }
+    /// A bleeding block: its corners at the screen's edges square, and its
+    /// surface runs under the status bar with the content kept below it.
+    @Environment(\.cmsBleed) private var bleed
+    /// `overlap`: the frame's own fill grows at the bottom when it has one.
+    @Environment(\.cmsOverlap) private var overlap
 
     func body(content: Content) -> some View {
         var fixedLength: CGFloat? = nil
@@ -132,24 +154,94 @@ struct CmsBlockFrameModifier: ViewModifier {
         let background = (self.fill ?? { resolve($0).map { AnyShapeStyle($0) } })(frame?.background)
             ?? AnyShapeStyle(Color.clear)
 
+        let shape = bleed.map { AnyShape($0.shape(radius: radius)) }
+            ?? AnyShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        // Under the status bar, the room goes to whichever surface draws: the
+        // frame's own fill when it has one, else the block's (a card, a calendar).
+        let framePaints = frame?.background != nil
+        var inner = bleed
+        if framePaints { inner?.underTop = 0 }
         return content
-            .padding(CmsCss.insets(frame?.padding) ?? EdgeInsets())
+            .environment(\.cmsBleed, inner)
+            .environment(\.cmsOverlap, framePaints ? 0 : overlap)
+            .padding(CmsCss.insets(frame?.padding, width: CmsSiteText.viewportWidth) ?? EdgeInsets())
+            .padding(.top, framePaints ? bleed?.underTop ?? 0 : 0)
+            .padding(.bottom, framePaints ? overlap : 0)
             .frame(
                 width: axis == .horizontal ? fixedLength : width,
                 height: axis == .vertical ? fixedLength : nil
             )
             .frame(
-                maxWidth: (fill && axis == .horizontal) ? .infinity : nil,
+                maxWidth: (fill && axis == .horizontal) || bleed != nil ? .infinity : nil,
                 maxHeight: (fill && axis == .vertical) ? .infinity : nil
             )
-            .frame(minHeight: CmsCss.points(frame?.minHeight))
+            .frame(minHeight: CmsCss.points(frame?.minHeight)
+                   ?? CmsCssLength.points(frame?.minHeight, viewport: CmsSiteText.viewportWidth))
             .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(borderColor ?? Color.clear, lineWidth: borderWidth)
-            )
-            .padding(CmsCss.insets(frame?.margin) ?? EdgeInsets())
+            .background {
+                // A gradient over a picture (the web's `linear-gradient(…), url(…) center / cover`).
+                if let layered = CmsCssBackground(frame?.background) { CmsCssBackgroundView(background: layered, resolve: resolve) }
+            }
+            .clipShape(shape)
+            .overlay(shape.stroke(borderColor ?? Color.clear, lineWidth: borderWidth))
+            // `align`: a block narrower than its column sits at its centre or end (the web's align-self).
+            .frame(maxWidth: Self.alignment(frame?.align) == nil ? nil : .infinity,
+                   alignment: Self.alignment(frame?.align) ?? .leading)
+            .padding(CmsCss.insets(frame?.margin, width: CmsSiteText.viewportWidth) ?? EdgeInsets())
+    }
+
+    static func alignment(_ align: String?) -> Alignment? {
+        switch align {
+        case "center": return .center
+        case "end", "right", "flex-end": return .trailing
+        default: return nil
+        }
+    }
+}
+
+/// Children side by side, wrapping onto the next line when the next one doesn't
+/// fit: a CSS flex row with `flex-wrap: wrap`. Each child is offered the whole
+/// width, so a line of text keeps one line when it can.
+struct CmsFlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map { $0.width }.max() ?? 0
+        let height = rows.reduce(0) { $0 + $1.height } + lineSpacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: proposal.width ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for (index, size) in row.items {
+                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private struct Row { var items: [(Int, CGSize)] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = [], row = Row()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            let needed = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.items.isEmpty && needed > width {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.items.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.items.append((index, size))
+        }
+        if !row.items.isEmpty { rows.append(row) }
+        return rows
     }
 }
 
@@ -173,15 +265,28 @@ struct CmsContainerFrameModifier: ViewModifier {
             ?? AnyShapeStyle(Color.clear)
 
         return content
-            .padding(CmsCss.insets(frame?.padding) ?? EdgeInsets())
+            .padding(CmsCss.insets(frame?.padding, width: CmsSiteText.viewportWidth) ?? EdgeInsets())
             .frame(maxWidth: CmsCss.points(frame?.maxWidth))
             .frame(minHeight: CmsCss.points(frame?.minHeight))
             .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            // Only rounded corners clip: a square container clipping its
+            // children cut off a block that bleeds past it (and shadows).
+            .modifier(CmsClipWhenRounded(radius: radius))
             .overlay(
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .strokeBorder(borderColor ?? Color.clear, lineWidth: borderWidth)
             )
+    }
+}
+
+struct CmsClipWhenRounded: ViewModifier {
+    let radius: CGFloat
+    func body(content: Content) -> some View {
+        if radius > 0 {
+            content.clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        } else {
+            content
+        }
     }
 }
 
@@ -204,5 +309,103 @@ extension CmsContainerFrame {
         case "flex-end": return .bottom
         default: return .top
         }
+    }
+}
+
+/// A CSS `background` with layers, as a site's frame may set it:
+/// `linear-gradient(rgba(…), rgba(…)), url('…') center / cover no-repeat`.
+/// Layers paint in CSS order: the first on top. Colour-only values stay with the
+/// frame's ordinary fill; this handles gradients and pictures.
+struct CmsCssBackground: Equatable {
+    enum Layer: Equatable {
+        /// Stops top to bottom, or along `angle` (CSS degrees).
+        case gradient(stops: [String], angle: Double)
+        case image(url: String, contain: Bool)
+        case colour(String)
+    }
+
+    var layers: [Layer]
+
+    /// Nil unless the value has a gradient or a picture.
+    init?(_ css: String?) {
+        guard let css, css.contains("gradient(") || css.contains("url(") else { return nil }
+        layers = Self.split(css, on: ",").compactMap(Self.layer)
+        if layers.isEmpty { return nil }
+    }
+
+    /// Top-level split, ignoring separators inside parentheses and quotes.
+    static func split(_ s: String, on sep: Character) -> [String] {
+        var out: [String] = [], cur = "", depth = 0, quote: Character?
+        for ch in s {
+            if let q = quote { cur.append(ch); if ch == q { quote = nil }; continue }
+            if ch == "'" || ch == "\"" { quote = ch; cur.append(ch); continue }
+            if ch == "(" { depth += 1 } else if ch == ")" { depth = max(0, depth - 1) }
+            if ch == sep && depth == 0 { out.append(cur.trimmingCharacters(in: .whitespaces)); cur = "" } else { cur.append(ch) }
+        }
+        let last = cur.trimmingCharacters(in: .whitespaces)
+        if !last.isEmpty { out.append(last) }
+        return out
+    }
+
+    private static func inner(_ s: String, after prefix: String) -> String? {
+        guard let start = s.range(of: prefix) else { return nil }
+        var depth = 1, out = ""
+        for ch in s[start.upperBound...] {
+            if ch == "(" { depth += 1 } else if ch == ")" { depth -= 1; if depth == 0 { return out } }
+            out.append(ch)
+        }
+        return nil
+    }
+
+    private static func layer(_ raw: String) -> Layer? {
+        if let body = inner(raw, after: "linear-gradient(") {
+            var parts = split(body, on: ",")
+            var angle = 180.0
+            if let first = parts.first {
+                if first.hasSuffix("deg"), let a = Double(first.dropLast(3)) { angle = a; parts.removeFirst() }
+                else if first.hasPrefix("to ") {
+                    let dirs: [String: Double] = ["to top": 0, "to right": 90, "to bottom": 180, "to left": 270]
+                    angle = dirs[first] ?? 180
+                    parts.removeFirst()
+                }
+            }
+            // A stop's colour, without its position.
+            let stops = parts.map { stop -> String in
+                if stop.hasPrefix("rgb") || stop.hasPrefix("hsl"), let close = stop.firstIndex(of: ")") { return String(stop[...close]) }
+                return String(stop.split(separator: " ").first ?? "")
+            }
+            return stops.count >= 2 ? .gradient(stops: stops, angle: angle) : nil
+        }
+        if let body = inner(raw, after: "url(") {
+            let url = body.trimmingCharacters(in: CharacterSet(charactersIn: "'\" "))
+            return url.isEmpty ? nil : .image(url: url, contain: raw.contains("contain"))
+        }
+        return raw.isEmpty ? nil : .colour(raw)
+    }
+}
+
+/// Paints a CmsCssBackground: each layer filling the frame, the first on top.
+struct CmsCssBackgroundView: View {
+    let background: CmsCssBackground
+    let resolve: (String?) -> Color?
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(background.layers.enumerated().reversed()), id: \.offset) { _, layer in
+                switch layer {
+                case .gradient(let stops, let angle):
+                    let points = CmsPortalTheme.gradientPoints(angle: angle)
+                    LinearGradient(colors: stops.map { resolve($0) ?? .clear }, startPoint: points.start, endPoint: points.end)
+                case .image(let url, let contain):
+                    Color.clear.overlay {
+                        CmsChainImage(candidates: [.url(url)], fit: contain ? "contain" : "cover", requestSize: 1600)
+                    }
+                    .clipped()
+                case .colour(let value):
+                    resolve(value) ?? .clear
+                }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }

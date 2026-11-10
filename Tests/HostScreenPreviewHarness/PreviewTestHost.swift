@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 @testable import RipulAgent
 
 @main
@@ -7,6 +8,8 @@ struct PreviewTestHost: App {
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("--explorer-agent-touch-ui-tests") {
                 ExplorerAgentTouchHarness().ignoresSafeArea()
+            } else if ProcessInfo.processInfo.arguments.contains("--preview-dock-ui-tests") {
+                PreviewDockHarness()
             } else if ProcessInfo.processInfo.arguments.contains("--simulator-preview-ui-tests") {
                 SimulatorPreviewHarness().preferredColorScheme(.dark)
             } else if ProcessInfo.processInfo.arguments.contains("--anchored-tool-strip-ui-tests") || ProcessInfo.processInfo.arguments.contains("--all-tool-rows-ui-tests") {
@@ -18,11 +21,21 @@ struct PreviewTestHost: App {
             } else if ProcessInfo.processInfo.arguments.contains("--session-families-ui-tests") {
                 SessionFamiliesHarness()
                     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--home-scroll-ui-tests") {
+                HomeScrollHarness().preferredColorScheme(.dark)
             } else if ProcessInfo.processInfo.arguments.contains("--code-width-ui-tests") {
                 ToolCodeWidthHarnessSurface()
             } else if ProcessInfo.processInfo.arguments.contains("--tool-details-ui-tests") {
                 ToolDetailsHarnessSurface()
                     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--native-chat-inset-ui-tests") {
+                NativeChatInsetHarnessSurface()
+            } else if ProcessInfo.processInfo.arguments.contains("--native-chat-loading-ui-tests") {
+                NativeChatLoadingHarnessSurface()
+            } else if ProcessInfo.processInfo.arguments.contains("--native-chat-follow-ui-tests") {
+                NativeChatFollowHarness().preferredColorScheme(.dark)
+            } else if ProcessInfo.processInfo.arguments.contains("--native-chat-entry-ui-tests") {
+                NativeChatEntryHarnessSurface()
             } else if ProcessInfo.processInfo.arguments.contains("--native-chat-ui-tests") {
                 NativeChatHarnessSurface()
                     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--light-appearance") ? .light : .dark)
@@ -279,11 +292,501 @@ private struct NativeToolStripHarnessSurface: View {
     }
 }
 
+/// AgentView placed as the agent screen places it (`--native-chat-inset-ui-tests`):
+/// the chat column through the vertical safe area with the native chat on, and
+/// a glass bar at the window's top clearance floating over it.
+private struct NativeChatInsetHarnessSurface: View {
+    @State private var bridge = AgentBridge()
+    @State private var topChrome = WindowTopChromeClearance()
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            AgentView(configuration: AgentConfiguration(baseURL: URL(string: "http://127.0.0.1:9")!), bridge: bridge) { _ in EmptyView() }
+                .ignoresSafeArea(.container, edges: .vertical)
+            GlassTopBar(title: "Inset check") { Button("Nothing") {} }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("NativeChatInsetHarness.bar")
+                .topChromeExclusion(topChrome)
+                .padding(.top, topChrome.top)
+                .ignoresSafeArea(edges: .top)
+        }
+        .background(WindowTopChrome { topChrome = $0 })
+        .onAppear {
+            bridge.nativeChatScrollerEnabled = true
+            bridge.nativeChat.applyBackfill([
+                ["messageId": "u-inset", "chatId": "chat-demo", "role": "user", "kind": "user",
+                 "content": "The first message of the chat.", "timestamp": 1_729_900_000_000.0, "isOwnMessage": true],
+                ["messageId": "a-inset", "chatId": "chat-demo", "role": "assistant", "kind": "assistant",
+                 "content": "It starts below the bar.", "timestamp": 1_729_900_001_000.0],
+            ])
+        }
+    }
+}
+
+/// Chats entered as the iPhone's agent screen enters them, with the native chat
+/// on (`--native-chat-entry-ui-tests`). The chat column stays mounted off screen
+/// beside a list. Opening a chat calls `focusSession`, lands the switch while the
+/// column is still off screen with the place the page saved for that chat,
+/// slides the column in, and rewrites and grows the tail as the Mac's catch-ups
+/// do: once while it slides, once after the entry has settled. A cold chat (not
+/// loaded on the device yet) is first sent empty, then its rows once loaded, as
+/// the page's forwarder sends one. Opening the chat already shown appends rows
+/// first, as an agent does while the list is up. A chat that lands with its slide
+/// is sent its rows in the same update as the slide starts, as the app slides a
+/// cold chat in once its history is applied. `NativeChatEntryHarness.report`
+/// reads the chat's own scroll view: the chat, how far it is from its end, its
+/// last row, and how far that row moved up or down on screen while the chat slid
+/// in (`drift`, which should be 0: a slide moves it sideways only).
+private struct NativeChatEntryHarnessSurface: View {
+    private struct Chat {
+        let id: String
+        let prefix: String
+        let count: Int
+        var cold = false
+        var landsWithSlide = false
+        var cardsLandAbove = false
+    }
+    private static let chats = [
+        Chat(id: "chat-a", prefix: "a", count: 160),
+        Chat(id: "chat-b", prefix: "b", count: 120),
+        Chat(id: "chat-c", prefix: "c", count: 24),
+        Chat(id: "chat-d", prefix: "d", count: 140, cold: true),
+        Chat(id: "chat-e", prefix: "e", count: 100, cold: true),
+        Chat(id: "chat-f", prefix: "f", count: 72, cold: true, landsWithSlide: true),
+        Chat(id: "chat-g", prefix: "g", count: 29, cardsLandAbove: true),
+    ]
+
+    /// When the tool-image cards of `chat-g` land after its slide starts, in seconds:
+    /// the times Peter's Duo logged for a 29-row chat on 8 November 2026 (seven 430 pt
+    /// steps, inside the 3 s entry hold), then three after the hold. The page publishes
+    /// an older tool call's screenshots two at a time after a chat opens, each card a
+    /// 420 pt upright screenshot at its known size (`toolImages.ts`), so each lands
+    /// above the reader at full height.
+    private static let cardTimes: [Double] = [2.242, 2.255, 2.339, 2.717, 2.746, 2.883, 2.989, 4.0, 4.6, 5.3]
+
+    /// Where the chat's last row is drawn, frame by frame, while the chat slides in:
+    /// the highest and lowest place on screen. On Peter's Duo a cold chat's rows,
+    /// landing as the slide began, drifted about 70 pt down along the slide's own
+    /// curve (8 November 2026).
+    private final class SlideDriftTracker: NSObject {
+        private var link: CADisplayLink?
+        private var rowId = ""
+        private weak var row: UIView?
+        private var until: CFTimeInterval = 0
+        private var highest: CGFloat?
+        private var lowest: CGFloat?
+
+        /// Points the row travelled up and down while on screen; -1 before it was seen.
+        var drift: CGFloat {
+            guard let highest, let lowest else { return -1 }
+            return lowest - highest
+        }
+
+        private var from: CFTimeInterval = 0
+        /// Frames sampled, and frames where the row moved more than half a point.
+        private(set) var frames = 0
+        private(set) var moves = 0
+        private var last: CGFloat?
+
+        /// Samples from `after` seconds on, until `seconds` after the call.
+        func start(rowId: String, seconds: CFTimeInterval, after: CFTimeInterval = 0) {
+            link?.invalidate()
+            self.rowId = rowId
+            row = nil
+            highest = nil
+            lowest = nil
+            last = nil
+            frames = 0
+            moves = 0
+            from = CACurrentMediaTime() + after
+            until = CACurrentMediaTime() + seconds
+            let link = CADisplayLink(target: self, selector: #selector(frame))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+
+        @objc private func frame() {
+            let now = CACurrentMediaTime()
+            guard now < until else {
+                link?.invalidate()
+                link = nil
+                return
+            }
+            guard now >= from, let point = rowScreenPoint(), let width = row?.window?.bounds.width,
+                  point.x < width - 1 else { return }
+            frames += 1
+            if let last, abs(point.y - last) > 0.5 { moves += 1 }
+            last = point.y
+            highest = min(highest ?? point.y, point.y)
+            lowest = max(lowest ?? point.y, point.y)
+        }
+
+        /// The row's top, drawn: its marker's presentation through every ancestor's,
+        /// so an animated scroll or slide counts as drawn.
+        private func rowScreenPoint() -> CGPoint? {
+            if row?.window == nil {
+                row = nil
+                func visit(_ view: UIView) {
+                    guard row == nil else { return }
+                    if String(describing: type(of: view)).contains("MarkerView"),
+                       Mirror(reflecting: view).children.first(where: { $0.label == "rowId" })?.value as? String == rowId {
+                        row = view
+                        return
+                    }
+                    view.subviews.forEach(visit)
+                }
+                for scene in UIApplication.shared.connectedScenes {
+                    (scene as? UIWindowScene)?.windows.forEach(visit)
+                }
+            }
+            guard let row, let window = row.window else { return nil }
+            let layer = row.layer.presentation() ?? row.layer
+            let windowLayer = window.layer.presentation() ?? window.layer
+            return layer.convert(CGPoint.zero, to: windowLayer)
+        }
+    }
+
+    /// Frames while the test flings the chat: how many came more than one and a half
+    /// frame intervals after the last (hitches), the time they lost past one interval,
+    /// and the longest gap. Only frames while the chat moves under a finger or a coast
+    /// count, as the app's own `[LISTPERF]` lines do: at rest the owned list mounts more
+    /// rows on purpose, and nothing on screen moves for it. XCTest's own hitch metric has
+    /// no numbers on a simulator.
+    private final class HitchRecorder: NSObject {
+        private var link: CADisplayLink?
+        private var until: CFTimeInterval = 0
+        private var last: CFTimeInterval = 0
+        private(set) var frames = 0
+        private(set) var hitches = 0
+        private(set) var lostMs: Double = 0
+        private(set) var worstMs: Double = 0
+        var scroller: (() -> UIScrollView?)?
+
+        func start(seconds: CFTimeInterval) {
+            link?.invalidate()
+            frames = 0; hitches = 0; lostMs = 0; worstMs = 0; last = 0
+            until = CACurrentMediaTime() + seconds
+            let link = CADisplayLink(target: self, selector: #selector(frame(_:)))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+
+        @objc private func frame(_ link: CADisplayLink) {
+            guard link.timestamp < until else {
+                link.invalidate()
+                self.link = nil
+                return
+            }
+            defer { last = link.timestamp }
+            guard last > 0 else { return }
+            if let scroller, let sv = scroller(), !(sv.isTracking || sv.isDragging || sv.isDecelerating) { return }
+            let interval = max(link.targetTimestamp - link.timestamp, 1 / 120)
+            let gap = link.timestamp - last
+            frames += 1
+            worstMs = max(worstMs, gap * 1000)
+            if gap > interval * 1.5 {
+                hitches += 1
+                lostMs += (gap - interval) * 1000
+            }
+        }
+    }
+
+    private final class ScrollerFinder {
+        weak var scroller: UIScrollView?
+
+        /// The chat's scroll view: the tallest one in the window that is not the
+        /// page's, a text view's or a list's.
+        func find() -> UIScrollView? {
+            if let scroller, scroller.window != nil { return scroller }
+            var found: UIScrollView?
+            func visit(_ view: UIView) {
+                if let candidate = view as? UIScrollView, !(candidate is UITextView), !(candidate is UICollectionView),
+                   !String(describing: type(of: candidate)).hasPrefix("WK"),
+                   candidate.contentSize.height > (found?.contentSize.height ?? 0) {
+                    found = candidate
+                }
+                view.subviews.forEach(visit)
+            }
+            for scene in UIApplication.shared.connectedScenes {
+                (scene as? UIWindowScene)?.windows.forEach(visit)
+            }
+            // Only kept once it holds a chat, so the empty one at launch is not.
+            if let found, found.contentSize.height > 2000 { scroller = found }
+            return found
+        }
+    }
+
+    @State private var bridge = AgentBridge()
+    @State private var showingList = true
+    @State private var entry: Task<Void, Never>?
+    @State private var appended = 0
+    @State private var report = "chat=- fromEnd=- last=- drift=- catchUpDrift=- catchUpMoves=- catchUpFrames=-"
+    @State private var finder = ScrollerFinder()
+    @State private var slide = SlideDriftTracker()
+    /// The last row from a second after the slide starts (it has landed) to 8 s:
+    /// where the history landing above it moves it.
+    @State private var catchUp = SlideDriftTracker()
+    /// The composer's clearance as the app's tab shell drives it: its tab-bar row and
+    /// its fold to the pill (`foldUndone`).
+    @State private var clearance = RipulComposerChrome()
+    @State private var hitches = HitchRecorder()
+    private let ticks = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 24) {
+                    ForEach(Self.chats, id: \.id) { chat in
+                        Button("Open \(chat.id)") { open(chat) }
+                            .accessibilityIdentifier("NativeChatEntryHarness.open.\(chat.id)")
+                    }
+                }
+                .padding(.top, 140)
+                .padding(.horizontal, 24)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                .allowsHitTesting(showingList)
+
+                AgentView(configuration: AgentConfiguration(baseURL: URL(string: "http://127.0.0.1:9")!), bridge: bridge) { _ in EmptyView() }
+                    .environment(\.composerClearanceChrome, clearance)
+                    .modifier(BarSafeArea(active: Self.barSafeArea))
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .overlay(alignment: .topLeading) {
+                        // Beside each other at the leading edge: on the open Duo the
+                        // trailing edge is under the status bar's pill.
+                        HStack(spacing: 24) {
+                            Button("Back") {
+                                withAnimation(.spring(response: 0.42, dampingFraction: 0.9)) { showingList = true }
+                            }
+                            .accessibilityIdentifier("NativeChatEntryHarness.back")
+                            Button("Fold undone") { foldUndone() }
+                                .accessibilityIdentifier("NativeChatEntryHarness.foldUndone")
+                            Button("Nudge") {
+                                // The content 120 pt down, as a short drag would move it.
+                                if let sv = finder.find() {
+                                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: sv.contentOffset.y - 120), animated: false)
+                                }
+                            }
+                            .accessibilityIdentifier("NativeChatEntryHarness.nudge")
+                            Button("Switch") {
+                                // As Settings > Debug > Native Chat Performance > Owned chat list does.
+                                let key = NativeChatPerformance.key(.ownedList)
+                                let on = UserDefaults.standard.object(forKey: key) as? Bool ?? true
+                                UserDefaults.standard.set(!on, forKey: key)
+                                NativeChatPerformance.notifyChanged()
+                            }
+                            .accessibilityIdentifier("NativeChatEntryHarness.switchScroller")
+                            Button("Hitches") {
+                                hitches.scroller = { [finder] in finder.find() }
+                                hitches.start(seconds: 60)
+                            }
+                                .accessibilityIdentifier("NativeChatEntryHarness.recordHitches")
+                        }
+                        .padding(.top, 64)
+                        .padding(.leading, 20)
+                    }
+                    .clipped()
+                    .offset(x: showingList ? geo.size.width : 0)
+                    .allowsHitTesting(!showingList)
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .clipped()
+        }
+        .ignoresSafeArea()
+        .overlay(alignment: .bottom) {
+            Text(report)
+                .font(.caption.monospaced())
+                .padding(6)
+                .background(.thinMaterial)
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("NativeChatEntryHarness.report")
+                .padding(.bottom, 24)
+        }
+        .onReceive(ticks) { _ in report = measure() }
+        .onAppear { bridge.nativeChatScrollerEnabled = true }
+    }
+
+    private func open(_ chat: Chat) {
+        entry?.cancel()
+        entry = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            let switching = bridge.nativeChat.currentChatId != chat.id
+            if !switching {
+                // Rows the agent added while the list was up.
+                appended += 2
+                bridge.nativeChat.applyPatch([Self.message(chat, chat.count + 9 + appended - 1, grown: false),
+                                              Self.message(chat, chat.count + 9 + appended, grown: false)],
+                                             chatId: chat.id)
+            }
+            await bridge.focusSession(id: chat.id)
+            guard !Task.isCancelled else { return }
+            if switching {
+                // The page's forwarder: the chat's rows (none yet for a cold
+                // chat), and the place it saved for it.
+                bridge.nativeChat.applyBackfill(chat.cold ? [] : Self.entries(chat, rewritten: false), chatId: chat.id,
+                    scrollPosition: ["rowId": "\(chat.prefix)-\(chat.count / 3)", "offset": 80.0, "following": false])
+            }
+            let lastRow = switching ? "\(chat.prefix)-\(chat.count - 1)" : "\(chat.prefix)-\(chat.count + 9 + appended)"
+            if chat.landsWithSlide && switching {
+                // The app slides a cold chat in once its history is applied: the rows
+                // and the slide in the same update. Nothing else lands while it slides.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                slide.start(rowId: lastRow, seconds: 1.6)
+                bridge.nativeChat.applyBackfill(Self.entries(chat, rewritten: false), chatId: chat.id)
+                withAnimation(.spring(response: 0.62, dampingFraction: 0.92)) { showingList = false }
+                return
+            }
+            slide.start(rowId: lastRow, seconds: 1.6)
+            if chat.cardsLandAbove && switching {
+                // Only history above the reader changes: no tail growth, so the last
+                // row should not move at all once the slide has landed.
+                catchUp.start(rowId: lastRow, seconds: 8, after: 1.0)
+                withAnimation(.spring(response: 0.62, dampingFraction: 0.92)) { showingList = false }
+                let start = Date()
+                for (card, at) in Self.cardTimes.enumerated() {
+                    let wait = at - Date().timeIntervalSince(start)
+                    if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+                    guard !Task.isCancelled else { return }
+                    bridge.nativeChat.applyPatch([Self.imageCard(chat, card)], chatId: chat.id)
+                }
+                return
+            }
+            withAnimation(.spring(response: 0.62, dampingFraction: 0.92)) { showingList = false }
+            guard switching else { return }
+            if chat.cold {
+                // Loaded: the rows follow as a second backfill of the same chat.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                bridge.nativeChat.applyBackfill(Self.entries(chat, rewritten: false), chatId: chat.id)
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            bridge.nativeChat.applyBackfill(Self.entries(chat, rewritten: true), chatId: chat.id)
+            try? await Task.sleep(nanoseconds: 3_600_000_000)
+            guard !Task.isCancelled else { return }
+            bridge.nativeChat.applyPatch((chat.count + 6..<chat.count + 10).map { Self.message(chat, $0, grown: false) },
+                                         chatId: chat.id)
+        }
+    }
+
+    /// `--bar-safe-area`: the chat column under a top bar that adds itself to the safe
+    /// area, as `GlassTopBar` does in the app (`.safeAreaInset(edge: .top)`), the column
+    /// running under it through the vertical safe area as `AgentView` does there.
+    private static let barSafeArea = ProcessInfo.processInfo.arguments.contains("--bar-safe-area")
+
+    private struct BarSafeArea: ViewModifier {
+        let active: Bool
+        func body(content: Content) -> some View {
+            if active {
+                content
+                    .ignoresSafeArea(.container, edges: .vertical)
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        Color.clear.frame(height: 100).allowsHitTesting(false)
+                    }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// The composer folding to its pill and unfolding 15 ms later, three times, over a
+    /// chat resting at its end, as on Peter's iPhone 17 Pro Max (9 November 2026: the
+    /// clearance went 195 → 106 → 195 pt). First the tab bar's row under the composer
+    /// (49 pt, which the fold drops too), given a second to settle; then the last row
+    /// is tracked, every frame, for three seconds.
+    private func foldUndone() {
+        entry?.cancel()
+        entry = Task { @MainActor in
+            clearance.contentBottomInset = 49
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled, let last = bridge.nativeChat.rows.last?.id else { return }
+            catchUp.start(rowId: last, seconds: 3)
+            for _ in 0..<3 {
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                guard !Task.isCancelled else { return }
+                clearance.isCollapsed = true
+                try? await Task.sleep(nanoseconds: 15_000_000)
+                clearance.isCollapsed = false
+            }
+        }
+    }
+
+    private func measure() -> String {
+        guard let sv = finder.find() else { return "chat=- fromEnd=- last=- drift=- catchUpDrift=- catchUpMoves=- catchUpFrames=-" }
+        let end = max(-sv.adjustedContentInset.top, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
+        let list = String(describing: type(of: sv)).contains("NativeChatListScroller") ? "owned" : "old"
+        return String(format: "chat=%@ fromEnd=%.0f last=%@ drift=%.0f catchUpDrift=%.1f catchUpMoves=%d catchUpFrames=%d "
+                      + "hitchFrames=%d hitches=%d hitchLostMs=%.0f hitchWorstMs=%.0f list=%@",
+                      bridge.nativeChat.currentChatId ?? "-", end - sv.contentOffset.y,
+                      bridge.nativeChat.rows.last?.id ?? "-", slide.drift, catchUp.drift, catchUp.moves, catchUp.frames,
+                      hitches.frames, hitches.hitches, hitches.lostMs, hitches.worstMs, list)
+    }
+
+    /// A tool call's screenshot card, as the page forwards one: a media-only reply
+    /// holding one upright Duo screenshot at its known size (1206×2622, drawn 420 pt
+    /// high), no URL yet, timestamped among the chat's older messages so it lands
+    /// well above the screen.
+    private static func imageCard(_ chat: Chat, _ card: Int) -> [String: Any] {
+        ["messageId": "\(chat.prefix)-image-\(card)", "chatId": chat.id, "role": "assistant", "kind": "assistant",
+         "content": "", "timestamp": 1_729_900_000_000.0 + 6_000 + Double(card) * 10,
+         "imageAttachments": [["id": "\(chat.prefix)-image-\(card)-0", "mediaType": "image/png",
+                               "width": 1206, "height": 2622]]]
+    }
+
+    /// The chat as first sent, or after a catch-up: the last rows grown and six more.
+    private static func entries(_ chat: Chat, rewritten: Bool) -> [[String: Any]] {
+        (0..<chat.count + (rewritten ? 6 : 0)).map { message(chat, $0, grown: rewritten && $0 >= chat.count - 8) }
+    }
+
+    /// Users and replies alternate; rows past the chat's first count are replies.
+    private static func message(_ chat: Chat, _ index: Int, grown: Bool) -> [String: Any] {
+        let user = index < chat.count && index % 2 == 0
+        let paragraphs = user ? 1 : 1 + (index * 7) % 5 + (grown ? 4 : 0)
+        let text = (0..<paragraphs).map { paragraph in
+            "Paragraph \(paragraph + 1) of message \(index) in \(chat.id). "
+                + String(repeating: "A chat that is entered opens at its end. ", count: 2 + (index + paragraph) % 4)
+        }.joined(separator: "\n\n")
+        return ["messageId": "\(chat.prefix)-\(index)", "chatId": chat.id,
+                "role": user ? "user" : "assistant", "kind": user ? "user" : "assistant",
+                "content": text, "timestamp": 1_729_900_000_000.0 + Double(index) * 1000, "isOwnMessage": user]
+    }
+}
+
+/// The first responder, by the public route: an action sent to no target goes to it.
+private enum HarnessFirstResponder {
+    static weak var found: UIResponder?
+
+    static func describe() -> String {
+        found = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.harnessCaptureFirstResponder(_:)), to: nil, from: nil, for: nil)
+        guard let found else { return "-" }
+        var text = String(describing: type(of: found))
+        if let input = found as? UITextInput {
+            if let range = input.selectedTextRange {
+                text += range.isEmpty ? ",empty" : ",selected:\(input.offset(from: range.start, to: range.end))"
+            } else {
+                text += ",none"
+            }
+        } else {
+            text += ",notInput"
+        }
+        return text
+    }
+}
+
+extension UIResponder {
+    @objc fileprivate func harnessCaptureFirstResponder(_ sender: Any?) {
+        HarnessFirstResponder.found = self
+    }
+}
+
 private struct NativeChatHarnessSurface: View {
     @State private var bridge = AgentBridge()
+    @State private var responder = "-"
     @State private var scene: Int = {
         if ProcessInfo.processInfo.arguments.contains("--scene=2") { return 2 }
         if ProcessInfo.processInfo.arguments.contains("--scene=3") { return 3 }
+        if ProcessInfo.processInfo.arguments.contains("--scene=4") { return 4 }
         return 1
     }()
 
@@ -315,6 +818,28 @@ private struct NativeChatHarnessSurface: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
 
+            if scene == 2 {
+                // This harness has no web transport. Make delivery explicit so
+                // a tap alone can never masquerade as an acknowledged answer.
+                Button("Acknowledge answer") {
+                    bridge.nativeChat.markQuestionAnswered(messageId: "q-1", answer: "strip", selectedValues: ["strip"])
+                }
+                .accessibilityIdentifier("NativeChatHarness.acknowledgeAnswer")
+            }
+
+            // Which message a reply (a swipe, or Reply) would quote, and what holds
+            // the keyboard focus (a text selection makes its view first responder).
+            HStack(spacing: 12) {
+                Text("reply=\(bridge.replyTargets["chat-demo"]?.correlationId ?? "-")")
+                    .accessibilityIdentifier("NativeChatHarness.replyTarget")
+                Text("responder=\(responder)")
+                    .accessibilityIdentifier("NativeChatHarness.responder")
+            }
+            .font(.system(size: 11, design: .monospaced))
+            .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+                responder = HarnessFirstResponder.describe()
+            }
+
             Divider()
 
             NativeChatView(store: bridge.nativeChat, bridge: bridge)
@@ -332,6 +857,8 @@ private struct NativeChatHarnessSurface: View {
             bridge.nativeChat.applyBackfill(Self.scene2Entries())
         case 3:
             bridge.nativeChat.applyBackfill(Self.scene3Entries())
+        case 4:
+            bridge.nativeChat.applyBackfill(Self.scene4Entries())
         default:
             bridge.nativeChat.applyBackfill(Self.scene1Entries())
         }
@@ -691,5 +1218,92 @@ private struct NativeChatHarnessSurface: View {
         ]
 
         return [groupMsg, sysMsg, ownVoiceMsg, noteMsg, artMsg, cliVcs, cliCompact, errMsg]
+    }
+
+    /// Images to open in the viewer (`--scene=4` only): a tall one attached to
+    /// the user's message and a wide one in the reply.
+    private static func scene4Entries() -> [[String: Any]] {
+        let t0: Double = 1_729_800_000_000
+        let userMsg: [String: Any] = [
+            "messageId": "u-img",
+            "chatId": "chat-demo",
+            "role": "user",
+            "kind": "user",
+            "content": "Here is the tall test card.",
+            "timestamp": t0,
+            "isOwnMessage": true,
+            "imageAttachments": [
+                ["id": "img-portrait", "mediaType": "image/png", "data": testCard(width: 900, height: 1800, hue: 0.58),
+                 "name": "Portrait test card", "width": 900, "height": 1800],
+            ] as [[String: Any]],
+        ]
+        let reply: [String: Any] = [
+            "messageId": "a-img",
+            "chatId": "chat-demo",
+            "role": "assistant",
+            "kind": "assistant",
+            "content": "And the wide one.",
+            "timestamp": t0 + 1_000,
+            "imageAttachments": [
+                ["id": "img-landscape", "mediaType": "image/png", "data": testCard(width: 1600, height: 1000, hue: 0.08),
+                 "name": "Landscape test card", "width": 1600, "height": 1000],
+            ] as [[String: Any]],
+        ]
+        return [userMsg, reply]
+    }
+
+    /// A PNG, as base64, one point per pixel: a 100 px grid, a ring in the
+    /// middle and its corners labelled, so a picture shows which part is in view.
+    private static func testCard(width: CGFloat, height: CGFloat, hue: CGFloat) -> String {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { context in
+            let cg = context.cgContext
+            UIColor(hue: hue, saturation: 0.55, brightness: 0.85, alpha: 1).setFill()
+            cg.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            UIColor.white.withAlphaComponent(0.55).setStroke()
+            cg.setLineWidth(3)
+            for x in stride(from: CGFloat(0), through: width, by: 100) {
+                cg.move(to: CGPoint(x: x, y: 0))
+                cg.addLine(to: CGPoint(x: x, y: height))
+            }
+            for y in stride(from: CGFloat(0), through: height, by: 100) {
+                cg.move(to: CGPoint(x: 0, y: y))
+                cg.addLine(to: CGPoint(x: width, y: y))
+            }
+            cg.strokePath()
+            UIColor.white.setStroke()
+            cg.setLineWidth(14)
+            cg.strokeEllipse(in: CGRect(x: width / 2 - 160, y: height / 2 - 160, width: 320, height: 320))
+            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 72), .foregroundColor: UIColor.white]
+            for (label, origin) in [("TL", CGPoint(x: 30, y: 20)), ("TR", CGPoint(x: width - 130, y: 20)),
+                                    ("BL", CGPoint(x: 30, y: height - 110)), ("BR", CGPoint(x: width - 130, y: height - 110))] {
+                (label as NSString).draw(at: origin, withAttributes: attributes)
+            }
+        }
+        return image.pngData()!.base64EncodedString()
+    }
+}
+
+
+private struct NativeChatLoadingHarnessSurface: View {
+    @State private var bridge = AgentBridge()
+    var body: some View {
+        VStack {
+            HStack {
+                Button("Progress") { set(["phase": "loading", "label": "Loading messages…", "detail": "50 of 100 messages", "fraction": 0.5]) }
+                Button("Fail") { set(["phase": "failed", "label": "Couldn’t load this chat’s messages"]) }
+                Button("Empty") { set(["phase": "ready"]) }
+                Button("Messages") {
+                    bridge.nativeChat.applyBackfill([["messageId": "one", "content": "Loaded message", "role": "user", "timestamp": 1]], chatId: "loading-test")
+                }
+            }.buttonStyle(.bordered)
+                .padding(.top, 60)
+            NativeChatView(store: bridge.nativeChat, bridge: bridge)
+        }
+        .onAppear { bridge.nativeChat.applyBackfill([], chatId: "loading-test", loadingState: .loading) }
+    }
+    private func set(_ wire: [String: Any]) {
+        bridge.nativeChat.applyLoadingState(NativeChatLoadingState(wire: wire)!, chatId: "loading-test")
     }
 }

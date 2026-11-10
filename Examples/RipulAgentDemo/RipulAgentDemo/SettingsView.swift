@@ -20,14 +20,6 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
             }
 
-            Section("Local Model") {
-                NavigationLink {
-                    LocalModelTestView()
-                } label: {
-                    Label("Test Apple Foundation Models", systemImage: "apple.intelligence")
-                }
-            }
-
             Section("Data") {
                 Button(role: .destructive) {
                     showDeleteConfirmation = true

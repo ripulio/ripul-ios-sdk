@@ -8,25 +8,39 @@ import SwiftUI
 
 // MARK: - Glass Section Panel
 
+private struct CompactSectionActionsKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Section headers can trade action labels and shortcut strips for one
+    /// icon before reducing the space available to their identity.
+    var compactSectionActions: Bool {
+        get { self[CompactSectionActionsKey.self] }
+        set { self[CompactSectionActionsKey.self] = newValue }
+    }
+}
+
 /// Collapsible container with a header row (chevron, title, optional chip
 /// beside the title, optional subtitle, optional trailing actions) and a
 /// content slot.
 /// On iOS 26+ renders with `.glassEffect`; on older versions uses
 /// `.ultraThinMaterial` with a rounded rect. Works on all iOS versions
 /// so call sites don't need `if #available` branching.
-public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: View, CollapsedAccessory: View>: View {
+public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: View, CollapsedAccessory: View, CompactSubtitle: View>: View {
     let title: String
     var subtitle: String? = nil
     @Binding var isExpanded: Bool
     /// Right after the title: a small chip that belongs to it, such as a count
     /// of what is waiting that also filters the panel to those.
     let titleAccessory: TitleAccessory
+    /// Replaces the collapsed subtitle when names and actions cannot share
+    /// the header. Machine panels use their configured machine icons here.
+    let compactSubtitle: CompactSubtitle
     let trailing: Trailing
     /// Shown only while COLLAPSED. It rides the header row's trailing edge,
-    /// with the subtitle truncating to make room, or left out when too little
-    /// of it would show, so a closed panel is one row. Only when even the title
-    /// can't sit beside it (a long set of circles, a very narrow window) does
-    /// it take its own row beneath the header. On the header row it is inside
+    /// with labels becoming icons before the subtitle becomes compact, so a
+    /// closed panel stays on one row. On the header row it is inside
     /// the header's tap target, but Button hit-testing takes the tap over the
     /// header's onTapGesture, so using it never toggles the panel.
     let collapsedAccessory: CollapsedAccessory
@@ -44,6 +58,7 @@ public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: V
         collapsible: Bool = true,
         followsContainerBottomCorners: Bool = false,
         @ViewBuilder titleAccessory: () -> TitleAccessory = { EmptyView() },
+        @ViewBuilder compactSubtitle: () -> CompactSubtitle = { EmptyView() },
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder collapsedAccessory: () -> CollapsedAccessory = { EmptyView() },
         @ViewBuilder content: () -> Content
@@ -54,6 +69,7 @@ public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: V
         self.collapsible = collapsible
         self.followsContainerBottomCorners = followsContainerBottomCorners
         self.titleAccessory = titleAccessory()
+        self.compactSubtitle = compactSubtitle()
         self.trailing = trailing()
         self.collapsedAccessory = collapsedAccessory()
         self.content = content()
@@ -68,16 +84,9 @@ public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: V
                 // the header keeps one identity and the chevron still turns.
                 ViewThatFits(in: .horizontal) {
                     header(accessory: showsCollapsedAccessory ? collapsedAccessory : nil)
-                    header(accessory: showsCollapsedAccessory ? collapsedAccessory : nil, showsSubtitle: false)
-                    VStack(spacing: 0) {
-                        header(accessory: nil)
-                        if showsCollapsedAccessory {
-                            collapsedAccessory
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
+                    header(accessory: showsCollapsedAccessory ? collapsedAccessory : nil, compactActions: true)
+                    header(accessory: showsCollapsedAccessory ? collapsedAccessory : nil,
+                           compactActions: true, showsCompactSubtitle: true)
                 }
             }
 
@@ -98,7 +107,8 @@ public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: V
     /// left out rather than shown as an ellipsis.
     private static var subtitleReserve: CGFloat { 48 }
 
-    private func header(accessory: CollapsedAccessory?, showsSubtitle: Bool = true) -> some View {
+    private func header(accessory: CollapsedAccessory?, compactActions: Bool = false,
+                        showsCompactSubtitle: Bool = false) -> some View {
         HStack(spacing: 8) {
             if collapsible {
                 Image(systemName: "chevron.right")
@@ -111,14 +121,22 @@ public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: V
                 .font(.ripul(.subheadline, weight: .semibold)) // theme-mapping: unchanged, moved into header()
                 .foregroundStyle(.ripul(.textSecondary)) // theme-mapping: unchanged, moved into header()
                 .textCase(.uppercase)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             titleAccessory
-            if showsSubtitle, let subtitle, !subtitle.isEmpty, !isExpanded {
+            if showsCompactSubtitle, !isExpanded {
+                compactSubtitle
+            } else if let subtitle, !subtitle.isEmpty, !isExpanded {
                 let label = Text(subtitle)
                     .font(.ripul(.caption)) // theme-mapping: unchanged, moved into header()
                     .foregroundStyle(.ripul(.textTertiary)) // theme-mapping: unchanged, moved into header()
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if accessory != nil {
+                if CompactSubtitle.self != EmptyView.self {
+                    // Keep complete names while they fit; the next candidate
+                    // replaces them with icons instead of an ellipsis.
+                    label.fixedSize(horizontal: true, vertical: false)
+                } else if accessory != nil {
                     // ViewThatFits measures this row at its ideal width, which
                     // counts the subtitle at no more than the reserve, so a long
                     // subtitle truncates beside the accessory instead of pushing
@@ -132,7 +150,11 @@ public struct GlassSectionPanel<Content: View, Trailing: View, TitleAccessory: V
             Spacer(minLength: 8)
             trailing
             if let accessory {
-                accessory
+                if compactActions {
+                    accessory.environment(\.compactSectionActions, true)
+                } else {
+                    accessory
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -514,6 +536,8 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
     /// partly-reorderable list (a pinned prefix followed by a read-only tail)
     /// refuse the drag up front rather than animating it and snapping back.
     var moveDisabled: ((Data.Element) -> Bool)? = nil
+    /// A row's swipe actions (`GlassSwipeSet`, the vocabulary every shared list takes).
+    var swipeActions: ((Data.Element) -> GlassSwipeSet)? = nil
     let trailing: Trailing
     let rowContent: (Data.Element) -> RowContent
 
@@ -533,9 +557,11 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
         onRefresh: (() async -> Void)? = nil,
         onMove: ((IndexSet, Int) -> Void)? = nil,
         moveDisabled: ((Data.Element) -> Bool)? = nil,
+        swipeActions: ((Data.Element) -> GlassSwipeSet)? = nil,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder row: @escaping (Data.Element) -> RowContent
     ) {
+        self.swipeActions = swipeActions
         self.title = title
         self.subtitle = subtitle
         self._isExpanded = isExpanded
@@ -581,6 +607,7 @@ public struct GlassListSection<Data: RandomAccessCollection, ID: Hashable, RowCo
                         .alignmentGuide(.listRowSeparatorLeading) { _ in 44 }
                         .listRowBackground(Color.clear)
                         .moveDisabled(onMove == nil || moveDisabled?(item) == true)
+                        .glassSwipeActions(swipeActions?(item) ?? .none)
                 }
                 .onMove { offsets, destination in onMove?(offsets, destination) }
             }
@@ -630,10 +657,11 @@ public extension GlassListSection where ID == Data.Element.ID, Data.Element: Ide
         onRefresh: (() async -> Void)? = nil,
         onMove: ((IndexSet, Int) -> Void)? = nil,
         moveDisabled: ((Data.Element) -> Bool)? = nil,
+        swipeActions: ((Data.Element) -> GlassSwipeSet)? = nil,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder row: @escaping (Data.Element) -> RowContent
     ) {
-        self.init(title: title, subtitle: subtitle, isExpanded: isExpanded, data: data, id: \.id, searchPlaceholder: searchPlaceholder, searchText: searchText, scrollable: scrollable, maxVisibleItems: maxVisibleItems, onRefresh: onRefresh, onMove: onMove, moveDisabled: moveDisabled, trailing: trailing, row: row)
+        self.init(title: title, subtitle: subtitle, isExpanded: isExpanded, data: data, id: \.id, searchPlaceholder: searchPlaceholder, searchText: searchText, scrollable: scrollable, maxVisibleItems: maxVisibleItems, onRefresh: onRefresh, onMove: onMove, moveDisabled: moveDisabled, swipeActions: swipeActions, trailing: trailing, row: row)
     }
 }
 

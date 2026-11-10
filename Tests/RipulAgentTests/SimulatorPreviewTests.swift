@@ -16,6 +16,19 @@ final class SimulatorPreviewTests: XCTestCase {
         if let appearance { result["appearance"] = appearance }
         return ["success": true, "result": result]
     }
+    /// docs/architecture/androidEmulators.md: an AVD's UDID is version 8, and its panel has Android's buttons.
+    func testAnAndroidEmulatorIsToldByItsUDIDAndGetsBackHomeAndRecents() {
+        XCTAssertTrue(AndroidEmulatorUDID.isAndroid("FDA04436-8935-86E7-AE08-D7AC01F0B184"))
+        XCTAssertFalse(AndroidEmulatorUDID.isAndroid(target.udid))
+        XCTAssertFalse(AndroidEmulatorUDID.isAndroid("emulator-5554"))
+        let state = SimulatorPreviewState()
+        state.open(target, machineId: "host", chatId: "chat")
+        XCTAssertEqual(state.hardwareControls.map(\.action), ["home", "appSwitcher", "rotateLeft", "rotateRight"])
+        state.open(SimulatorTarget(udid: "FDA04436-8935-86E7-AE08-D7AC01F0B184"), machineId: "host", chatId: "chat")
+        XCTAssertEqual(state.hardwareControls.map(\.action), ["back", "home", "appSwitcher", "rotateLeft", "rotateRight"])
+        XCTAssertEqual(state.hardwareControls.first(where: { $0.action == "appSwitcher" })?.title, "Recents")
+    }
+
     func testDuplicateFramesDoNotDecodeOrInvalidatePanel() async {
         let state = SimulatorPreviewState()
         state.open(target, machineId: "host", chatId: "chat")
@@ -143,12 +156,78 @@ final class SimulatorPreviewTests: XCTestCase {
 
     func testAChatOutOfSightGetsItsPanelForLater() {
         let state = SimulatorPreviewState()
+        let other = SimulatorTarget(udid: "5F0C2B1E-7D3A-4C69-9E21-6A8B0D4E3F17")
         state.show(chatId: "a")
+        state.open(target, machineId: "host", chatId: "b", automatic: true)
+        state.open(other, machineId: "host", chatId: "b", automatic: true)
+        // Re-sending the first target automatically does not rewind selection back to it.
         state.open(target, machineId: "host", chatId: "b", automatic: true)
         XCTAssertNil(state.selection)
         state.show(chatId: "b")
-        XCTAssertEqual(state.selection?.target, target)
+        XCTAssertEqual(state.selection?.target, other)
+        XCTAssertEqual(state.targets, [target, other])
         XCTAssertEqual(state.selection?.machineId, "host")
+    }
+
+    func testEvictsDeletedAutomaticSimulatorsAndKeepsManualError() async {
+        let gone = "This simulator is no longer available in the tool call's Xcode installation."
+        let other = SimulatorTarget(udid: "5F0C2B1E-7D3A-4C69-9E21-6A8B0D4E3F17")
+        let state = SimulatorPreviewState()
+        var reportedGone: [(String, String)] = []
+        state.onSimulatorGone = { reportedGone.append(($0, $1)) }
+
+        // 1. Both a live simulator and a deleted automatic simulator in the chat:
+        //    refreshing the deleted one drops it and switches straight to the live one.
+        state.open(target, machineId: "host", chatId: "chat", automatic: true)
+        state.open(other, machineId: "host", chatId: "chat", automatic: true)
+        XCTAssertEqual(state.selection?.target, other)
+        await state.refresh { _, _, args, _ in
+            let udid = (args.first as? [String: Any])?["udid"] as? String
+            if udid == other.udid {
+                return ["success": false, "error": gone]
+            }
+            return self.frame(name: "iPhone Duo")
+        }
+        XCTAssertEqual(state.selection?.target, target)
+        XCTAssertEqual(state.targets, [target])
+        XCTAssertEqual(state.title, "iPhone Duo")
+        XCTAssertNil(state.error)
+        XCTAssertEqual(reportedGone.map(\.1), [other.udid])
+
+        // 2. When the only automatic simulator is deleted, the panel closes instead of stuck error.
+        await state.refresh { _, _, _, _ in ["success": false, "error": gone] }
+        XCTAssertNil(state.selection)
+        XCTAssertEqual(state.targets, [])
+        XCTAssertNil(state.error)
+
+        // 3. When the person explicitly tapped View Simulator (automatic: false),
+        //    the panel stays open and explains that the simulator is gone.
+        state.open(other, machineId: "host", chatId: "chat", automatic: false)
+        await state.refresh { _, _, _, _ in ["success": false, "error": gone] }
+        XCTAssertEqual(state.selection?.target, other)
+        XCTAssertEqual(state.error, gone)
+    }
+
+    func testForgettingADeletedSimulatorSwitchesOrCloses() {
+        let other = SimulatorTarget(udid: "5F0C2B1E-7D3A-4C69-9E21-6A8B0D4E3F17")
+        let state = SimulatorPreviewState()
+        state.show(chatId: "a")
+        state.open(target, machineId: "host", chatId: "a", automatic: true)
+        state.open(other, machineId: "host", chatId: "a", automatic: true)
+        state.open(target, machineId: "host", chatId: "b", automatic: true)
+
+        state.forget(udid: other.udid.lowercased(), chatId: "a")
+        XCTAssertEqual(state.selection?.target, target)
+        XCTAssertEqual(state.targets, [target])
+
+        state.forget(udid: target.udid, chatId: "a")
+        XCTAssertNil(state.selection)
+        XCTAssertEqual(state.targets, [])
+
+        // Background chat 'b' also drops its deleted simulator.
+        state.forget(udid: target.udid, chatId: "b")
+        state.show(chatId: "b")
+        XCTAssertNil(state.selection)
     }
 
     func testSwitchesBetweenTheChatsSimulators() async {
@@ -353,6 +432,91 @@ final class SimulatorPreviewTests: XCTestCase {
         XCTAssertEqual(state.targets, [target])
     }
 
+    /// The host's own button (the iPhone Duo's strip) learns what the chat on
+    /// screen has, and opens and minimises the panel as the round button did.
+    func testTheHostsButtonFollowsAndTogglesThePanel() {
+        let state = SimulatorPreviewState()
+        XCTAssertEqual(SimulatorPreviewState.presence(state.selection, collapsed: state.collapsed, dockedUdid: nil), .none)
+        state.open(target, machineId: "host", chatId: "chat")
+        XCTAssertEqual(SimulatorPreviewState.presence(state.selection, collapsed: state.collapsed, dockedUdid: nil), .open)
+        state.live = true
+        state.toggleFromHostButton()
+        XCTAssertTrue(state.collapsed)
+        XCTAssertFalse(state.live, "minimised, the live video stops, as the panel's own minimise stops it")
+        XCTAssertEqual(SimulatorPreviewState.presence(state.selection, collapsed: state.collapsed, dockedUdid: nil), .minimised)
+        state.toggleFromHostButton()
+        XCTAssertFalse(state.collapsed)
+        // The dock showing it leaves the strip nothing to hold, and the button nothing to do.
+        XCTAssertEqual(SimulatorPreviewState.presence(state.selection, collapsed: false, dockedUdid: target.udid.lowercased()), .none)
+        state.close()
+        state.toggleFromHostButton()
+        XCTAssertFalse(state.collapsed)
+        XCTAssertNil(state.selection)
+    }
+
+    func testABridgePublishesThePresenceOnTheNextTurn() async {
+        let bridge = AgentBridge()
+        XCTAssertEqual(bridge.simulatorPreviewPresence, .none)
+        bridge.simulatorPreview.open(target, machineId: "host", chatId: "chat")
+        // Not inside the change: a chat switch publishes during SwiftUI's update.
+        XCTAssertEqual(bridge.simulatorPreviewPresence, .none)
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(bridge.simulatorPreviewPresence, .open)
+        bridge.toggleSimulatorPreview()
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(bridge.simulatorPreviewPresence, .minimised)
+        // Two of the host's places: the panel's own button comes back only
+        // when neither holds it.
+        bridge.setSimulatorPreviewButtonHost("strip", holds: true)
+        bridge.setSimulatorPreviewButtonHost("bottomBar", holds: true)
+        bridge.setSimulatorPreviewButtonHost("strip", holds: false)
+        XCTAssertTrue(bridge.simulatorPreviewButtonHosted)
+        bridge.setSimulatorPreviewButtonHost("bottomBar", holds: false)
+        XCTAssertFalse(bridge.simulatorPreviewButtonHosted)
+    }
+
+    @available(iOS 26.0, *)
+    func testASimulatorFloatedFromTheSimulatorsScreenBelongsToNoChat() {
+        let bridge = AgentBridge()
+        let floated = bridge.floatedSimulatorPreview
+        let second = SimulatorTarget(udid: "5F0C2B1E-7D3A-4C69-9E21-6A8B0D4E3F17")
+        let elsewhere = SimulatorTarget(udid: "6A2D4C3B-1E0F-4A5B-8C7D-9E0F1A2B3C4D")
+        bridge.floatSimulator(udid: target.udid, machineId: "studio")
+        XCTAssertEqual(floated.selection, .init(target: target, machineId: "studio", chatId: SimulatorPreviewState.floatedChatId))
+        XCTAssertFalse(floated.collapsed)
+        XCTAssertTrue(floated.closeDismisses)
+        XCTAssertNil(bridge.simulatorPreview.selection, "no chat's panel opens")
+        XCTAssertFalse(bridge.simulatorPreview.closeDismisses)
+        // A chat switch moves the chats' panel, not the floated one.
+        bridge.simulatorPreview.show(chatId: "another chat")
+        XCTAssertEqual(floated.selection?.target, target)
+        // Another of the same Mac's joins its switch; another Mac's takes its place.
+        bridge.floatSimulator(udid: second.udid, machineId: "studio")
+        XCTAssertEqual(floated.targets, [target, second])
+        XCTAssertEqual(floated.selection?.target, second)
+        bridge.floatSimulator(udid: elsewhere.udid, machineId: "macbook")
+        XCTAssertEqual(floated.targets, [elsewhere])
+        XCTAssertEqual(floated.selection?.machineId, "macbook")
+        // Minimised, floating it again brings it back.
+        floated.collapsed = true
+        bridge.floatSimulator(udid: elsewhere.udid, machineId: "macbook")
+        XCTAssertFalse(floated.collapsed)
+        // The live stream's shape goes to the panel showing that simulator only.
+        bridge.simulatorPreview.open(target, machineId: "studio", chatId: "another chat")
+        bridge.updateSimulatorPreviewGeometry(udid: elsewhere.udid, pointSize: CGSize(width: 466, height: 678), chrome: nil)
+        XCTAssertEqual(floated.logicalScreenSize, CGSize(width: 466, height: 678))
+        XCTAssertEqual(bridge.simulatorPreview.logicalScreenSize, .zero)
+        XCTAssertEqual(bridge.simulatorPreviewInitialGeometry(udid: elsewhere.udid).screenSize, CGSize(width: 466, height: 678))
+        // Its Close takes the simulator away: there is no chat for it to wait in.
+        floated.close()
+        XCTAssertNil(floated.selection)
+        XCTAssertEqual(bridge.simulatorPreview.selection?.target, target)
+        // A UDID that is not one opens nothing.
+        bridge.floatSimulator(udid: "booted", machineId: "studio")
+        XCTAssertNil(floated.selection)
+    }
+
     func testChromeFollowsSnapshotAndComputesChassisAspectRatio() async {
         let state = SimulatorPreviewState()
         state.open(target, machineId: "host", chatId: "chat")
@@ -380,11 +544,79 @@ final class SimulatorPreviewTests: XCTestCase {
         XCTAssertEqual(state.chrome?.hingeEdge, "left")
         XCTAssertEqual(state.chrome?.cutoutKind, "cornerHole")
         XCTAssertEqual(state.logicalScreenSize, CGSize(width: 384, height: 830))
-        // Total chassis width = 384 + (26+4) + (14+4) = 432, height = 830 + (14+4) + (14+4) = 866
-        XCTAssertEqual(state.chassisAspectRatio, 432.0 / 866.0, accuracy: 0.001)
+        // Total chassis width = 384 + (26+4) + (14+4) = 432, height = 830 + (14+26) + (14+26) = 910
+        XCTAssertEqual(state.chassisAspectRatio, 432.0 / 910.0, accuracy: 0.001)
+        // The empty band above the frame, which the panel tucks under its toolbar: 26 of the 910.
+        XCTAssertEqual(state.chassisTopBand, 26.0 / 910.0, accuracy: 0.0001)
         state.close()
         XCTAssertNil(state.chrome)
         XCTAssertEqual(state.logicalScreenSize, .zero)
+    }
+
+    @available(iOS 26.0, *)
+    func testTheToolbarKeepsWhatFitsAndLeavesTheRestToTheMenu() {
+        typealias Panel = SimulatorPreviewPanel
+        let all = Panel.Tool.allCases
+        XCTAssertEqual(Panel.tools(all, width: 300), all)
+        XCTAssertEqual(Panel.buttonWidth(count: all.count, width: 300), 42)
+        // A third of a 440-point phone: the window button waits in the menu,
+        // and Close goes too, as Minimise does the same.
+        XCTAssertEqual(Panel.tools([.close, .menu, .window, .control, .minimise], width: 146.7),
+                       [.menu, .control, .minimise])
+        XCTAssertEqual(Panel.buttonWidth(count: 3, width: 146.7), 42)
+        // Under Control a third of a 402-point phone leaves Home to the menu
+        // as well, and the three left share the bar.
+        XCTAssertEqual(Panel.tools(all, width: 134), [.menu, .control, .minimise])
+        XCTAssertEqual(Panel.buttonWidth(count: 3, width: 134), 122.0 / 3, accuracy: 0.001)
+        // The narrowest panel.
+        XCTAssertEqual(Panel.tools(all, width: 120), [.menu, .control, .minimise])
+        XCTAssertEqual(Panel.buttonWidth(count: 3, width: 120), 36)
+    }
+
+    func testSetLiveShowsToastDescribingModeChange() {
+        let state = SimulatorPreviewState()
+        state.open(target, machineId: "host", chatId: "chat")
+        XCTAssertFalse(state.live)
+        XCTAssertNil(state.notice)
+
+        state.setLive(true)
+        XCTAssertTrue(state.live)
+        XCTAssertEqual(state.notice, "Control mode — touch to interact, drag the toolbar to move")
+
+        state.setLive(false)
+        XCTAssertFalse(state.live)
+        XCTAssertEqual(state.notice, "View mode — preview only")
+    }
+
+    func testOverlayLayoutSizesButtonsUniformlyAndStraddlesChromeBorder() {
+        let screenSize = CGSize(width: 393, height: 852)
+        let chrome = SimulatorDisplayChrome.defaultPhone
+        let outsets = SimulatorChromePath.totalOutsets(for: chrome, includesButtonPadding: true)
+        let ratio = (screenSize.width + outsets.left + outsets.right) / (screenSize.height + outsets.top + outsets.bottom)
+        let containerSize = CGSize(width: 260, height: 260 / ratio)
+
+        let layout = SimulatorChromePath.overlayLayout(
+            in: containerSize,
+            screenSize: screenSize,
+            chrome: chrome
+        )
+        XCTAssertEqual(layout.buttonDiameter, 34)
+        XCTAssertEqual(layout.iconFontSize, 13)
+
+        let screenRect = SimulatorChromePath.screenRect(
+            in: containerSize,
+            screenSize: screenSize,
+            chrome: chrome,
+            includesButtonPadding: true
+        )
+        let scale = screenRect.width / screenSize.width
+        let topBorderY = screenRect.minY - CGFloat(chrome.bezelTop) * scale + 1.5 * scale
+        let topButtonCenterY = layout.topInset + layout.buttonDiameter * 0.5
+        XCTAssertEqual(topButtonCenterY, topBorderY, accuracy: 1.5)
+
+        let bottomBorderY = screenRect.maxY + CGFloat(chrome.bezelBottom) * scale - 1.5 * scale
+        let bottomButtonCenterY = containerSize.height - layout.bottomInset - layout.buttonDiameter * 0.5
+        XCTAssertEqual(bottomButtonCenterY, bottomBorderY, accuracy: 1.5)
     }
 
     func testMaximizingPausesStillsIgnoresAutomaticOpensAndRestoresCleanly() async {

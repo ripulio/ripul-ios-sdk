@@ -13,7 +13,8 @@ public struct TouchTool: NativeTool {
     public let name = "touch"
     public let description = "Real finger input in the host app at a point in window coordinates (points — the "
         + "space inspect_screen's frames use): tap, double_tap, long_press, swipe from x,y to toX,toY, or pinch "
-        + "about x,y with two fingers going from `from` to `to` points apart (apart to zoom in). It "
+        + "about x,y with two fingers going from `from` to `to` points apart (apart to zoom in). A swipe "
+        + "with fingers 2 moves two fingers side by side, the point between them from x,y to toX,toY. It "
         + "goes through UIKit's own touch handling, so gesture recognizers, SwiftUI, tab bars and scroll "
         + "views react as to a finger. Use it for gestures (swipe to scroll, drag, long press), for an exact "
         + "spot, or where tap_element reports an element isn't tappable. A short swipe duration flings, a "
@@ -26,6 +27,7 @@ public struct TouchTool: NativeTool {
         .number("y", "Where the finger lands: y in window points", required: true),
         .number("toX", "swipe: where the finger lifts, x"),
         .number("toY", "swipe: where the finger lifts, y"),
+        .number("fingers", "swipe: 1 (default) or 2, side by side 60 points apart"),
         .number("duration", "Seconds: long_press hold (default 0.8), swipe or pinch travel (default 0.25)"),
         .number("from", "pinch: how far apart the two fingers start, in points (default 80)"),
         .number("to", "pinch: how far apart they end, in points (default 240)"),
@@ -45,7 +47,8 @@ public struct TouchTool: NativeTool {
             return ["success": false, "error": refusal]
         }
         if let reason = TouchSynthesizer.unavailableReason {
-            return ["success": false, "error": "Real touches are unavailable: \(reason). Use tap_element instead."]
+            return ["success": false, "error": "Real touches are unavailable: \(reason). Use tap_element instead.",
+                    "code": TouchSynthesizer.unavailableCode ?? "touch_left_out"]
         }
         guard let window = ScreenElementFinder.hostWindow() else {
             return ["success": false, "error": "No app window on screen"]
@@ -75,8 +78,13 @@ public struct TouchTool: NativeTool {
                     return ["success": false, "error": "swipe needs toX and toY"]
                 }
                 let end = CGPoint(x: min(max(toX, 0), bounds.maxX - 1), y: min(max(toY, 0), bounds.maxY - 1))
-                try await TouchSynthesizer.drag(from: point, to: end, in: window,
-                                                duration: Double(number("duration") ?? 0.25))
+                let duration = Double(number("duration") ?? 0.25)
+                if number("fingers") == 2 {
+                    try await TouchSynthesizer.twoFingerDrag(from: point, to: end, in: window, duration: duration)
+                    result["fingers"] = 2
+                } else {
+                    try await TouchSynthesizer.drag(from: point, to: end, in: window, duration: duration)
+                }
                 result["to"] = ["x": end.x, "y": end.y]
             case "pinch":
                 let from = number("from") ?? 80, to = number("to") ?? 240

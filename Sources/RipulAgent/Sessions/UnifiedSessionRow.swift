@@ -1,5 +1,45 @@
 import SwiftUI
 
+private struct CompactSessionRowsKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private struct SessionRowsKeepOneHeightKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var compactSessionRows: Bool {
+        get { self[CompactSessionRowsKey.self] }
+        set { self[CompactSessionRowsKey.self] = newValue }
+    }
+
+    /// Rows that keep one height while their agents work: no third line for
+    /// the tool running under a plan. Home's Jump back in (Peter, 2 November
+    /// 2026: "it jumps around"), where that line came and went several times
+    /// a minute and moved everything below the rows.
+    var sessionRowsKeepOneHeight: Bool {
+        get { self[SessionRowsKeepOneHeightKey.self] }
+        set { self[SessionRowsKeepOneHeightKey.self] = newValue }
+    }
+}
+
+/// Measure the list's actual pane once, including when it sits beside a chat.
+/// Accessibility text keeps its usual scale and room to grow.
+struct AdaptiveSessionRowDensity: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.defaultMinListRowHeight) private var minimumRowHeight
+    @State private var isNarrow = false
+
+    func body(content: Content) -> some View {
+        let compact = isNarrow && !dynamicTypeSize.isAccessibilitySize
+        content
+            .environment(\.compactSessionRows, compact)
+            .environment(\.defaultMinListRowHeight, compact ? 44 : minimumRowHeight)
+            .onGeometryChange(for: Bool.self) { $0.size.width < 400 } action: { isNarrow = $0 }
+    }
+}
+
 // MARK: - Session Subtitle Lozenge
 
 /// Small, subdued pill shown at the start of the session-row subtitle line
@@ -14,10 +54,9 @@ struct SessionTitleLozenge: View {
 
         /// Whether the lozenge renders its glyph. A `.tool` lozenge is only
         /// ever on screen while that same tool is live (both call sites gate
-        /// on `latestToolActivity != nil`), and the row's leading slot already
-        /// renders the identical `ToolIconMap` glyph for a live tool — so the
-        /// lozenge carries just the name (it exists to hold the names too
-        /// long to fit under the leading icon). The plan glyph appears
+        /// on `latestToolActivity != nil`), and the row's bottom-right slot
+        /// already renders the identical `ToolIconMap` glyph for a live tool —
+        /// so the lozenge carries just the name. The plan glyph appears
         /// nowhere else on the row, so `.plan` keeps its icon.
         var showsIcon: Bool {
             if case .tool = self { return false }
@@ -81,8 +120,7 @@ struct SessionTitleLozenge: View {
 ///
 /// Availability deliberately tracks the OLDEST surface that renders tags, not
 /// the session row's — this is Text + Capsule + Color and touches no iOS 26
-/// API, and the plans list (iOS 17 / macOS 14) shows the same lozenges. Shared
-/// chrome, not Sessions-private chrome.
+/// API.
 @available(iOS 17.0, macOS 14.0, *)
 struct TagLozenge: View {
     let text: String
@@ -118,6 +156,8 @@ public struct UnifiedSessionRow: View {
         var isLozenge: Bool { self == .lozenge }
     }
 
+    @Environment(\.compactSessionRows) private var compactSessionRows
+    @Environment(\.sessionRowsKeepOneHeight) private var keepsOneHeight
     var sessionStore: SessionListStore
     let session: UnifiedSession
     var presentation: Presentation = .list
@@ -274,6 +314,10 @@ public struct UnifiedSessionRow: View {
         sessionStore.isPinned(anyOf: session.readStateKeys)
     }
 
+    private var customSessionIcon: String? {
+        sessionStore.customIcon(anyOf: session.readStateKeys)
+    }
+
     /// Live in-progress TodoWrite plan for this row. Uses the *plain*
     /// `visibleTodoState` so the subtitle keeps ticking through `1/4`,
     /// `2/4`, ... even if the user has opened the chat once already.
@@ -296,6 +340,16 @@ public struct UnifiedSessionRow: View {
     /// tool name (for icon lookup), display label (for the middle text),
     /// and second-lozenge detail (filename / pattern / command).
     private var latestToolActivity: AgentActivityEvent? {
+        toolActivity(of: session)
+    }
+
+    /// Live tool activity for this row's icons: its own when present, or the
+    /// first active tool among put-away started chats when this row is idle.
+    private var activeToolActivity: AgentActivityEvent? {
+        latestToolActivity ?? startedChatsPutAway.lazy.compactMap { toolActivity(of: $0) }.first
+    }
+
+    private func toolActivity(of session: UnifiedSession) -> AgentActivityEvent? {
         guard let ripul = session.ripulSession else { return nil }
         if let byTab = sessionStore.latestToolActivityForList(for: ripul.id) { return byTab }
         return sessionStore.latestToolActivityForList(for: ripul.sourceChatId)
@@ -350,7 +404,7 @@ public struct UnifiedSessionRow: View {
     /// ☾ teal "Kimi K3", not the harness identity. nil when the model is
     /// unknown → the row falls back to the harness icon/label.
     private var modelIdentity: ModelIdentity? {
-        ModelIdentity.resolve(modelId: modelIdOverride) ?? ModelIdentity.resolve(modelId: session.model)
+        session.modelIdentity(modelIdOverride: modelIdOverride)
     }
 
     // MARK: - Presentation metrics
@@ -369,8 +423,16 @@ public struct UnifiedSessionRow: View {
     private var iconSize: CGFloat { presentation.isLozenge ? 13 : 16 }
     private var iconWidth: CGFloat { presentation.isLozenge ? 20 : 28 }
     private var titleFont: Font {
-        presentation.isLozenge ? .ripul(.caption, weight: .semibold) : .ripul(.body, weight: isUnread ? .bold : .regular)
+        presentation.isLozenge ? .ripul(.caption, weight: .semibold)
+            : .ripul(compactSessionRows ? .subheadline : .body, weight: isUnread ? .bold : .regular)
     }
+    /// Reference font for sizing a single-line title slot: constant `.regular`
+    /// weight in list presentation so toggling `isUnread` never changes height.
+    private var titleStrutFont: Font {
+        presentation.isLozenge ? .ripul(.caption, weight: .semibold) // theme-mapping: lozenge strut matches titleFont
+            : .ripul(compactSessionRows ? .subheadline : .body, weight: .regular) // theme-mapping: regular strut matches titleFont
+    }
+    private var compactListRow: Bool { compactSessionRows && !presentation.isLozenge }
     private var detailFont: Font { presentation.isLozenge ? .ripul(.caption2) : .ripul(.caption) }
 
     /// Text for the leading slot of the idle detail row: the model in use
@@ -383,118 +445,77 @@ public struct UnifiedSessionRow: View {
     }
 
     public var body: some View {
+        // Counted, not marked: a mark records why each row redrew, too dear
+        // for every row of a list (the perf journal's counts).
+        let _ = MainThreadSampler.count("UnifiedSessionRow.body")
         HStack(spacing: presentation.isLozenge ? 6 : 12) {
             // Selection checkmark
             if isSelectMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.ripulIcon(.title3))
                     .foregroundStyle(isSelected ? Color.accentColor : Color.ripul(.textSecondary))
+                    .frame(height: 20)
                     .animation(.easeInOut(duration: 0.15), value: isSelected)
                     .uiKitIdentifier("UnifiedSessionRow.selectionCheckmark")
             }
 
-            // Leading icon — tool icon while a tool activity event is
-            // present (both toolStart and toolEnd); otherwise the model
-            // family glyph (in the model's colour) when the model resolves,
-            // falling back to the harness provider icon when it doesn't.
-            VStack(spacing: 2) {
-                let toolIcon: String? = latestToolActivity != nil
-                    ? ToolIconMap.symbol(for: latestToolActivity?.toolNameForIcon)
-                    : nil
-                let toolLabel: String? = {
-                    guard latestToolActivity != nil,
-                          let name = latestToolActivity?.displayName,
-                          name.count <= 5 else { return nil }
-                    return name
-                }()
+            // Leading icon — shows the active tool's icon for 8 seconds when a
+            // tool starts or changes, then fades back to the user-configured
+            // session icon, model family glyph, or harness provider icon.
+            ZStack(alignment: .bottomTrailing) {
+                LeadingSessionIcon(
+                    toolActivity: activeToolActivity,
+                    customSessionIcon: customSessionIcon,
+                    modelIdentity: modelIdentity,
+                    providerIcon: providerIcon,
+                    providerColor: providerColor,
+                    iconSize: iconSize,
+                    iconWidth: iconWidth,
+                    animation: toolChangeAnimation
+                )
 
-                ZStack(alignment: .bottomTrailing) {
-                    if let toolIcon {
-                        Image(systemName: toolIcon)
-                            .font(.ripulIcon(size: iconSize))
-                            .foregroundStyle(.ripul(.textSecondary))
-                            .frame(width: iconWidth)
-                            .modifier(SymbolReplaceWhileSessionListSeen())
-                            .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
-                    } else if let identity = modelIdentity {
-                        // Model-aligned: family glyph + colour, matching the
-                        // chat-stream respondent lozenges (web
-                        // modelIdentity.ts) — keyed off the model, not the
-                        // CLI harness that carried it.
-                        Text(identity.glyph)
-                            .font(.ripul(size: iconSize))
-                            .foregroundStyle(identity.color)
-                            .frame(width: iconWidth)
-                            .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
-                    } else {
-                        Image(systemName: providerIcon)
-                            .font(.ripulIcon(size: iconSize))
-                            .foregroundStyle(providerColor)
-                            .frame(width: iconWidth)
-                            .modifier(SymbolReplaceWhileSessionListSeen())
-                            .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+                // Unread reply badge, using the same read state as the
+                // bold title. The top-bar pill is the chat being read.
+                // One slot: unread outranks pinned, because it asks for
+                // action and a pin is already shown by the row's position.
+                if !presentation.isLozenge {
+                    if let pending = pendingAttention {
+                        Image(systemName: pending.isMention ? "at.circle.fill" : "questionmark.bubble.fill")
+                            .font(.ripulIcon(size: 12, weight: .medium))
+                            .foregroundStyle(.tint)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 2))
+                            .offset(x: 4, y: 4)
+                            .accessibilityLabel(pending.isMention
+                                ? "\(pending.fromName ?? "Someone") mentioned you" : "Needs your answer")
+                            .uiKitIdentifier("UnifiedSessionRow.questionIndicator")
+                    } else if isUnread {
+                        Image(systemName: "envelope")
+                            .font(.ripulIcon(size: 11, weight: .medium))
+                            // .primary, not .white: the backing is
+                            // .background, which is white in light mode.
+                            .foregroundStyle(.ripul(.text))
+                            .background(.background, in: RoundedRectangle(cornerRadius: 2))
+                            .offset(x: 4, y: 4)
+                            .accessibilityLabel("Unread reply")
+                            .uiKitIdentifier("UnifiedSessionRow.unreadIndicatorEnvelope")
+                    } else if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.ripulIcon(size: 10, weight: .medium))
+                            .foregroundStyle(.ripul(.text))
+                            .background(.background, in: RoundedRectangle(cornerRadius: 2))
+                            .offset(x: 4, y: 4)
+                            .accessibilityLabel("Pinned")
+                            .uiKitIdentifier("UnifiedSessionRow.pinnedIndicator")
                     }
-
-                    // Unread reply badge, using the same read state as the
-                    // bold title. The top-bar pill is the chat being read.
-                    // One slot: unread outranks pinned, because it asks for
-                    // action and a pin is already shown by the row's position.
-                    if !presentation.isLozenge {
-                        if let pending = pendingAttention {
-                            Image(systemName: pending.isMention ? "at.circle.fill" : "questionmark.bubble.fill")
-                                .font(.ripulIcon(size: 12, weight: .medium))
-                                .foregroundStyle(.tint)
-                                .background(.background, in: RoundedRectangle(cornerRadius: 2))
-                                .offset(x: 4, y: 4)
-                                .accessibilityLabel(pending.isMention
-                                    ? "\(pending.fromName ?? "Someone") mentioned you" : "Needs your answer")
-                                .uiKitIdentifier("UnifiedSessionRow.questionIndicator")
-                        } else if isUnread {
-                            Image(systemName: "envelope")
-                                .font(.ripulIcon(size: 11, weight: .medium))
-                                // .primary, not .white: the backing is
-                                // .background, which is white in light mode.
-                                .foregroundStyle(.ripul(.text))
-                                .background(.background, in: RoundedRectangle(cornerRadius: 2))
-                                .offset(x: 4, y: 4)
-                                .accessibilityLabel("Unread reply")
-                                .uiKitIdentifier("UnifiedSessionRow.unreadIndicatorEnvelope")
-                        } else if isPinned {
-                            Image(systemName: "pin.fill")
-                                .font(.ripulIcon(size: 10, weight: .medium))
-                                .foregroundStyle(.ripul(.text))
-                                .background(.background, in: RoundedRectangle(cornerRadius: 2))
-                                .offset(x: 4, y: 4)
-                                .accessibilityLabel("Pinned")
-                                .uiKitIdentifier("UnifiedSessionRow.pinnedIndicator")
-                        }
-                    }
-                }
-                .animationWhileSessionListSeen(toolChangeAnimation, value: toolIcon)
-
-                // The label under the icon needs a second line the top-bar
-                // pill doesn't have; there the tool name stays in the subtitle.
-                if let toolLabel, !presentation.isLozenge {
-                    Text(toolLabel)
-                        .font(.ripul(size: 8, weight: .medium))
-                        .foregroundStyle(.ripul(.textSecondary))
-                        .lineLimit(1)
-                        .frame(width: 32)
-                        .contentTransition(.opacity)
-                        .transition(.opacity)
-                        .uiKitIdentifier("UnifiedSessionRow.toolLabel")
                 }
             }
-            .frame(width: iconWidth)
-            .animationWhileSessionListSeen(toolChangeAnimation, value: latestToolActivity != nil)
-            // The name under the icon fades to the next tool's, with the icon.
-            .animationWhileSessionListSeen(toolChangeAnimation, value: latestToolActivity?.displayName)
+            .frame(width: iconWidth, height: iconSize)
             .modifier(StartedChatsToggle(
                 count: startedChats, isClosed: startedChatsClosed,
                 // Selecting rows owns the tap; the top-bar pill has no family to show.
                 action: startedChats > 0 && !isSelectMode && !presentation.isLozenge ? onToggleStartedChats : nil))
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: compactListRow ? 2 : 3) {
                 // Shared priority chain: in-progress plan > live tool call > completed plan > idle.
                 let subtitleState = SessionSubtitleState.resolve(
                     activePlan: activePlan,
@@ -502,21 +523,11 @@ public struct UnifiedSessionRow: View {
                     latestToolActivity: latestToolActivity
                 )
 
-                // Whether the tool label is short enough to be shown under
-                // the leading icon — when true, the subtitle tool lozenge
-                // is suppressed to avoid duplication.
-                let toolLabelShownUnderIcon: Bool = {
-                    guard !presentation.isLozenge,
-                          latestToolActivity != nil,
-                          let name = latestToolActivity?.displayName else { return false }
-                    return name.count <= 5
-                }()
-
                 // Decide which lozenge (if any) belongs on the subtitle line.
                 let lozengeContent: SessionTitleLozenge.Content? = {
                     switch subtitleState {
                     case .planInProgress(let plan): return .plan(plan)
-                    case .toolActivity(let activity) where !toolLabelShownUnderIcon: return .tool(activity)
+                    case .toolActivity(let activity): return .tool(activity)
                     case .planCompleted(let plan): return .plan(plan)
                     default: return nil
                     }
@@ -584,6 +595,11 @@ public struct UnifiedSessionRow: View {
                         .uiKitIdentifier("UnifiedSessionRow.replyAuthorLozenge")
                     }
                 }
+                .singleLineSlot(
+                    font: titleStrutFont,
+                    minHeight: presentation.isLozenge ? 16 : (compactListRow ? 19 : 21),
+                    enabled: titleLineLimit == 1
+                )
 
                 // Subtitle row: lozenge (if any) at the start, then the
                 // detail text for the current state, or provider/project/
@@ -673,7 +689,7 @@ public struct UnifiedSessionRow: View {
                                 // Plan link tags are machine identity — the
                                 // plan screen renders that relationship; the
                                 // row never shows the raw key.
-                                ForEach(PlanTagConvention.userTags(session.tags), id: \.self) { tag in
+                                ForEach(SessionTagVisibility.userTags(session.tags), id: \.self) { tag in
                                     TagLozenge(text: tag)
                                 }
                             }
@@ -682,6 +698,13 @@ public struct UnifiedSessionRow: View {
                         .truncationMode(.tail)
                     }
                 }
+                // The unstyled separators otherwise inherit body size and
+                // hold a compact subtitle line taller than its caption text.
+                .font(compactListRow ? detailFont : nil)
+                .singleLineSlot(
+                    font: detailFont,
+                    minHeight: presentation.isLozenge ? 16 : 19
+                )
                 // A new tool animates the icon, the lozenge and this line
                 // (0.175 s): in the session list while it can be seen (on an
                 // iPhone it stays behind an open chat), and in the chat's
@@ -697,12 +720,11 @@ public struct UnifiedSessionRow: View {
 
                 // Third row: only when a plan is driving the row AND a tool
                 // call is live underneath it. The top-bar pill is two lines
-                // tall, so it keeps the plan line and drops this one.
-                if let inlineToolActivity, !presentation.isLozenge {
+                // tall, so it keeps the plan line and drops this one, as do
+                // rows that keep one height (the tool is still the icon).
+                if let inlineToolActivity, !presentation.isLozenge, !keepsOneHeight {
                     HStack(spacing: 6) {
-                        if !toolLabelShownUnderIcon {
-                            SessionTitleLozenge(content: .tool(inlineToolActivity))
-                        }
+                        SessionTitleLozenge(content: .tool(inlineToolActivity))
                         if let toolDetail = inlineToolActivity.detail, !toolDetail.isEmpty {
                             Text(toolDetail)
                                 .font(.ripul(.caption))
@@ -733,7 +755,8 @@ public struct UnifiedSessionRow: View {
                 listTrailingChrome
             }
         }
-        .padding(.vertical, presentation.isLozenge ? 0 : 2)
+        .padding(.vertical, presentation.isLozenge || compactListRow ? 0 : 2)
+        .clipShape(VerticalRowClipShape(enabled: !presentation.isLozenge))
         .uiKitIdentifier("UnifiedSessionRow.container")
     }
 
@@ -760,10 +783,9 @@ public struct UnifiedSessionRow: View {
     var runningIndicatorColor: Color {
         if !sessionStore.isRunning(session),
            let runningChild = startedChatsPutAway.first(where: { sessionStore.isRunning($0) }) {
-            return ModelIdentity.resolve(modelId: runningChild.model)?.color
-                ?? ProviderConstants.color(for: runningChild.provider, providerLabel: runningChild.providerLabel)
+            return runningChild.iconColor()
         }
-        return modelIdentity?.color ?? providerColor
+        return session.iconColor(modelIdOverride: modelIdOverride)
     }
     /// The busy indicator, parked UNDER the timestamp instead of beside it.
     ///
@@ -794,7 +816,21 @@ public struct UnifiedSessionRow: View {
         let startedRunning = startedChatsRunning
         let isRunning = ownRunning || startedRunning > 0
         let count = pendingMentionCount
+        let activeToolActivity = self.activeToolActivity
+        let toolIcon: String? = activeToolActivity != nil
+            ? ToolIconMap.symbol(for: activeToolActivity?.toolNameForIcon)
+            : nil
         HStack(spacing: 4) {
+            if let toolIcon {
+                TrailingColumnSymbol(
+                    systemName: toolIcon,
+                    endsColumn: !isRunning && count == 0 && !isGroupChat && !isTeamShared
+                )
+                .modifier(SymbolReplaceWhileSessionListSeen())
+                .transition(.opacity)
+                .accessibilityLabel(activeToolActivity?.displayName ?? "Tool in use")
+                .uiKitIdentifier("UnifiedSessionRow.toolIcon")
+            }
             if isRunning {
                 // Core Animation, not a SwiftUI symbol effect: see
                 // RenderServerPulsingSymbol for the per-frame cost that has.
@@ -833,6 +869,7 @@ public struct UnifiedSessionRow: View {
         }
         .frame(height: 16)
         .animation(.easeInOut(duration: 0.175), value: isRunning)
+        .animationWhileSessionListSeen(toolChangeAnimation, value: toolIcon)
     }
 
     @ViewBuilder
@@ -856,7 +893,7 @@ public struct UnifiedSessionRow: View {
                         }
                         .foregroundStyle(action.style == .primary ? Color.accentColor : action.style == .destructive ? Color.ripul(.danger) : Color.ripul(.textSecondary))
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 2)
                         .modifier(GlassCapsuleBackground())
                     }
                     .uiKitIdentifier("UnifiedSessionRow.actionButton")
@@ -904,9 +941,96 @@ public struct UnifiedSessionRow: View {
                     }
                 }
             }
+            .singleLineSlot(
+                font: .ripul(.caption2), // theme-mapping: trailing top slot strut matches TrailingColumnTime
+                minHeight: 18,
+                alignment: .trailing
+            )
 
             runningIndicatorSlot
         }
+    }
+}
+
+/// Sizes a single-line row slot to the height of its reference font strut
+/// (at least `minHeight`), so pills, icons, spinners, bold weight changes, or
+/// emojis never alter the line's height.
+@available(iOS 17.0, macOS 14.0, *)
+private struct SingleLineSlotModifier: ViewModifier {
+    let font: Font
+    var minHeight: CGFloat = 0
+    var alignment: Alignment = .leading
+    var enabled: Bool = true
+
+    func body(content: Content) -> some View {
+        if enabled {
+            SingleLineSlotLayout(minHeight: minHeight, alignment: alignment) {
+                Text("Ag")
+                    .font(font)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .hidden()
+                    .accessibilityHidden(true)
+                content
+            }
+        } else {
+            content
+        }
+    }
+}
+
+@available(iOS 17.0, macOS 14.0, *)
+private extension View {
+    func singleLineSlot(
+        font: Font,
+        minHeight: CGFloat = 0,
+        alignment: Alignment = .leading,
+        enabled: Bool = true
+    ) -> some View {
+        modifier(SingleLineSlotModifier(font: font, minHeight: minHeight, alignment: alignment, enabled: enabled))
+    }
+}
+
+@available(iOS 17.0, macOS 14.0, *)
+private struct SingleLineSlotLayout: Layout {
+    let minHeight: CGFloat
+    let alignment: Alignment
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let strut = subviews.first else { return .zero }
+        let strutHeight = max(minHeight, strut.sizeThatFits(.unspecified).height)
+        let contentWidth = subviews.dropFirst().first?.sizeThatFits(
+            ProposedViewSize(width: proposal.width, height: strutHeight)
+        ).width ?? 0
+        return CGSize(width: contentWidth, height: strutHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let strut = subviews.first else { return }
+        strut.place(at: bounds.origin, proposal: .unspecified)
+        guard subviews.count > 1 else { return }
+        let contentProposal = ProposedViewSize(width: bounds.width, height: bounds.height)
+        let anchor: UnitPoint = alignment == .trailing ? .trailing : .leading
+        let x: CGFloat = alignment == .trailing ? bounds.maxX : bounds.minX
+        subviews[1].place(
+            at: CGPoint(x: x, y: bounds.midY),
+            anchor: anchor,
+            proposal: contentProposal
+        )
+    }
+}
+
+/// Clips the row strictly at its top and bottom edges while leaving horizontal
+/// bleed for the `-8pt` family disclosure chevron and trailing ink alignment.
+private struct VerticalRowClipShape: Shape {
+    var enabled: Bool = true
+    var horizontalBleed: CGFloat = 16
+
+    func path(in rect: CGRect) -> Path {
+        if enabled {
+            return Path(rect.insetBy(dx: -horizontalBleed, dy: 0))
+        }
+        return Path(rect.insetBy(dx: -horizontalBleed, dy: -horizontalBleed))
     }
 }
 
@@ -940,6 +1064,112 @@ private struct StartedChatsToggle: ViewModifier {
             .uiKitIdentifier("UnifiedSessionRow.startedChatsToggle")
         } else {
             content
+        }
+    }
+}
+
+/// The row's leading icon: shows the active tool's icon for 8 seconds when a
+/// tool call starts or changes, then fades back to the user-chosen session
+/// icon, model glyph, or provider fallback while the bottom-right slot keeps
+/// showing the tool icon. A view of its own so the 8-second fade re-evaluates
+/// only the icon and not the whole row.
+@available(iOS 26.0, macOS 26.0, *)
+struct LeadingSessionIcon: View {
+    struct ToolKey: Equatable {
+        let toolId: String
+        let icon: String
+        let detail: String?
+
+        init?(activity: AgentActivityEvent?) {
+            guard let activity else { return nil }
+            let icon = ToolIconMap.symbol(for: activity.toolNameForIcon)
+            switch activity {
+            case .toolStart(_, let toolId, _, let detail),
+                 .toolEnd(_, let toolId, _, _, let detail):
+                self.toolId = toolId
+                self.icon = icon
+                self.detail = detail
+            default:
+                return nil
+            }
+        }
+    }
+
+    static let toolDisplayDuration: Duration = .seconds(8)
+
+    let toolActivity: AgentActivityEvent?
+    let customSessionIcon: String?
+    let modelIdentity: ModelIdentity?
+    let providerIcon: String
+    let providerColor: Color
+    let iconSize: CGFloat
+    let iconWidth: CGFloat
+    let animation: Animation?
+
+    @Environment(\.ripulSessionListCanBeSeen) private var listCanBeSeen
+    @State private var expiredToolKey: ToolKey?
+
+    private var currentToolKey: ToolKey? {
+        ToolKey(activity: toolActivity)
+    }
+
+    var activeToolIcon: String? {
+        guard let key = currentToolKey, key != expiredToolKey else { return nil }
+        return key.icon
+    }
+
+    var body: some View {
+        ZStack {
+            if let toolIcon = activeToolIcon {
+                Image(systemName: toolIcon)
+                    .font(.ripulIcon(size: iconSize))
+                    .foregroundStyle(.ripul(.textSecondary))
+                    .frame(width: iconWidth, height: iconSize)
+                    .modifier(SymbolReplaceWhileSessionListSeen())
+                    .transition(.opacity)
+                    .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+            } else if let customIcon = customSessionIcon {
+                Image(systemName: customIcon)
+                    .font(.ripulIcon(size: iconSize))
+                    .foregroundStyle(modelIdentity?.color ?? providerColor)
+                    .frame(width: iconWidth, height: iconSize)
+                    .modifier(SymbolReplaceWhileSessionListSeen())
+                    .transition(.opacity)
+                    .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+            } else if let identity = modelIdentity {
+                // Model-aligned: family glyph + colour, matching the
+                // chat-stream respondent lozenges (web
+                // modelIdentity.ts) — keyed off the model, not the
+                // CLI harness that carried it.
+                Text(identity.glyph)
+                    .font(.ripul(size: iconSize))
+                    .foregroundStyle(identity.color)
+                    .frame(width: iconWidth, height: iconSize)
+                    .transition(.opacity)
+                    .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+            } else {
+                Image(systemName: providerIcon)
+                    .font(.ripulIcon(size: iconSize))
+                    .foregroundStyle(providerColor)
+                    .frame(width: iconWidth, height: iconSize)
+                    .modifier(SymbolReplaceWhileSessionListSeen())
+                    .transition(.opacity)
+                    .uiKitIdentifier("UnifiedSessionRow.leadingIcon")
+            }
+        }
+        .frame(width: iconWidth, height: iconSize)
+        .animation(listCanBeSeen ? animation : nil, value: activeToolIcon)
+        .task(id: currentToolKey) {
+            guard let key = currentToolKey else {
+                expiredToolKey = nil
+                return
+            }
+            guard key != expiredToolKey else { return }
+            try? await Task.sleep(for: Self.toolDisplayDuration)
+            guard !Task.isCancelled else { return }
+            withAnimation(listCanBeSeen ? animation : nil) {
+                expiredToolKey = key
+            }
         }
     }
 }
@@ -1050,5 +1280,22 @@ extension EnvironmentValues {
     var ripulSessionListCanBeSeen: Bool {
         get { self[SessionListCanBeSeenKey.self] }
         set { self[SessionListCanBeSeenKey.self] = newValue }
+    }
+}
+
+extension UnifiedSession {
+    /// The identity of the model the chat runs, from a model picked for it
+    /// (`modelIdOverride`, which the row may not have caught up with) or the one
+    /// its messages name. nil when neither is a known family.
+    func modelIdentity(modelIdOverride: String? = nil) -> ModelIdentity? {
+        ModelIdentity.resolve(modelId: modelIdOverride) ?? ModelIdentity.resolve(modelId: model)
+    }
+
+    /// The colour of the chat's icon in the list and the title pill, which its
+    /// busy indicator and the composer's working star take too: the model's
+    /// when it is known, else its CLI's.
+    func iconColor(modelIdOverride: String? = nil) -> Color {
+        modelIdentity(modelIdOverride: modelIdOverride)?.color
+            ?? ProviderConstants.color(for: provider, providerLabel: providerLabel)
     }
 }

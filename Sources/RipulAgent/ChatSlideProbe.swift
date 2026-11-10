@@ -27,7 +27,20 @@ public final class ChatSlideProbe {
     private var frames = 0
     private var hitches = 0
     private var worstGapMs: Double = 0
+    /// The worst late frame our own code was marked in, while the finger or
+    /// a scroll had things moving, and after the release: what the frame
+    /// budget is held to (docs/main-thread.md). Unmarked late frames are the
+    /// system's or the machine's, and are only reported.
+    private var worstOursDragMs: Double = 0
+    private var worstOursSettleMs: Double = 0
+    private var finished = 0
     private var marks: [(at: CFTimeInterval, label: String)] = []
+
+    /// Posted with each measured slide or scroll's result, for a frame-budget
+    /// test to read (`result`).
+    public static let resultNotification = Notification.Name("ChatSlideProbe.result")
+    /// The last result: `n=<count>,frames=,late=,worst=,oursDrag=,oursSettle=` (whole ms).
+    public private(set) var result = ""
 
     private init() {}
 
@@ -43,6 +56,8 @@ public final class ChatSlideProbe {
         frames = 0
         hitches = 0
         worstGapMs = 0
+        worstOursDragMs = 0
+        worstOursSettleMs = 0
         marks = []
         let link = CADisplayLink(target: Target(self), selector: #selector(Target.frame(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
@@ -131,21 +146,68 @@ public final class ChatSlideProbe {
     }
 
     private var deferred: [String: () -> Void] = [:]
+    /// Scrolls the person is driving, by key (`holdForScroll`).
+    private var scrolls: Set<String> = []
+
+    /// A scroll the person is driving (Home's, the Agents list's): while any
+    /// is moving, `afterSlide` work waits as it does for a slide, and runs when
+    /// the last one comes to rest. Live agent activity saved the session list's
+    /// recency and redrew both lists about every two seconds, a 90 ms stall
+    /// mid-scroll on an iPhone Duo (5 November 2026). Measures nothing.
+    public static func holdForScroll(_ key: String, _ scrolling: Bool) {
+        if scrolling {
+            shared.scrolls.insert(key)
+        } else if shared.scrolls.remove(key) != nil, shared.scrolls.isEmpty, shared.link == nil {
+            shared.flushDeferred()
+        }
+    }
+
+    #if DEBUG
+    /// `-ripul.debug.noScrollHolds YES`: nothing waits for a slide or scroll,
+    /// to measure what the holds keep from under the finger and to see when
+    /// they are no longer needed (docs/main-thread.md).
+    private static let holdsOff = UserDefaults.standard.bool(forKey: "ripul.debug.noScrollHolds")
+    #endif
+
+    /// Whether `afterSlide` work waits now: a slide is in flight or a scroll held. For
+    /// work that runs in steps of its own (a chat list building rows) and should pause.
+    public static var isHolding: Bool {
+        #if DEBUG
+        if holdsOff { return false }
+        #endif
+        return shared.link != nil || !shared.scrolls.isEmpty
+    }
 
     /// Run `work` now, or — while a chat/list slide is in flight (finger down
-    /// through the settle) — once it has settled. Later requests under the same
-    /// key replace earlier ones, so a burst collapses to one run. For state no
-    /// one needs mid-swipe (the session list rebuilt by live agent activity),
-    /// whose publish would otherwise re-render the whole shell during the drag.
-    /// A fallback flush caps the wait if a gesture ends without a release.
+    /// through the settle) or a scroll is held (`holdForScroll`) — once it has
+    /// settled. Later requests under the same key replace earlier ones, so a
+    /// burst collapses to one run. For state no one needs mid-swipe (the
+    /// session list rebuilt by live agent activity), whose publish would
+    /// otherwise re-render the whole shell during the drag. A fallback flush
+    /// caps the wait if a gesture ends without a release.
     public static func afterSlide(_ key: String, _ work: @escaping () -> Void) {
-        guard shared.link != nil else { work(); return }
+        #if DEBUG
+        if holdsOff { work(); return }
+        #endif
+        guard shared.link != nil || !shared.scrolls.isEmpty else { work(); return }
         let first = shared.deferred.isEmpty
         shared.deferred[key] = work
         shared.mark("deferred \(key)")
-        if first {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                MainActor.assumeIsolated { shared.flushDeferred() }
+        if first { shared.flushLater(after: 3, waited: 0) }
+    }
+
+    /// The fallback flush. While a scroll is still held it waits for the
+    /// scroll to rest, ten seconds at most in all, so the work does not land
+    /// under the finger after all.
+    private func flushLater(after delay: TimeInterval, waited: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            MainActor.assumeIsolated {
+                let shared = ChatSlideProbe.shared
+                if !shared.scrolls.isEmpty, waited + delay < 10 {
+                    shared.flushLater(after: 0.5, waited: waited + delay)
+                } else {
+                    shared.flushDeferred()
+                }
             }
         }
     }
@@ -185,6 +247,7 @@ public final class ChatSlideProbe {
 
     public static func markBody(_ name: String, _ printChanges: () -> Void) {
         MainThreadSampler.count("\(name).body")
+        SlideResizeWatch.note(name)
         #if DEBUG
         // `-perfBodyChanges YES` at launch: every evaluation and its cause goes
         // to the log as `[BODY] …`, slide or no slide. For finding why one tap
@@ -244,6 +307,14 @@ public final class ChatSlideProbe {
         // Marks inside (or just before) the late frame are the suspects.
         let nearby = marks.filter { $0.at >= lastFrameAt - expected && $0.at <= now }
             .map(\.label)
+        // Work of ours, not the probe's own notes (a release, a deferral).
+        if nearby.contains(where: { !$0.hasPrefix("release ") && !$0.hasPrefix("deferred ") }) {
+            if releasedAt > 0 && lastFrameAt >= releasedAt {
+                worstOursSettleMs = max(worstOursSettleMs, gapMs)
+            } else {
+                worstOursDragMs = max(worstOursDragMs, gapMs)
+            }
+        }
         NSLog("%@", String(format: "[SLIDEHITCH] %@ gap=%.1fms (%.1f frames) phase=%@ marks=[%@]",
             relative(lastFrameAt), gapMs, gap / expected,
             releasedAt > 0 && lastFrameAt >= releasedAt ? "settle" : "drag",
@@ -259,6 +330,10 @@ public final class ChatSlideProbe {
         let timeline = marks.map { "\(relative($0.at)) \($0.label)" }.joined(separator: " | ")
         NSLog("%@", String(format: "[SLIDEPROBE] frames=%d hitches=%d worst=%.1fms timeline: %@",
             frames, hitches, worstGapMs, timeline))
+        finished += 1
+        result = String(format: "n=%d,frames=%d,late=%d,worst=%.0f,oursDrag=%.0f,oursSettle=%.0f",
+                        finished, frames, hitches, worstGapMs, worstOursDragMs, worstOursSettleMs)
+        NotificationCenter.default.post(name: Self.resultNotification, object: nil)
     }
 
     /// CADisplayLink retains its target; this breaks the cycle.
@@ -277,5 +352,7 @@ public enum ChatSlideProbe {
     public static func mark(_ label: @autoclosure () -> String) {}
     public static func markBody(_ name: String, _ printChanges: () -> Void) {}
     public static func afterSlide(_ key: String, _ work: @escaping () -> Void) { work() }
+    public static func holdForScroll(_ key: String, _ scrolling: Bool) {}
+    public static var isHolding: Bool { false }
 }
 #endif

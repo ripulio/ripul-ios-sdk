@@ -141,6 +141,27 @@ final class SessionFamiliesTests: XCTestCase {
         XCTAssertNil(open.fold(ofRow: "claude-cli:task6"))
     }
 
+    func testRecentRowsCountConversationsAndMakeRoomForAnOpenedFamily() {
+        var sessions = [chat("lead", minutesAgo: 1), chat("solo", minutesAgo: 30), chat("third", minutesAgo: 40), chat("fourth", minutesAgo: 50)]
+        for index in 1...5 { sessions.append(chat("task\(index)", minutesAgo: Double(index) + 1, startedBy: "lead")) }
+
+        // Put away, the family is one row, and three conversations are three rows.
+        let closed = arrange(sessions, closed: ["claude-cli:lead"])
+        XCTAssertEqual(closed.recentRows(conversations: 3).map(\.title), ["lead", "solo", "third"])
+
+        // Opened, its started chats and its fold come with it, and the limit still counts conversations.
+        let opened = arrange(sessions)
+        XCTAssertEqual(opened.recentRows(conversations: 3).map(\.id),
+                       ["claude-cli:lead", "claude-cli:task1", "claude-cli:task2", "claude-cli:task3",
+                        "family-fold:claude-cli:lead", "claude-cli:solo", "claude-cli:third"])
+        let unfolded = arrange(sessions, open: ["claude-cli:lead"])
+        XCTAssertEqual(unfolded.recentRows(conversations: 1).map(\.title).count, 7, "the head, five started chats and the fold")
+
+        // Rows left out first, and a started chat never begins the list without its head.
+        XCTAssertEqual(opened.recentRows(conversations: 2, leaving: { $0.title == "lead" }).map(\.title), ["solo", "third"])
+        XCTAssertTrue(opened.recentRows(conversations: 0).isEmpty)
+    }
+
     func testAChatThatIsWorkingIsNeverFoldedAway() {
         var sessions = [chat("lead", minutesAgo: 100)]
         for index in 1...7 { sessions.append(chat("task\(index)", minutesAgo: Double(index), startedBy: "lead")) }
@@ -547,5 +568,48 @@ final class SessionFamiliesTests: XCTestCase {
         let afterMulti = SessionFamilies.arrange([a, b, c, d], folds: false, recency: { _ in 0 }, placedUnder: { placed[$0.id] })
         XCTAssertEqual(afterMulti.heads[a.id]?.started, 3)
         XCTAssertEqual(afterMulti.under[a.id]?.map(\.title), ["thirdChild", "secondChild", "firstChild"])
+    }
+
+    @MainActor
+    func testRecentPresentationDefaultsToAutoSortAndReordersWhenChatsSpeak() {
+        XCTAssertEqual(RipulSessionsPresentation.recent(limit: 3), .recent(limit: 3, autoSort: true))
+        XCTAssertNotEqual(RipulSessionsPresentation.recent(limit: 3, autoSort: true),
+                          .recent(limit: 3, autoSort: false))
+
+        let store = SessionListStore()
+        let base = Date(timeIntervalSince1970: 1_791_630_000)
+        // A single tracked chat advancing within the same 30s bucket does not bump recencyRevision,
+        // but crossing into a newer 30s bucket does so it can overtake chats ordered by `lastUsed`.
+        store.lastActiveTimeByChatId["claude-cli:fourth"] = base.addingTimeInterval(-300)
+        let initialRev = store.recencyRevision
+        store.lastActiveTimeByChatId["claude-cli:fourth"] = base.addingTimeInterval(-295)
+        XCTAssertEqual(store.recencyRevision, initialRev)
+        store.lastActiveTimeByChatId["claude-cli:fourth"] = base
+        XCTAssertGreaterThan(store.recencyRevision, initialRev)
+
+        let sessions = [
+            chat("first", minutesAgo: 1),
+            chat("second", minutesAgo: 2),
+            chat("third", minutesAgo: 3),
+            chat("fourth", minutesAgo: 5),
+        ]
+        let before = arrange(sessions)
+        XCTAssertEqual(before.recentRows(conversations: 3).map(\.title), ["first", "second", "third"])
+
+        let afterSessions = [
+            chat("first", minutesAgo: 1),
+            chat("second", minutesAgo: 2),
+            chat("third", minutesAgo: 0.1),
+            chat("fourth", minutesAgo: 0),
+        ]
+        // With autoSort (heldOrder: nil), recentRows immediately reflects the new recency order.
+        let autoSorted = arrange(afterSessions)
+        XCTAssertEqual(autoSorted.recentRows(conversations: 3).map(\.title), ["fourth", "third", "first"])
+
+        // With autoSort: false (heldOrder preserved), the original order is retained.
+        let held = SessionFamilies.arrange(afterSessions,
+                                           recency: { Int($0.lastUsed.timeIntervalSince1970 / 30) },
+                                           heldOrder: before.all.map(\.id))
+        XCTAssertEqual(held.recentRows(conversations: 3).map(\.title), ["first", "second", "third"])
     }
 }

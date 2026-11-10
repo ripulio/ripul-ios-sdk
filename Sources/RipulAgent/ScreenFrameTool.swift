@@ -11,6 +11,8 @@ import UIKit
 /// frame's id and gets `unchanged` without an image while nothing moves.
 public struct ScreenFrameTool: NativeTool {
     public let name = "screen_frame"
+    /// A picture of the screen: shared only when the person shares their screen.
+    public let access: NativeToolAccess = .readsScreen
     public let description = "One frame of the host app's screen for a live view: a JPEG (base64) and the window "
         + "size in points, the space touch uses. Pass since=<the previous frame's id>: if the screen hasn't "
         + "changed the result is unchanged:true with no image. Excludes the Ripul dev-assistant overlay."

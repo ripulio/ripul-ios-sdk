@@ -4,7 +4,7 @@ import WebKit
 /// `AgentBridge` access to the repo navigator callables — the git
 /// queries and branch actions behind the iPhone's GitKraken-style graph.
 ///
-/// Same shape as PlanReviewBridge: the web layer owns the relay round-trip to
+/// The web layer owns the relay round-trip to
 /// the paired Mac and hands back the host's payload untouched; nothing here
 /// interprets git state. Errors arrive as `RepoNavigatorError` with a sentence
 /// the screen can show — an unreachable machine, a stale repo path, and a git

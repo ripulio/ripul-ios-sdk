@@ -4,10 +4,12 @@ import SwiftUI
 @available(iOS 15.0, macOS 13.0, *)
 public struct GlassButton: View {
     public let icon: String
+    public var glassStyle: String?
     public let action: () -> Void
 
-    public init(icon: String, action: @escaping () -> Void) {
+    public init(icon: String, glassStyle: String? = "clear", action: @escaping () -> Void) {
         self.icon = icon
+        self.glassStyle = glassStyle
         self.action = action
     }
 
@@ -17,7 +19,7 @@ public struct GlassButton: View {
                 .font(.ripulIcon(size: 18, weight: .semibold))
                 .foregroundStyle(.ripul(.text))
                 .frame(width: 44, height: 44)
-                .modifier(GlassCircleModifier(glassStyle: "regular"))
+                .modifier(GlassCircleModifier(glassStyle: glassStyle))
         }
     }
 }
@@ -210,24 +212,30 @@ public struct GlassGrowablePillModifier: ViewModifier {
 /// A capsule-shaped glass background modifier.
 @available(iOS 15.0, macOS 13.0, *)
 public struct GlassPillModifier: ViewModifier {
-    public init() {}
+    public var glassStyle: String?
+
+    public init(glassStyle: String? = "regular") {
+        self.glassStyle = glassStyle
+    }
 
     public func body(content: Content) -> some View {
         let shaped = content.contentShape(Capsule())
         #if os(iOS)
         if #available(iOS 26.0, *) {
+            let style: Glass = glassStyle == "clear" ? .clear : .regular
             shaped
                 .background(.clear)
-                .glassEffect(.regular, in: .capsule)
+                .glassEffect(style, in: .capsule)
         } else {
             shaped
                 .background(.ultraThinMaterial, in: Capsule())
         }
         #elseif os(macOS)
         if #available(macOS 26.0, *) {
+            let style: Glass = glassStyle == "clear" ? .clear : .regular
             shaped
                 .background(.clear)
-                .glassEffect(.regular, in: .capsule)
+                .glassEffect(style, in: .capsule)
         } else {
             shaped
                 .background(.ultraThinMaterial, in: Capsule())

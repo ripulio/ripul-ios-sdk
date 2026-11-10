@@ -6,6 +6,8 @@ struct CmsNavItem: Identifiable {
     let id = UUID()
     var label: String
     var icon: String?
+    /// A line under the label (the link list's subtitle).
+    var description: String? = nil
     var targetPageSlug: String?
     /// `<gridSlug>:<viewId>` — carried with the navigation; the target
     /// page's gridViewSwitcher pre-selects that view on arrival.
@@ -36,6 +38,16 @@ struct CmsNavItem: Identifiable {
     /// everyone | members | roles (navVisibility.ts).
     var visibility: String? = nil
     var requiredRoles: [String] = []
+    /// `platforms: ('web' | 'native')[]`: where the item shows; nil is both.
+    var platforms: [String]? = nil
+    /// A picture from an image chain (`image.chain`, as a grid column's): the
+    /// link list draws it in the style's picture slot instead of the icon.
+    /// Each entry's `column` names one of the item's own fields (an item has
+    /// no data row), so `{ source, column: "label" }` asks the site's image
+    /// source by the label.
+    var imageChain: [CmsCalendarDecorations.ImageEntry] = []
+    /// The item's raw fields, the "row" its image chain reads.
+    var fields: [String: CmsJSON] = [:]
 
     static func decode(_ json: CmsJSON) -> CmsNavItem? {
         guard let obj = json.objectValue else { return nil }
@@ -45,6 +57,7 @@ struct CmsNavItem: Identifiable {
         return CmsNavItem(
             label: obj.string("label") ?? "",
             icon: obj.string("icon"),
+            description: obj.string("description").flatMap { $0.isEmpty ? nil : $0 },
             targetPageSlug: obj.string("targetPageSlug").flatMap { $0.isEmpty ? nil : $0 },
             targetViewRef: obj.string("targetViewRef").flatMap { $0.isEmpty ? nil : $0 },
             url: obj.string("url").flatMap { $0.isEmpty ? nil : $0 },
@@ -58,23 +71,30 @@ struct CmsNavItem: Identifiable {
             badge: obj.string("badge"),
             badgeTone: obj.string("badgeTone"),
             iconOnly: obj.bool("iconOnly") ?? false,
-            embed: embedBlock(obj["block"]),
+            embed: embedBlock(obj["block"], id: nil),
             visibility: obj.string("visibility"),
-            requiredRoles: obj["requiredRoles"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            requiredRoles: obj["requiredRoles"]?.arrayValue?.compactMap(\.stringValue) ?? [],
+            platforms: obj["platforms"]?.arrayValue?.compactMap(\.stringValue),
+            imageChain: CmsCalendarDecorations.imageChain(obj["image"]?.objectValue?["chain"]),
+            fields: obj
         )
     }
 
     /// An embedded block definition (`{ type, props }`) as a renderable block.
-    private static func embedBlock(_ json: CmsJSON?) -> CmsBlock? {
+    static func embedBlock(_ json: CmsJSON?, id: String? = nil) -> CmsBlock? {
         guard let obj = json?.objectValue, let type = obj.string("type") else { return nil }
         return CmsBlock(
-            id: "embed:\(type)", slug: nil, name: nil, hidden: nil, visibleOn: nil, type: type,
+            id: id ?? "embed:\(type)", slug: nil, name: nil, hidden: nil, visibleOn: nil, type: type,
             props: obj.object("props") ?? [:], frame: nil, position: nil, children: nil, bindings: nil
         )
     }
 
     /// `canViewNavItem` (navVisibility.ts): designers see everything; an
     /// empty role list never falls back to "all members".
+    /// Shown in the native apps: `platforms` unset, or listing `native`
+    /// (WAC's web-only Account tab is skipped where the host has its own).
+    var showsNatively: Bool { platforms?.contains("native") ?? true }
+
     func canView(membership: CmsPortalMembership?, canDesign: Bool) -> Bool {
         guard let visibility, visibility != "everyone", !canDesign else { return true }
         if let role = membership?.role, CmsPageVisibility.bypassRoles.contains(role) { return true }
@@ -147,6 +167,11 @@ struct CmsNavItem: Identifiable {
         if text.isEmpty || text == "0" { return nil }
         if text.contains(#/@[A-Za-z_]\w*\.[A-Za-z_]\w*/#) { return nil }
         return text
+    }
+
+    /// What the item's picture loads, in order; empty without an image chain.
+    var pictureCandidates: [CmsCalendarDecorations.ImageCandidate] {
+        CmsCalendarDecorations.imageCandidates(fields, imageChain)
     }
 
     var isActive: Bool { false } // active = current page; computed at render
@@ -288,10 +313,32 @@ enum CmsNavIcon {
         "work": "briefcase",
         "school": "graduationcap",
         "security": "shield",
+        "swap": "arrow.left.arrow.right",
+        "check": "checkmark.circle.fill",
+        "sick": "cross.case",
+        "holiday": "beach.umbrella",
+        "sparkles": "sparkles",
+        "institution": "building.columns",
+        "archive": "archivebox",
+        // Material Symbols names sites use beyond the registry (the web draws
+        // them from the Material Symbols font): Sandsend's admin sidebar.
+        "calendar_month": "calendar",
+        "contacts": "person.crop.rectangle.stack",
+        "forum": "bubble.left.and.bubble.right",
+        "hotel": "bed.double",
+        "loyalty": "tag",
     ]
 
+    /// The SF Symbol for a nav icon key; a key the table lacks that is itself an
+    /// SF Symbol's name (`hammer`) is used as it is, so a site's icon never draws blank
+    /// when iOS has one by that name.
     static func symbol(for key: String?) -> String? {
         guard let key, !key.isEmpty else { return nil }
-        return symbols[key]
+        if let mapped = symbols[key] { return mapped }
+        #if canImport(UIKit)
+        return UIImage(systemName: key) != nil ? key : nil
+        #else
+        return nil
+        #endif
     }
 }

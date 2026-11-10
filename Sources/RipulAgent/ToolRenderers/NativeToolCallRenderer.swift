@@ -32,6 +32,7 @@ struct NativeToolCallRenderer: View {
                 NativeToolResultView(content: content, title: "Response")
             case .agentComms: NativeAgentCommsToolView(content: content)
             case .agentList: NativeAgentListToolView(content: content)
+            case .chatSearch, .chatPresent: NativeChatSessionsToolView(content: content)
             case .tools: NativeDiscoveredToolsView(content: content)
             case .secureConnection: NativeSecureConnectionToolView(content: content)
             case .host:
@@ -242,11 +243,13 @@ private struct NativeWebToolView: View {
         let query = content.string("query", "search_term")
         if !query.isEmpty { Label(query, systemImage: "magnifyingglass").textSelection(.enabled) }
         if content.kind == .http { Text(content.string("method").isEmpty ? "GET" : content.string("method").uppercased()).font(.ripul(.headline)) }
-        if let url = URL(string: address), ["http", "https"].contains(url.scheme) { Link(address, destination: url).textSelection(.enabled) }
+        if let url = URL(string: address), ["http", "https"].contains(url.scheme) { Link(address, destination: url) }
         let prompt = content.string("prompt", "question")
         if !prompt.isEmpty { Text(prompt).textSelection(.enabled) }
         NativeToolParameters(args: content.args, excluding: ["url", "uri", "query", "search_term", "prompt", "question", "method"])
-        if let matches = content.output?.objectValue?["results"]?.toolArray {
+        let parsed = Self.extractInlineSearchLinks(from: content.kind == .web ? ToolValue.plainText(content.output) : nil)
+        let matches = content.output?.objectValue?["results"]?.toolArray ?? parsed.links
+        if !matches.isEmpty {
             NativeToolSection(title: "Search results") {
                 ForEach(Array(matches.enumerated()), id: \.offset) { _, match in
                     let fields = match.objectValue ?? [:]
@@ -259,9 +262,28 @@ private struct NativeWebToolView: View {
                     Divider()
                 }
             }
+            if let prose = parsed.remainingText, !prose.isEmpty {
+                NativeToolSection(title: "Response") { NativeToolProse(text: prose) }
+            }
         } else if content.kind == .web, let text = ToolValue.plainText(content.output) {
             NativeToolSection(title: "Response") { NativeToolProse(text: text) }
         } else { NativeToolResultView(content: content, title: "Response") }
+    }
+
+    private static func extractInlineSearchLinks(from text: String?) -> (links: [CmsJSON], remainingText: String?) {
+        guard let text, let range = text.range(of: #"(?m)^Links:\s*(\[\{.*\}\])\s*$"#, options: .regularExpression) else {
+            return ([], text)
+        }
+        let line = String(text[range])
+        guard let bracketStart = line.firstIndex(of: "["),
+              let parsed = ToolValue.parse(String(line[bracketStart...])).toolArray,
+              !parsed.isEmpty else {
+            return ([], text)
+        }
+        var remaining = text
+        remaining.removeSubrange(range)
+        let cleaned = remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (parsed, cleaned.isEmpty ? nil : cleaned)
     }
 }
 

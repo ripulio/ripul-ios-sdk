@@ -381,6 +381,22 @@ public struct RipulStyleKind {
         self.builtIns = builtIns; self.defaultTier = defaultTier; self.persistedKeys = persistedKeys
     }
 
+    /// The cascade for one element, with the named styles supplied rather than read from
+    /// the engine's live document: the kind's default tier, then the named style (`namedStyles`
+    /// shadow the built-ins), then `overrides`. The engine resolves through this; a renderer
+    /// whose styles come from elsewhere (a CMS site's theme) calls it directly.
+    public func resolve(element: String, style: String?,
+                        namedStyles: [String: [String: RipulKnob]] = [:],
+                        overrides: [String: RipulKnob]? = nil,
+                        document: RipulThemeDocument = RipulThemeDocument()) -> [String: RipulKnob] {
+        var merged = defaultTier(document, element)
+        if let style, let named = namedStyles[style] ?? builtIns[style] {
+            for (key, value) in named { merged[key] = value }
+        }
+        if let overrides { for (key, value) in overrides { merged[key] = value } }
+        return merged
+    }
+
     /// Internal copy-with, used by `configure()` to prune cyclic slots and fold in
     /// synthesized child scopes without collapsing a dynamic kind to a fixed list.
     init(_ base: RipulStyleKind,
@@ -954,12 +970,9 @@ public enum RipulThemeEngine {
     private static func resolveStyle(kind: String, element: String, styleName: String?,
                                      overrides: [String: RipulKnob]?) -> [String: RipulKnob] {
         guard let k = kindsByName[kind] else { return overrides ?? [:] }
-        var merged = k.defaultTier(current, element)
-        if let name = styleName, let named = current.namedStyles[kind]?[name] ?? k.builtIns[name] {
-            for (key, value) in named { merged[key] = value }
-        }
-        if let overrides { for (key, value) in overrides { merged[key] = value } }
-        return merged
+        return k.resolve(element: element, style: styleName,
+                         namedStyles: current.namedStyles[kind] ?? [:],
+                         overrides: overrides, document: current)
     }
 
     // MARK: nested resolution (composite kinds)

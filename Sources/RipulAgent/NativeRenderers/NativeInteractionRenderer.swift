@@ -193,13 +193,22 @@ private struct NativeInteractionPanel: View {
           }
         }
         if snapshot.expectsResponse && !snapshot.completed {
-          TextField(snapshot.options.isEmpty && snapshot.dateInput == nil ? "Your answer" : "Or write an answer", text: Binding(
-            get: { state.text }, set: { value in state.text = value; state.edit("text", ["value": value]) }), axis: .vertical)
-            .textFieldStyle(.roundedBorder).lineLimit(1...6).focused($focused).disabled(state.disabled)
-            .accessibilityIdentifier("NativeInteraction.text")
-          Button("Send answer") {
+          if snapshot.passwordInput == true {
+            SecureField("Enter password or secret", text: Binding(
+              get: { state.text }, set: { value in state.text = value; state.edit("text", ["value": value]) }))
+              .textFieldStyle(.roundedBorder).focused($focused).disabled(state.disabled)
+              .accessibilityIdentifier("NativeInteraction.text")
+          } else {
+            TextField(snapshot.options.isEmpty && snapshot.dateInput == nil ? "Your answer" : "Or write an answer", text: Binding(
+              get: { state.text }, set: { value in state.text = value; state.edit("text", ["value": value]) }), axis: .vertical)
+              .textFieldStyle(.roundedBorder).lineLimit(1...6).focused($focused).disabled(state.disabled)
+              .accessibilityIdentifier("NativeInteraction.text")
+          }
+          Button(snapshot.passwordInput == true ? "Send secret" : "Send answer") {
             focused = false
-            state.submit("submitText", ["value": state.text])
+            let submitted = state.text
+            if snapshot.passwordInput == true { state.text = "" }
+            state.submit("submitText", ["value": submitted])
           }.modifier(NativeInteractionButtonStyle(prominent: true))
             .disabled(state.disabled || state.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityIdentifier("NativeInteraction.submitText")

@@ -139,16 +139,51 @@ public final class AgentBridge: NSObject {
     /// Set to true to request the View Inspector overlay. AgentView observes
     /// this and presents the overlay, then resets the flag.
     public var wantsShowViewInspector = false
-    /// Set to true to request the Plan Review screen. AgentView observes this
-    /// and presents the sheet, then resets the flag.
-    public var wantsShowPlanReview = false
     public var sessions: [ChatSession] = ChatSession.loadCached() {
         didSet {
             rememberActiveChatIdentity()
             receiveHumanReplyActivity(sessions)
             sessionsStream.send(sessions)
+            noteTabIdentities()
         }
     }
+
+    /// Moves when a tab opens or closes or changes what it is: its ids, host,
+    /// Mac, name, model or folder. Not when it changes what it is doing: while
+    /// a chat streams the web reports its size several times a second, and
+    /// someone typing or replying in a group changes its tab too. A view that
+    /// needs to know which tabs there are, but not what they are doing, follows
+    /// this and reads `tabsUnobserved`: one that read `sessions` redrew on
+    /// every report, hidden or not (docs/main-thread.md, rules 4 and 5).
+    public private(set) var tabIdentityRevision = 0
+    /// `sessions`, read without following it. See `tabIdentityRevision`.
+    @ObservationIgnored public private(set) var tabsUnobserved: [ChatSession] = []
+    @ObservationIgnored private var tabIdentities: [ChatSession] = []
+
+    private func noteTabIdentities() {
+        tabsUnobserved = sessions
+        let identities = sessions.map { tab -> ChatSession in
+            var identity = tab
+            identity.sizeBytes = nil
+            identity.typingNames = []
+            identity.latestReplyAuthorName = nil
+            identity.latestHumanReplyAt = nil
+            return identity
+        }
+        if identities != tabIdentities {
+            tabIdentities = identities
+            tabIdentityRevision &+= 1
+        }
+    }
+
+    #if DEBUG
+    /// The tabs as the web would report them, published as its reports are
+    /// (not saved): `SyntheticAgentActivity`, in the app's Debug builds, grows a
+    /// tab's size as a streaming chat's grows (docs/main-thread.md).
+    public func debugReceiveTabs(_ tabs: [ChatSession]) {
+        if sessions != tabs { sessions = tabs }
+    }
+    #endif
     /// Tab IDs of ephemeral commit-viewer sessions that should be excluded
     /// from the sessions list. Managed by CommitsScreen (insert on open)
     /// and AgentScreen (remove on back-nav / close).
@@ -210,9 +245,13 @@ public final class AgentBridge: NSObject {
     }
 
     /// The currently-active ChatSession, derived from `activeSessionId` and `sessions`.
+    /// Followed as far as what the tab is (`tabIdentityRevision`), not what it is
+    /// doing: the chat screens read it in their bodies, and redrew on every size
+    /// report while the chat streamed, hidden behind Home or not.
     public var activeSession: ChatSession? {
         guard let activeSessionId else { return nil }
-        return sessions.first(where: { $0.id == activeSessionId })
+        _ = tabIdentityRevision
+        return tabsUnobserved.first(where: { $0.id == activeSessionId })
     }
 
     /// True when the active session is a Claude Code CLI session.
@@ -260,6 +299,12 @@ public final class AgentBridge: NSObject {
     /// The once-per-launch sweep for waiting entries with no reply has run.
     @ObservationIgnored var hasSweptWaitingReplies = false
 
+    /// Icons chosen on this device that the server has not confirmed, by the
+    /// chat's metadata key ('' for one cleared), and the ones being sent now.
+    /// A read of the server's icons leaves these chats as they are.
+    @ObservationIgnored var unsavedSessionIcons: [String: String] = [:]
+    @ObservationIgnored var sessionIconSaves: Set<String> = []
+
     /// Whether the app is frontmost, as reported by the host's scene phase.
     ///
     /// A plain flag rather than reading `UIApplication.shared.applicationState`
@@ -279,6 +324,7 @@ public final class AgentBridge: NSObject {
         didSet {
             restoreModelCatalogue()
             publishPinnedKeys()
+            publishCustomIcons()
             restoreShowThinking()
         }
     }
@@ -745,7 +791,8 @@ public final class AgentBridge: NSObject {
     private var activeSourceChatId: String? {
         if let pending = pendingActiveSourceChatId { return pending }
         guard let activeSessionId else { return nil }
-        if let chatID = sessions.first(where: { $0.id == activeSessionId })?.sourceChatId { return chatID }
+        // Its id, not its size: see `activeSession`.
+        if let chatID = activeSession?.sourceChatId { return chatID }
         return resolvedActiveChatIdentity?.sessionID == activeSessionId ? resolvedActiveChatIdentity?.chatID : nil
     }
 
@@ -770,15 +817,16 @@ public final class AgentBridge: NSObject {
     /// read the sessions list — a finished turn *is* waiting for you. Only
     /// `.running` draws on the row itself; "waiting" is carried by unread
     /// shading, which also knows whether you've read the reply.
+    @discardableResult
     private func applySessionPhase(
         _ phase: AgentTurnPhase,
         chatId: String?,
         sequence: Int?,
         timestamp: Any? = nil
-    ) {
-        guard let chatId, !chatId.isEmpty else { return }
+    ) -> Bool {
+        guard let chatId, !chatId.isEmpty else { return false }
         if let sequence, let last = sessionLifecycleSequences[chatId], sequence < last {
-            return
+            return false
         }
         if let sequence {
             sessionLifecycleSequences[chatId] = sequence
@@ -833,6 +881,7 @@ public final class AgentBridge: NSObject {
             composerGoals.update(chatId: chatId, goal: nil)
         }
         refreshActiveAgentFlags()
+        return true
     }
 
     /// Route a lifecycle turn event into the per-chat phase maps. The active
@@ -927,12 +976,37 @@ public final class AgentBridge: NSObject {
         }
     }
 
+    /// A turn that has ended streams nothing: a row the page left marked as
+    /// streaming (thinking whose last update never said it stopped) would keep
+    /// its spinner, and the render server drawing, with the app idle.
+    private func settleNativeChatStreaming(chatId: String, sequence: Int?) {
+        guard let shownChatId = nativeChat.currentChatId else { return }
+        // Shared/legacy remote tabs have local IDs unrelated to the host ID.
+        // Resolve only declared identities; stripping prefixes cannot map them.
+        var aliases: Set<String> = [shownChatId]
+        for session in sessions {
+            let ids = Set([session.id, session.sourceChatId, session.hostChatId].compactMap { $0 })
+            if ids.contains(shownChatId) { aliases.formUnion(ids) }
+        }
+        guard aliases.contains(chatId) else { return }
+        if let sequence,
+           let latest = aliases.compactMap({ sessionLifecycleSequences[$0] }).max(),
+           sequence < latest { return }
+        nativeChat.settleStreaming(chatId: shownChatId)
+    }
+
     private func handleLifecycleEvent(_ phase: AgentTurnPhase, dict: [String: Any], isSnapshot: Bool = false) {
         guard let chatId = dict["chatId"] as? String, !chatId.isEmpty else {
             Self.debugLog("[AgentBridge] Dropping lifecycle event without chatId (phase=\(phase.rawValue))")
             return
         }
-        applySessionPhase(phase, chatId: chatId, sequence: dict["sequence"] as? Int, timestamp: dict["timestamp"])
+        let sequence = dict["sequence"] as? Int
+        let accepted = applySessionPhase(phase, chatId: chatId, sequence: sequence, timestamp: dict["timestamp"])
+        if accepted && (phase == .completed || phase == .failed) {
+            // Only explicit lifecycle state settles rows, not a legacy
+            // not-running status or an optimistic interrupt acknowledgement.
+            settleNativeChatStreaming(chatId: chatId, sequence: sequence)
+        }
         // Stamp last-active time for session list sort order — but NOT on
         // snapshots, which fire for every session on connect and would
         // reset all timestamps to "just now".
@@ -1167,6 +1241,34 @@ public final class AgentBridge: NSObject {
     #if os(iOS)
     let simulatorPreview = SimulatorPreviewState()
 
+    /// The simulator floated out of the Simulators screen: a picture-in-picture
+    /// panel of its own over every screen, which no chat owns (`floatSimulator`).
+    let floatedSimulatorPreview: SimulatorPreviewState = {
+        let state = SimulatorPreviewState()
+        state.closeDismisses = true
+        return state
+    }()
+
+    /// Floats a simulator on a Mac into a picture-in-picture panel that shows
+    /// over every screen until its Close, as a video floats out of its app
+    /// (Peter, 3 November 2026: float one from the Simulators screen). Another
+    /// of the same Mac's joins the panel's switch; another Mac's takes its place.
+    /// Needs `ripulPreviewPanels` on the window.
+    @available(iOS 26.0, *)
+    public func floatSimulator(udid: String, machineId: String) {
+        guard UUID(uuidString: udid) != nil, !machineId.isEmpty else { return }
+        let state = floatedSimulatorPreview
+        if let current = state.selection, current.machineId != machineId { state.close() }
+        state.open(SimulatorTarget(udid: udid), machineId: machineId, chatId: SimulatorPreviewState.floatedChatId)
+    }
+
+    /// The panels showing this simulator: the chat's, the floated one, or both.
+    private func simulatorPreviews(showing udid: String) -> [SimulatorPreviewState] {
+        [simulatorPreview, floatedSimulatorPreview].filter {
+            $0.selection?.target.udid.caseInsensitiveCompare(udid) == .orderedSame
+        }
+    }
+
     /// Live video of a simulator on a Mac that takes the person's fingers, for the
     /// Simulator picture-in-picture's Control: (UDID, Mac) to a view. Set by a host
     /// app that has a screen viewer (the Ripul app); without it the panel is a picture.
@@ -1175,6 +1277,10 @@ public final class AgentBridge: NSObject {
     /// Full-screen live video of a simulator on a Mac when maximized from the
     /// Simulator picture-in-picture: (UDID, Mac) to a view.
     public var simulatorFullScreenContent: ((String, String) -> AnyView)?
+
+    /// Full-screen viewer with host-owned controls. Takes precedence over the
+    /// video-only hook above and receives the PiP's hardware and restore actions.
+    public var simulatorFullScreenPresentation: ((String, String, SimulatorFullScreenControls) -> AnyView)?
 
     /// Current screen size and hardware chrome known by the simulator preview panel.
     public var simulatorPreviewInitialGeometry: (screenSize: CGSize, chrome: SimulatorDisplayChrome) {
@@ -1185,6 +1291,21 @@ public final class AgentBridge: NSObject {
     /// from the live simulator stream.
     public func updateSimulatorPreviewGeometry(pointSize: CGSize, chrome: SimulatorDisplayChrome?) {
         simulatorPreview.updateLiveGeometry(pointSize: pointSize, chrome: chrome)
+    }
+
+    /// The screen size and hardware chrome known for this simulator's panel:
+    /// the floated one's or the chat's, whichever shows it.
+    public func simulatorPreviewInitialGeometry(udid: String) -> (screenSize: CGSize, chrome: SimulatorDisplayChrome) {
+        let state = simulatorPreviews(showing: udid).last ?? simulatorPreview
+        return (state.effectiveScreenSize, state.effectiveChrome)
+    }
+
+    /// The live stream's size and chrome, for the panels showing that simulator:
+    /// a floated simulator's never reshapes the chat's panel.
+    public func updateSimulatorPreviewGeometry(udid: String, pointSize: CGSize, chrome: SimulatorDisplayChrome?) {
+        for state in simulatorPreviews(showing: udid) {
+            state.updateLiveGeometry(pointSize: pointSize, chrome: chrome)
+        }
     }
 
     /// Floats a simulator out of the picture-in-picture panel into its own
@@ -1205,6 +1326,55 @@ public final class AgentBridge: NSObject {
         )
     }
 
+    /// What the chat on screen has of its simulator picture-in-picture: none,
+    /// the panel open, or minimised. For a host that keeps the minimised
+    /// panel's button in its own chrome (`simulatorPreviewButtonHosted`).
+    public private(set) var simulatorPreviewPresence: SimulatorPreviewPresence = .none
+    @ObservationIgnored private var simulatorPreviewPresenceWatch: AnyCancellable?
+
+    /// Whether the host shows the simulator panel's button in its own chrome
+    /// (`setSimulatorPreviewButtonHost`): minimised, the panel then floats no
+    /// round button of its own.
+    public var simulatorPreviewButtonHosted: Bool { simulatorPreview.buttonHosted }
+    @ObservationIgnored private var simulatorPreviewButtonHosts: Set<String> = []
+
+    /// One of the host's places for the panel's button holds it, or lets it
+    /// go: the Ripul app has the iPhone Duo's side strip and the space beside
+    /// a bottom tab bar. The panel floats its own button while none holds it.
+    public func setSimulatorPreviewButtonHost(_ place: String, holds: Bool) {
+        if holds { simulatorPreviewButtonHosts.insert(place) } else { simulatorPreviewButtonHosts.remove(place) }
+        let hosted = !simulatorPreviewButtonHosts.isEmpty
+        if simulatorPreview.buttonHosted != hosted { simulatorPreview.buttonHosted = hosted }
+    }
+
+    /// The host's button for the panel: opens it when minimised, minimises it when open.
+    public func toggleSimulatorPreview() {
+        simulatorPreview.toggleFromHostButton()
+    }
+
+    #if DEBUG
+    /// `-ripul.fixture.simulatorPanel`: a simulator's panel on screen from
+    /// launch, with no chat or Mac to hand (`SimulatorPreviewState.openFixture`).
+    public func openSimulatorPreviewFixture() {
+        simulatorPreview.openFixture()
+    }
+    #endif
+
+    private func watchSimulatorPreviewPresence() {
+        simulatorPreviewPresenceWatch = simulatorPreview.$selection
+            .combineLatest(simulatorPreview.$collapsed, simulatorPreview.$dockedUdid)
+            .map { SimulatorPreviewState.presence($0, collapsed: $1, dockedUdid: $2) }
+            .removeDuplicates()
+            // A chat switch publishes while SwiftUI updates the panel: the
+            // host's views hear of it on the next turn, not inside that update.
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] presence in
+                MainActor.assumeIsolated {
+                    if self?.simulatorPreviewPresence != presence { self?.simulatorPreviewPresence = presence }
+                }
+            }
+    }
+
     /// The web app saw this chat's agent reach for a simulator on its Mac: one
     /// it borrowed from Trainyard, or one a tool call named. Opens the picture
     /// as the browser preview opens for a browser tool.
@@ -1220,8 +1390,31 @@ public final class AgentBridge: NSObject {
         }
         simulatorPreview.open(simulator, machineId: machineId, chatId: chatId, automatic: request["automatic"] as? Bool ?? true)
     }
+
+    @available(iOS 26.0, *)
+    func forgetSimulatorPreview(_ request: [String: Any]) {
+        guard let chatId = request["chatId"] as? String, !chatId.isEmpty,
+              let target = request["target"] as? [String: Any],
+              let udid = target["udid"] as? String, UUID(uuidString: udid) != nil else { return }
+        if let activeChatId = currentSourceChatId ?? (nativeChatScrollerEnabled ? nativeChat.currentChatId : nil) {
+            simulatorPreview.show(chatId: activeChatId)
+        }
+        simulatorPreview.forget(udid: udid, chatId: chatId)
+    }
+
+    func reportSimulatorGoneToWeb(chatId: String, udid: String) {
+        guard !chatId.isEmpty, UUID(uuidString: udid) != nil,
+              let chatData = try? JSONEncoder().encode(chatId), let chatLiteral = String(data: chatData, encoding: .utf8),
+              let udidData = try? JSONEncoder().encode(udid), let udidLiteral = String(data: udidData, encoding: .utf8) else { return }
+        webView?.evaluateJavaScript("window.__ripulForgetSimulator && window.__ripulForgetSimulator(\(chatLiteral), \(udidLiteral))", completionHandler: nil)
+    }
     let browserPreview = BrowserPreviewState()
     public private(set) var browserPreviewAvailable = false
+    /// The window's dock, which this window's chat panels join (`joinPreviewDock`). The window context owns it.
+    @ObservationIgnored weak var previewDock: PreviewDockState?
+    /// The browser docked beside the app: the host's own browser screen, on this
+    /// tab (nil: the active one). Without it the browser panel cannot dock.
+    public var browserDockContent: ((Int?) -> AnyView)?
 
     /// Installed only by a host with its own local browser (the Ripul iPhone app).
     public func configureBrowserPreview(capture: @escaping (Int?) async throws -> BrowserPreviewSnapshot) {
@@ -1369,6 +1562,8 @@ public final class AgentBridge: NSObject {
         self.exposedAudiences = audience == .developer ? [.developer] : [.endUser]
         super.init()
         AgentBridge.current = self
+        // The cached tabs, which `sessions` started with.
+        noteTabIdentities()
         // Late registrations (a host registering after the web app connected)
         // re-broadcast, so the tool list is live rather than
         // handshake-snapshotted. Registration happens on the main thread; the
@@ -1382,6 +1577,9 @@ public final class AgentBridge: NSObject {
         themeDocumentSubscription = NotificationCenter.default.publisher(for: .ripulThemeDidChange)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in MainActor.assumeIsolated { self?.syncThemeDocument() } }
+        #if os(iOS)
+        watchSimulatorPreviewPresence()
+        #endif
         // Route CPU spikes into the bridge console (visible in host_console_logs
         // / device_console_logs). onSpike is invoked on the main thread.
         cpuSampler.onSpike = { [weak self] line in self?.handleConsoleLog(line) }
@@ -1739,6 +1937,11 @@ public final class AgentBridge: NSObject {
     deinit {
         pathMonitor?.cancel()
         registry.removeObserver(registryObserverId)
+        #if canImport(UIKit)
+        // A page that has gone can no longer answer for what it shared.
+        let page = ObjectIdentifier(self)
+        Task { @MainActor in DeviceSharingIndicator.shared.forget(page) }
+        #endif
     }
 
     /// Consecutive `evaluateJavaScript` failures. A run of these is the
@@ -1780,6 +1983,19 @@ public final class AgentBridge: NSObject {
         if AgentBridge.verboseBridgeLog {
             NSLog("[AgentBridge] ← Received: %@", messageType)
         }
+        #if DEBUG
+        // How long each kind of message from the page holds the main thread:
+        // `timed:` in the perf journal, and a trace mark when it is long enough
+        // to cost a frame. While agents worked, a frame of 30-40 ms came every
+        // couple of seconds under a finger on Home with nothing else to name
+        // (Peter's Duo, 5 November 2026).
+        let handlingStarted = CACurrentMediaTime()
+        defer {
+            let ms = (CACurrentMediaTime() - handlingStarted) * 1000
+            MainThreadSampler.record("handle.\(messageType)", ms: ms)
+            if ms >= 4 { ChatSlideProbe.mark(String(format: "handle.%@ %.1fms", messageType, ms)) }
+        }
+        #endif
 
         switch messageType {
         case "inspector:toggle":
@@ -1814,8 +2030,7 @@ public final class AgentBridge: NSObject {
             // now rather than waiting for the next focus or settings change.
             Task { [weak self] in await self?.fetchSessions() }
         case "workScope:changed":
-            // The shared work scope moved — from this app, the web Plans
-            // screen, or the web sessions list. Every native surface showing
+            // The shared work scope moved. Every native surface showing
             // it re-reads; nobody caches a second copy.
             NotificationCenter.default.post(
                 name: .ripulWorkScopeChanged,
@@ -1946,6 +2161,11 @@ public final class AgentBridge: NSObject {
             pendingInputText = dict["text"] as? String
         case "chat:append":
             pendingInputAppend = dict["text"] as? String
+        case "device:identityConflict":
+            // The relay turned this device away: another holds its install id.
+            #if os(iOS)
+            DeviceIdentityConflict.ask(over: webView)
+            #endif
         case "composer:focusTrace":
             #if os(iOS)
             guard audience == .developer else { return }
@@ -1958,6 +2178,13 @@ public final class AgentBridge: NSObject {
             send(["type": "agent-framework:composer:focusTrace:result", "requestId": dict["requestId"] ?? "",
                   "trace": trace.snapshot()])
             #endif
+        case "device:sharing":
+            // Which chats this device is shared with for reading (relay/memberDevice.ts): the pill, with Stop.
+            #if canImport(UIKit)
+            DeviceSharingIndicator.shared.update(from: self, shares: dict["shares"] as? [[String: Any]] ?? []) { [weak self] in
+                Task { _ = await self?.callPage("__ripulStopDeviceSharing", log: .console) }
+            }
+            #endif
         case "link:open":
             if let urlString = dict["url"] as? String, let url = URL(string: urlString) {
                 if RipulSecureConnection.open(url) { return }
@@ -1966,8 +2193,14 @@ public final class AgentBridge: NSObject {
                 // account sheet (ClaudeSignInCard, `claudeAccountLink`).
                 if url.scheme == "ripul", url.host == "open-chat" || url.host == "claude-account" {
                     NotificationCenter.default.post(name: .ripulOpenAppURL, object: url)
-                } else {
-                    linkOpenDelegate?.agentBridge(self, didRequestOpenLink: url)
+                } else if let linkOpenDelegate {
+                    linkOpenDelegate.agentBridge(self, didRequestOpenLink: url)
+                } else if let scheme = url.scheme?.lowercased(), ["http", "https", "mailto", "tel"].contains(scheme) {
+                    #if os(iOS)
+                    UIApplication.shared.open(url)
+                    #elseif os(macOS)
+                    NSWorkspace.shared.open(url)
+                    #endif
                 }
             }
         case "nativeEmbed:update", "nativeEmbed:anchor", "nativeEmbed:clear":
@@ -1987,6 +2220,10 @@ public final class AgentBridge: NSObject {
         case "simulatorPreview:show":
             #if os(iOS)
             if #available(iOS 26.0, *) { showSimulatorPreview(dict) }
+            #endif
+        case "simulatorPreview:forget":
+            #if os(iOS)
+            if #available(iOS 26.0, *) { forgetSimulatorPreview(dict) }
             #endif
         case "toolStripRow:update":
             #if os(iOS)
@@ -2345,9 +2582,25 @@ public final class AgentBridge: NSObject {
         guard let dict = reply.dictionary else { return false }
         let success = dict["success"] as? Bool ?? false
         if success, let target {
-            // Optimistically mark the turn over so the button clears
-            // immediately — the web's lifecycle event may lag, or never
-            // arrive if a remote host's connection is lost.
+            // Shown as paused at once: Play and Stop. Pause holds the task
+            // (pausingATask.md); marking it finished here is how the pause
+            // button went for good on 3 November 2026 while the Mac ran four
+            // more messages. The Mac's own state replaces this when it arrives.
+            applySessionPhase(.awaitingInput, chatId: target, sequence: nil)
+        }
+        return success
+    }
+
+    /// Stop the paused (or running) task of the active session: it ends, and
+    /// the messages waiting behind it are dropped, each marked for its author
+    /// to send again (pausingATask.md).
+    @discardableResult
+    public func stopAgent() async -> Bool {
+        let target = activeSourceChatId
+        let reply = await callPage("__ripulStopAgent", [target], .orElse("{ success: false }"))
+        guard let dict = reply.dictionary else { return false }
+        let success = dict["success"] as? Bool ?? false
+        if success, let target {
             applySessionPhase(.completed, chatId: target, sequence: nil)
         }
         return success
@@ -2558,7 +2811,7 @@ public final class AgentBridge: NSObject {
                 if self.sessions != filtered {
                     // Session lists are observations. Explicit rename RPCs own persistence.
                     self.sessions = filtered
-                    ChatSession.saveToCache(filtered)
+                    ChatSession.saveToCacheSoon(filtered)
                 }
                 if focusRevision == sessionFocusRevision { applyActiveSessionIdFromResponse(activeId) }
                 setIfChanged(\.lastSessionsError, nil)
@@ -2640,6 +2893,9 @@ public final class AgentBridge: NSObject {
         // Opening a session is reading it — drop it from the waiting set so
         // Siri stops offering something you are now looking at.
         markSessionRead(id)
+        // Native Chat opens every chat entered at its end, the one already
+        // shown included (a switch to another chat does the same on arrival).
+        if nativeChatScrollerEnabled { nativeChat.enterChat() }
         do {
             _ = try await webView.callAsyncJavaScript(
                 "if (window.__ripulFocusSession) await window.__ripulFocusSession(sessionId);",
@@ -3228,7 +3484,11 @@ public final class AgentBridge: NSObject {
     /// shows, and the chat each one is kept under by the person's own choice
     /// ("" is "by itself"). Nil when the web app has no such call (a build
     /// before it) or could not read them, so the caller keeps what it had.
-    public func getSessionListFacts() async -> (tags: [String: [String]], placedUnder: [String: String])? {
+    ///
+    /// `icons` is each chat's chosen icon ("" for one cleared), nil when the
+    /// server sent none (one from before 7 November 2026), so nothing is
+    /// cleared or sent on its say.
+    public func getSessionListFacts() async -> (tags: [String: [String]], placedUnder: [String: String], icons: [String: String]?)? {
         let reply = await callPage("__ripulGetSessionListFacts", [], .ifMissing("null"))
         guard let dict = reply.dictionary else { return nil }
         var tags: [String: [String]] = [:]
@@ -3239,7 +3499,14 @@ public final class AgentBridge: NSObject {
         for (key, value) in dict["placedUnder"] as? [String: Any] ?? [:] {
             if let under = value as? String { placedUnder[key] = under }
         }
-        return (tags, placedUnder)
+        let icons = (dict["icons"] as? [String: Any])?.compactMapValues { $0 as? String }
+        return (tags, placedUnder, icons)
+    }
+
+    /// Keep the icon chosen for a chat's row with the chat on the server, under
+    /// its metadata key, so every device shows it. Nil clears it. True on success.
+    func saveSessionIcon(sessionId: String, icon: String?) async -> Bool {
+        await callPage("__ripulSetSessionIcon", [sessionId, icon], .ifMissing("{ok:false}")).dictionary?["ok"] as? Bool ?? false
     }
 
     /// Keep a chat under another in the session list. `under` is that chat's
@@ -3908,6 +4175,11 @@ public final class AgentBridge: NSObject {
     }
 
     private func handleScrollState(_ message: [String: Any]) {
+        guard !nativeChatScrollerEnabled else { return }
+        let isScrolling = message["isScrolling"] as? Bool ?? false
+        if scrollButton.isScrolling != isScrolling {
+            scrollButton.isScrolling = isScrolling
+        }
         let show = message["showButton"] as? Bool ?? false
         if scrollButton.show != show {
             scrollButton.show = show
@@ -3922,16 +4194,28 @@ public final class AgentBridge: NSObject {
     ///
     /// The web app forwards raw chat actions from `ChatActionsManager` over the
     /// bridge so the chat renders natively while the WKWebView stays a comms
-    /// conduit. Routes into `nativeChat` (the scroller store) and logs a one-line
-    /// trace so the pipe stays observable (ordering, ids, streaming).
+    /// conduit. Routes into `nativeChat` (the scroller store). Diagnostics stay
+    /// at lifecycle boundaries; streaming chunks must not fill the console.
     /// Enable from the web side via `window.__ripulSetNativeChatForwarding(true)`.
     private func handleNativeChatMessage(_ message: [String: Any]) {
         let kind = message["kind"] as? String ?? "?"
+        // In a frame trace's marks: which forwarded message took the main thread, and for how long.
+        let markStarted = CACurrentMediaTime()
+        defer {
+            ChatSlideProbe.mark(String(format: "nativeChat.%@ n=%d %.1fms", kind,
+                (message["messages"] as? [Any])?.count ?? 1, (CACurrentMediaTime() - markStarted) * 1000))
+        }
+        if kind == "loading", let chatId = message["chatId"] as? String,
+           let wire = message["loading"] as? [String: Any], let state = NativeChatLoadingState(wire: wire) {
+            nativeChat.applyLoadingState(state, chatId: chatId)
+            return
+        }
         if kind == "backfill", let messages = message["messages"] as? [[String: Any]] {
             let truncatedCount = (message["truncatedCount"] as? NSNumber)?.intValue ?? 0
             let chatId = message["chatId"] as? String
             let scrollPosition = message["scrollPosition"] as? [String: Any]
-            nativeChat.applyBackfill(messages, truncatedCount: truncatedCount, chatId: chatId, scrollPosition: scrollPosition)
+            let loading = (message["loading"] as? [String: Any]).flatMap { NativeChatLoadingState(wire: $0) } ?? .ready
+            nativeChat.applyBackfill(messages, truncatedCount: truncatedCount, chatId: chatId, scrollPosition: scrollPosition, loadingState: loading)
             return
         }
         if kind == "patch", let messages = message["messages"] as? [[String: Any]] {
@@ -3949,20 +4233,10 @@ public final class AgentBridge: NSObject {
             handleConsoleLog("LOG: [NativeChat] \(kind) — malformed (no message payload)")
             return
         }
-        let messageId = msg["messageId"] as? String ?? "?"
         if kind == "update" {
             nativeChat.applyUpdate(msg)
-            let thinking = msg["thinking"] as? [String: Any]
-            let streaming = (thinking?["isStreaming"] as? Bool).map { String($0) } ?? "-"
-            let len = (thinking?["content"] as? String)?.count ?? 0
-            handleConsoleLog("LOG: [NativeChat] update id=\(messageId.suffix(6)) thinkingLen=\(len) streaming=\(streaming)")
         } else {
             nativeChat.applyAdd(msg)
-            let role = msg["role"] as? String ?? "?"
-            let method = msg["method"] as? String ?? "?"
-            let content = msg["content"] as? String ?? ""
-            let preview = content.count > 60 ? String(content.prefix(60)) + "…" : content
-            handleConsoleLog("LOG: [NativeChat] add id=\(messageId.suffix(6)) role=\(role) method=\(method) count=\(nativeChat.messages.count) content=\"\(preview)\"")
         }
     }
 
@@ -4044,9 +4318,9 @@ public final class AgentBridge: NSObject {
         // content below it still clears the camera's band.
         let clearance = webView.window.map { WindowTopChromeLayout.clearance(for: $0) }
             ?? WindowTopChromeClearance(top: 54, safeTop: 54)
-        totalHeight = hostRendersMasthead ? 0 : Int(clearance.contentClearance(below: 44)) + mastheadExtra
+        totalHeight = hostRendersMasthead ? 0 : Int(clearance.contentClearance(below: GlassTopBarLayout.outerBarHeight)) + mastheadExtra
         #else
-        totalHeight = 44 + mastheadExtra
+        totalHeight = Int(GlassTopBarLayout.outerBarHeight) + mastheadExtra
         #endif
         let js = "document.documentElement.style.setProperty('--native-header-height', '\(totalHeight)px')"
         webView.evaluateJavaScript(js) { _, error in
@@ -4255,7 +4529,7 @@ public final class AgentBridge: NSObject {
                 // assignment re-fired every `$sessions` sink on every push and
                 // re-ran the unified rebuild for nothing.
                 self.sessions = filtered
-                ChatSession.saveToCache(filtered)
+                ChatSession.saveToCacheSoon(filtered)
             }
             applyActiveSessionIdFromResponse(activeId)
             sessionsRetryCount = 0

@@ -51,26 +51,56 @@ struct ShellToolPresentation: Decodable, Equatable {
     let language: String?
 }
 
-/// A message to, start of, wait on or archive of another agent, worked out by
-/// the shared web presentation: who, what was sent, where it stands, the reply.
-/// Ids, handles and settings arrive as `details`, to be kept off the face.
-struct AgentCommsPresentation: Decodable, Equatable {
-    struct Target: Decodable, Equatable {
+/// A message to, start of, wait on or archive of another agent, or a list/search/presentation
+/// of sessions, worked out by the shared web presentation: who, what was sent, where it stands,
+/// the reply, and any session items. Ids, handles and settings arrive as `details`, to be kept off the face.
+struct AgentCommsPresentation: Codable, Equatable {
+    struct Target: Codable, Equatable {
         let name: String
         /// A model id; `ModelIdentity` gives its glyph, colour and label.
         var model: String? = nil
         var harness: String? = nil
         var machine: String? = nil
     }
-    struct Status: Decodable, Equatable {
+    struct Status: Codable, Equatable {
         let text: String
         /// `pending`, `ok` or `error`.
         let tone: String
     }
-    struct Detail: Decodable, Equatable {
+    struct Detail: Codable, Equatable {
         let label: String
         let value: String
     }
+    struct Snippet: Codable, Equatable {
+        var line: Int? = nil
+        var role: String? = nil
+        var at: String? = nil
+        let text: String
+    }
+    struct SessionItem: Codable, Equatable, Identifiable {
+        let chatId: String
+        var agentId: String? = nil
+        var sessionId: String? = nil
+        var title: String? = nil
+        var harness: String? = nil
+        var model: String? = nil
+        var machine: String? = nil
+        var machineId: String? = nil
+        var cwd: String? = nil
+        var gitBranch: String? = nil
+        var status: String? = nil
+        var lastActive: String? = nil
+        var archived: Bool? = nil
+        var reference: String? = nil
+        var note: String? = nil
+        var currentTask: String? = nil
+        var lastReply: String? = nil
+        var snippets: [Snippet]? = nil
+
+        var id: String { agentId ?? sessionId ?? chatId }
+    }
+    var kind: String? = nil
+    var title: String? = nil
     let verb: String
     let target: Target
     var sent: String? = nil
@@ -78,6 +108,7 @@ struct AgentCommsPresentation: Decodable, Equatable {
     var reply: String? = nil
     var caption: String? = nil
     var details: [Detail]? = nil
+    var sessions: [SessionItem]? = nil
     /// The output could not be read as this tool's result; show it as it is.
     var unreadResult: Bool? = nil
 }
@@ -109,13 +140,19 @@ public final class ToolCallDetailsStore: ObservableObject {
 
     func receive(_ message: [String: Any], opening: Bool) {
         guard let data = try? JSONSerialization.data(withJSONObject: message),
-              let next = try? JSONDecoder().decode(ToolCallDetailsRequest.self, from: data),
-              !next.requestId.isEmpty, !next.calls.isEmpty,
+              let next = try? JSONDecoder().decode(ToolCallDetailsRequest.self, from: data) else { return }
+        apply(next, opening: opening)
+    }
+
+    func apply(_ next: ToolCallDetailsRequest, opening: Bool) {
+        guard !next.requestId.isEmpty, !next.calls.isEmpty,
               Set(next.calls.map(\.id)).count == next.calls.count else { return }
         // Late updates after dismissal must never reopen the sheet, and another
         // chat's old updates must never replace the currently inspected call.
         guard opening || request?.requestId == next.requestId else { return }
-        if request?.requestId != next.requestId {
+        if request?.requestId != next.requestId
+            || (opening && (request?.initialCallId != next.initialCallId
+                || request?.initialExpandedCallId != next.initialExpandedCallId)) {
             expandedCallIds = [next.initialExpandedCallId!]
         } else {
             // Results and new calls preserve every disclosure choice, including
@@ -190,8 +227,10 @@ struct ToolCallDetailsSheet: View {
                     .id(request.requestId)
                 }
               }
-              .task(id: store.request?.requestId) {
+              .task(id: store.request.map { "\($0.requestId):\($0.initialExpandedCallId ?? "")" }) {
                   if let callId = store.request?.initialExpandedCallId {
+                      proxy.scrollTo(callId, anchor: .top)
+                      await Task.yield()
                       proxy.scrollTo(callId, anchor: .top)
                   }
               }
@@ -209,6 +248,9 @@ struct ToolCallDetailsSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done", action: onClose).accessibilityIdentifier("ToolCallDetails.done")
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: RipulOpenSessionRequest.notification)) { _ in
+                onClose()
             }
         }
         .accessibilityIdentifier("ToolCallDetails.sheet")

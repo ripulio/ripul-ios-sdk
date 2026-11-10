@@ -13,10 +13,10 @@ import SwiftUI
 // team — never by the subscription tier. See RipulTeamsClient.
 // ---------------------------------------------------------------------------
 
-/// Cross-layer hand-off for `ripul://teams` and a tapped team-invite push:
-/// the host flips the latch and posts the notification; whichever surface is
-/// mounted consumes it (notification when live, latch at first appear). Same
-/// shape as `RipulBillingDeepLink`.
+/// Cross-layer hand-off for `ripul://teams`: the host flips the latch and
+/// posts the notification; whichever surface is mounted consumes it
+/// (notification when live, latch at first appear). Same shape as
+/// `RipulBillingDeepLink`.
 public enum RipulTeamsDeepLink {
     public static let notification = Notification.Name("ripulOpenTeamsScreen")
     /// Consumed at appear when nothing was mounted to hear the notification.

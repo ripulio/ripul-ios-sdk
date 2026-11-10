@@ -113,6 +113,7 @@ final class BridgePageCallGoldenTests: XCTestCase {
         "__ripulInjectFileError": "{success:true}",
         "__ripulInterruptAgent": "{success:true}",
         "__ripulInviteToSession": "{success:true}",
+        "__ripulCreateRoom": "{success:true, chatId:'room_0123456789abcdef'}",
         "__ripulJoinShareLink": "{ok:true, tabId:'tab-shared', label:'Shared'}",
         "__ripulKillMachine": "{success:true}",
         "__ripulLeaveSharedChat": "{success:true}",
@@ -373,6 +374,9 @@ final class BridgePageCallGoldenTests: XCTestCase {
         Probe(name: "queryPageElements") { await $0.queryPageElements() },
         Probe(name: "queryParticipants") { await $0.queryParticipants() },
         Probe(name: "inviteTeammate") { await $0.inviteTeammate(email: "a@b.c") },
+        Probe(name: "createRoom") { bridge in
+            do { return try await bridge.createRoom(title: "Leads") } catch { return "threw: \(error.localizedDescription)" }
+        },
         Probe(name: "queryAutocomplete") { await $0.queryAutocomplete(category: "files", query: awkward) },
 
         // Host sign-in and accounts

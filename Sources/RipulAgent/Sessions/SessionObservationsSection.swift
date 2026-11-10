@@ -1,42 +1,81 @@
 import SwiftUI
 
-/// The chat's observations, under its milestones and shortcuts: what agents in
-/// this chat noticed and someone should act on later (tangents), and what they
-/// left unfinished (loose ends). The footer opens the repository's whole open
-/// list, which every chat and Mac in the repository shares.
+/// The Observations tab: what agents in this chat noticed and someone should
+/// act on later (tangents) and what they left unfinished (loose ends), then the
+/// rest of the repository's open list, which every chat and Mac in the
+/// repository shares. Search and add above a list that fills the tab, as the
+/// Messages tab has.
 ///
 /// Agents record them (the `observation` tool). A person can add one, start,
 /// finish, drop, reopen and delete them here. The page's `ObservationsSection`
 /// is the web twin. Plan: docs/plans/observations.md.
-@available(iOS 15.0, macOS 13.0, *)
+@available(iOS 17.0, macOS 14.0, *)
 struct SessionObservationsSection: View {
     let bridge: AgentBridge
     let chatId: String
     /// Changes when a turn starts or ends, when the agent may have recorded one.
     let turnRunning: Bool
-    @Binding var isExpanded: Bool
 
     @State private var data: AgentBridge.ChatObservations?
+    @State private var failed = false
     @State private var openId: String?
-    @State private var showRepo = false
+    @State private var search = ""
     @State private var adding = false
     @State private var draft = ""
+    @State private var detailDraft = ""
     @State private var severity = "medium"
     @State private var category = "enhancement"
+    @FocusState private var focus: Field?
+
+    private enum Field { case title, detail }
 
     private static let maxTitle = 80
+    private static let maxDetail = 4000
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            if isExpanded {
-                content
+            HStack(spacing: 8) {
+                GlassSearchField("Search observations", text: $search)
+                    .uiKitIdentifier("SessionMetadataPanel.observations.search")
+                if data?.repoKey != nil {
+                    addButton
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+
+            if adding {
+                addFields
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+
+            if let data {
+                list(data)
+            } else if failed {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Couldn’t load observations.")
+                    Button("Reload") { Task { await reload() } }
+                        .uiKitIdentifier("SessionMetadataPanel.observations.reload")
+                }
+                .font(.ripul(.subheadline))
+                .foregroundStyle(.ripul(.textSecondary))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+            } else {
+                ProgressView("Loading observations…")
+                    .font(.ripul(.subheadline))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .uiKitIdentifier("SessionMetadataPanel.observations.loading")
             }
         }
-        .modifier(GlassPanelBackground())
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .uiKitIdentifier("SessionMetadataPanel.observations")
         .task(id: chatId) {
             data = nil
+            failed = false
             openId = nil
             await reload()
         }
@@ -47,9 +86,14 @@ struct SessionObservationsSection: View {
 
     private func reload() async {
         let id = chatId
-        guard let loaded = await bridge.getChatObservations(chatId: id) else { return }
+        let loaded = await bridge.getChatObservations(chatId: id)
         guard !Task.isCancelled, id == chatId else { return }
-        data = loaded
+        if let loaded {
+            data = loaded
+            failed = false
+        } else if data == nil {
+            failed = true
+        }
     }
 
     private func patch(_ id: String, _ body: [String: Any]) {
@@ -70,144 +114,137 @@ struct SessionObservationsSection: View {
     private func save() {
         let title = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { adding = false; return }
+        let detail = detailDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         adding = false
         Task {
             await bridge.createObservation(chatId: chatId, repoKey: data?.repoKey, title: String(title.prefix(Self.maxTitle)),
+                                           detail: detail.isEmpty ? nil : String(detail.prefix(Self.maxDetail)),
                                            severity: severity, category: category)
             draft = ""
+            detailDraft = ""
             await reload()
         }
     }
 
-    // MARK: - Header
+    // MARK: - The list
 
-    private var header: some View {
-        HStack {
-            Image(systemName: "chevron.right")
-                .font(.ripulIcon(.caption2, weight: .semibold))
-                .foregroundStyle(.ripul(.textSecondary))
-                .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                .animation(.easeInOut(duration: 0.2), value: isExpanded)
-            Text("Observations")
-                .font(.ripul(.subheadline, weight: .semibold))
-                .foregroundStyle(.ripul(.textSecondary))
-                .textCase(.uppercase)
-            if let count = data?.chat.count, count > 0 {
-                Text("\(count)")
-                    .font(.ripul(.caption))
-                    .foregroundStyle(.ripul(.textTertiary))
-            }
-            Spacer()
-            if !adding, data?.repoKey != nil {
-                Button {
-                    draft = ""
-                    adding = true
-                    isExpanded = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.ripulIcon(.caption))
-                        .foregroundStyle(.ripul(.textSecondary))
-                        .frame(width: 32, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Add an observation")
-                .uiKitIdentifier("SessionMetadataPanel.observations.add")
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
-        }
+    private func matches(_ o: AgentBridge.RepoObservation, _ query: String) -> Bool {
+        query.isEmpty
+            || [o.title, o.detail, o.category, o.kindLabel, o.raisedByTitle ?? ""].contains { $0.localizedCaseInsensitiveContains(query) }
+            || o.files.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 
-    // MARK: - Content
-
-    @ViewBuilder
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if adding {
-                addFields
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-            }
-
-            if let data, data.chat.isEmpty, !adding {
-                Text(data.repoKey == nil
-                     ? (data.reason ?? "This chat is not in a git repository.")
+    /// This chat's first (raised, claimed or seen again, any status), then the
+    /// repository's other open ones, most severe first.
+    private func list(_ data: AgentBridge.ChatObservations) -> some View {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mineIds = Set(data.chat.map(\.id))
+        let mine = data.chat.filter { matches($0, query) }
+        let others = data.open.filter { !mineIds.contains($0.id) && matches($0, query) }
+        return List {
+            groupHeader("This chat", count: mine.count)
+            if mine.isEmpty {
+                note(!query.isEmpty ? "None from this chat match."
+                     : data.repoKey == nil ? (data.reason ?? "This chat is not in a git repository.")
                      : "None from this chat. Agents record what they notice but are not fixing, and what they leave unfinished.")
-                    .font(.ripul(.caption))
-                    .foregroundStyle(.ripul(.textTertiary))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
+            } else {
+                rows(mine, repoKey: data.repoKey)
             }
-
-            rows(data?.chat ?? [])
-
-            if let data, let repoName = data.repoName {
-                Divider().padding(.horizontal, 16)
-                repoFooter(repoName, data)
+            if let repoName = data.repoName {
+                groupHeader("Open in \(repoName)", count: others.count)
+                if others.isEmpty {
+                    note(query.isEmpty ? "No others open." : "No others match.")
+                } else {
+                    rows(others, repoKey: data.repoKey)
+                }
+            } else if !mine.isEmpty, let reason = data.reason {
+                note(reason)
             }
         }
-        .padding(.bottom, 8)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.vertical, 0, for: .scrollContent)
+        .environment(\.defaultMinListRowHeight, 0)
+        .scrollDismissesKeyboard(.interactively)
+        .refreshable { await reload() }
     }
 
     @ViewBuilder
-    private func rows(_ list: [AgentBridge.RepoObservation]) -> some View {
+    private func rows(_ list: [AgentBridge.RepoObservation], repoKey: String?) -> some View {
         ForEach(Array(list.enumerated()), id: \.element.id) { index, observation in
-            if index > 0 {
-                Divider().padding(.leading, 35)
-            }
             ObservationRow(
                 observation: observation,
                 thisChatId: chatId,
                 isOpen: Binding(get: { openId == observation.id }, set: { openId = $0 ? observation.id : nil }),
                 onPatch: { patch(observation.id, $0) },
                 onDelete: { delete(observation.id) },
-                showRepository: observation.repoKey != data?.repoKey
+                showRepository: observation.repoKey != repoKey
             )
-            .padding(.horizontal, 16)
+            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .listRowBackground(Color.clear)
+            // Under the title, past the severity dot, as the rows' dividers were.
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 19 }
+            .listRowSeparator(index == 0 ? .hidden : .visible, edges: .top)
+            .listRowSeparator(index == list.count - 1 ? .hidden : .visible, edges: .bottom)
         }
     }
 
-    private func repoFooter(_ repoName: String, _ data: AgentBridge.ChatObservations) -> some View {
-        let mine = Set(data.chat.map(\.id))
-        let others = data.open.filter { !mine.contains($0.id) }
-        return VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showRepo.toggle() }
-            } label: {
-                HStack {
-                    Text("\(data.open.count) open in \(repoName)")
-                        .font(.ripul(.subheadline))
-                        .foregroundStyle(.ripul(.textSecondary))
-                    Spacer()
-                    Image(systemName: "chevron.down")
-                        .font(.ripulIcon(.caption2, weight: .semibold))
-                        .foregroundStyle(.ripul(.textTertiary))
-                        .rotationEffect(.degrees(showRepo ? 180 : 0))
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .uiKitIdentifier("SessionMetadataPanel.observations.repo")
-
-            if showRepo {
-                if others.isEmpty {
-                    Text("No others open.")
-                        .font(.ripul(.caption))
-                        .foregroundStyle(.ripul(.textTertiary))
-                        .padding(.horizontal, 16)
-                } else {
-                    rows(others)
-                }
-            }
+    /// A group's title in the panel's section style; a plain row, so it
+    /// scrolls with the list rather than pinning over it.
+    private func groupHeader(_ title: String, count: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title)
+                .font(.ripul(.subheadline, weight: .semibold))
+                .foregroundStyle(.ripul(.textSecondary))
+                .textCase(.uppercase)
+                .lineLimit(1)
+            Text("\(count)")
+                .font(.ripul(.caption))
+                .foregroundStyle(.ripul(.textTertiary))
+            Spacer(minLength: 0)
         }
+        .padding(.top, 14)
+        .padding(.bottom, 2)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .accessibilityAddTraits(.isHeader)
+        .uiKitIdentifier("SessionMetadataPanel.observations.group")
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.ripul(.caption))
+            .foregroundStyle(.ripul(.textTertiary))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 6)
+            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+    }
+
+    // MARK: - Adding one
+
+    private var addButton: some View {
+        Button {
+            draft = ""
+            detailDraft = ""
+            adding = true
+        } label: {
+            Image(systemName: "plus")
+                .font(.ripulIcon(.caption, weight: .semibold))
+                .foregroundStyle(.ripul(.textSecondary))
+                .frame(minWidth: 22, minHeight: 22)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: .rect(cornerRadius: 10))
+                .contentShape(.rect(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .disabled(adding)
+        .accessibilityLabel("Add an observation")
+        .help("Add an observation")
+        .uiKitIdentifier("SessionMetadataPanel.observations.add")
     }
 
     private var addFields: some View {
@@ -215,12 +252,22 @@ struct SessionObservationsSection: View {
             TextField("What should someone act on later?", text: $draft)
                 .textFieldStyle(.roundedBorder)
                 .font(.ripul(.subheadline))
-                .submitLabel(.done)
-                .onSubmit(save)
+                .focused($focus, equals: .title)
+                .submitLabel(.next)
+                .onSubmit { focus = .detail }
                 .onChange(of: draft) { _, value in
                     if value.count > Self.maxTitle { draft = String(value.prefix(Self.maxTitle)) }
                 }
                 .uiKitIdentifier("SessionMetadataPanel.observations.title")
+            TextField("Details (optional, Markdown)", text: $detailDraft, axis: .vertical)
+                .lineLimit(2...6)
+                .textFieldStyle(.roundedBorder)
+                .font(.ripul(.subheadline))
+                .focused($focus, equals: .detail)
+                .onChange(of: detailDraft) { _, value in
+                    if value.count > Self.maxDetail { detailDraft = String(value.prefix(Self.maxDetail)) }
+                }
+                .uiKitIdentifier("SessionMetadataPanel.observations.detail")
             HStack(spacing: 8) {
                 Menu {
                     Picker("Severity", selection: $severity) {
@@ -264,5 +311,8 @@ struct SessionObservationsSection: View {
                 .uiKitIdentifier("SessionMetadataPanel.observations.save")
             }
         }
+        .padding(12)
+        .modifier(GlassPanelBackground())
+        .onAppear { focus = .title }
     }
 }

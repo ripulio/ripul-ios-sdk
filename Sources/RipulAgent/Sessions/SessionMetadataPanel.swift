@@ -12,15 +12,47 @@ import AppKit
 /// for the M8 whole-screen extraction — keep semantics identical to the app.
 @available(iOS 15.0, macOS 13.0, *)
 public struct SessionMetadataPanel: View {
+    public enum Editor: Hashable {
+        case description, note
+    }
+
+    /// A menu request belongs to the chat where the menu was opened.
+    public struct EditRequest: Equatable {
+        public let id = UUID()
+        public let chatId: String
+        public let editor: Editor
+
+        public init(chatId: String, editor: Editor) {
+            self.chatId = chatId
+            self.editor = editor
+        }
+    }
+
+    private enum Tab: String, CaseIterable {
+        case messages = "Messages"
+        case observations = "Observations"
+        case details = "Details"
+        case advanced = "Advanced"
+    }
+
     // Plain `let`, not @ObservedObject: the body reads no @Published field, and
     // observing the whole bridge re-rendered the docked panel on every publish.
     let bridge: AgentBridge
     let session: ChatSession?
+    @Binding private var editRequest: EditRequest?
+    @State private var selectedTab: Tab = .messages
+    @State private var editorToReveal: Editor?
+    @State private var editorRevision = 0
+    @FocusState private var focusedEditor: Editor?
 
     @State private var metadata: AgentBridge.SessionMetadata?
     @State private var loading = false
     @State private var storage: AgentBridge.SessionStorageBreakdown?
     @State private var anchorList: (chatId: String, anchors: [AgentBridge.HumanChatAnchor])?
+    @State private var anchorsLoading = true
+    @State private var anchorsError: String?
+    @State private var anchorReload = 0
+    @State private var anchorSourceMessages: [NativeChatMessage] = []
     @State private var scheduleList: (chatId: String, schedules: [AgentBridge.ChatSchedule])?
     @State private var attentionList: (chatId: String, items: [AgentBridge.ReadingItem])?
 
@@ -28,9 +60,7 @@ public struct SessionMetadataPanel: View {
     @State private var attentionExpanded = true
     @State private var milestonesExpanded = true
     @State private var shortcutsExpanded = true
-    @State private var observationsExpanded = true
     @State private var schedulesExpanded = true
-    @State private var messagesExpanded = true
     @State private var messagesSearch = ""
     @State private var filesExpanded = true
     @State private var deploysExpanded = true
@@ -47,40 +77,78 @@ public struct SessionMetadataPanel: View {
     @State private var addingNote = false
     @State private var noteDraft = ""
 
-    public init(bridge: AgentBridge, session: ChatSession?) {
+    public init(bridge: AgentBridge, session: ChatSession?, editRequest: Binding<EditRequest?> = .constant(nil)) {
         self.bridge = bridge
         self.session = session
+        self._editRequest = editRequest
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                // Messages flagged for the viewer, while there are any.
-                attentionSection
-                // Then milestones, since "where am I?" is the question a long chat raises.
-                milestonesSection
-                shortcutsSection
-                observationsSection
-                schedulesSection
-                descriptionSection
-                messagesSection
-                modelSection
-                filesSection
-                deploymentsSection
-                participantsSection
-                notesSection
-                cliToolsSection
-                debugSection
-
-                if !loading && metadata == nil {
-                    emptyState
+        VStack(spacing: 0) {
+            Picker("Metadata tab", selection: $selectedTab) {
+                ForEach(Tab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
                 }
             }
+            .pickerStyle(.segmented)
             .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 32)
+            .padding(.vertical, 8)
+            .uiKitIdentifier("SessionMetadataPanel.tabs")
+
+            if selectedTab == .messages {
+                messagesSection
+            } else if selectedTab == .observations {
+                observationsSection
+            } else {
+                ScrollViewReader { scroll in
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            if selectedTab == .details {
+                                detailSections
+                            } else {
+                                cliToolsSection
+                                debugSection
+                                deploymentsSection
+                            }
+
+                            if !loading && metadata == nil {
+                                emptyState
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .padding(.bottom, 32)
+                    }
+                    .id(selectedTab)
+                    .task(id: editorRevision) {
+                        guard selectedTab == .details, let editor = editorToReveal else { return }
+                        // Let the newly revealed section join the scroll layout first.
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        withAnimation { scroll.scrollTo(editor, anchor: .top) }
+                        focusedEditor = editor
+                    }
+                }
+            }
         }
+        .contextMenu {
+            if session != nil {
+                Button { beginEditing(.description) } label: {
+                    Label("Add description", systemImage: "text.alignleft")
+                }
+                Button { beginEditing(.note) } label: {
+                    Label("Add note", systemImage: "note.text.badge.plus")
+                }
+            }
+        }
+        .dismissesKeyboardOnTapAway()
         .uiKitIdentifier("SessionMetadataPanel")
+        .onChange(of: editRequest) { _, request in
+            guard let request else { return }
+            if request.chatId == session?.sourceChatId { beginEditing(request.editor) }
+            editRequest = nil
+        }
+        .onChange(of: selectedTab) { _, _ in focusedEditor = nil }
         // Keyed on the chat, so a switch cancels the old load and starts one
         // for the new chat. (The old one-argument `onChange` ran its closure
         // with the view from BEFORE the change, so a switch reloaded the chat
@@ -90,12 +158,31 @@ public struct SessionMetadataPanel: View {
             metadata = nil
             storage = nil
             messagesSearch = ""
+            selectedTab = .messages
+            editingDescription = false
+            addingNote = false
+            descriptionDraft = ""
+            noteDraft = ""
+            editorToReveal = nil
+            focusedEditor = nil
             if debugExpanded { Task { await loadStorage() } }
             await loadMetadata(chatId)
         }
-        .task(id: session?.sourceChatId) {
+        .task(id: AnchorRequest(chatId: session?.sourceChatId, revision: anchorReload)) {
             guard let chatId = session?.sourceChatId else { return }
             await loadAnchors(chatId, waitForChat: true)
+        }
+        // A cold chat can hydrate after the initial retries have finished.
+        // Observe only changes to user rows, not each streamed assistant token.
+        // The page remains the authority for human-only filtering and CLI echoes.
+        // Keep deduplication in view state: rebuilding a Combine chain here
+        // can resubscribe and replay @Published on every Mac panel redraw.
+        // Incrementing the task ID on that replay creates a render loop.
+        .onReceive(bridge.nativeChat.$messages) { messages in
+            let userMessages = messages.filter { $0.role == .user }
+            guard anchorSourceMessages != userMessages else { return }
+            anchorSourceMessages = userMessages
+            anchorReload += 1
         }
         .task(id: session?.sourceChatId) {
             guard let chatId = session?.sourceChatId else { return }
@@ -111,7 +198,7 @@ public struct SessionMetadataPanel: View {
         // a schedule's run may have started.
         .onChange(of: bridge.isAgentRunning) {
             guard let chatId = session?.sourceChatId else { return }
-            Task { await loadAnchors(chatId) }
+            anchorReload += 1
             Task { await refreshMetadata(chatId) }
             Task { await loadSchedules(chatId) }
             Task { await loadAttention(chatId) }
@@ -134,6 +221,38 @@ public struct SessionMetadataPanel: View {
                 Task { await loadStorage() }
             }
         }
+    }
+
+    @ViewBuilder
+    private var detailSections: some View {
+        attentionSection
+        milestonesSection
+        shortcutsSection
+        schedulesSection
+        if editingDescription || metadata?.description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            descriptionSection.id(Editor.description)
+        }
+        modelSection
+        filesSection
+        participantsSection
+        if addingNote || metadata?.notes.isEmpty == false {
+            notesSection.id(Editor.note)
+        }
+    }
+
+    private func beginEditing(_ editor: Editor) {
+        guard session != nil else { return }
+        selectedTab = .details
+        switch editor {
+        case .description:
+            if !editingDescription { descriptionDraft = metadata?.description ?? "" }
+            editingDescription = true
+        case .note:
+            notesExpanded = true
+            addingNote = true
+        }
+        editorToReveal = editor
+        editorRevision += 1
     }
 
     // MARK: - Data Loading
@@ -185,18 +304,47 @@ public struct SessionMetadataPanel: View {
         metadata = loaded
     }
 
-    /// `waitForChat`: a chat just switched to may not be in the page's memory
-    /// yet and answers empty, so try again for a few seconds before settling.
+    private struct AnchorRequest: Hashable {
+        let chatId: String?
+        let revision: Int
+    }
+
+    /// Initial retries cover page startup; later history publications restart
+    /// this task. Cancellation also prevents a late reply replacing a newer load.
     private func loadAnchors(_ chatId: String, waitForChat: Bool = false) async {
+        anchorsLoading = true
+        anchorsError = nil
+        var failed = false
         for attempt in 0..<(waitForChat ? 5 : 1) {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
             guard !Task.isCancelled else { return }
-            guard let loaded = await bridge.getHumanChatAnchors(sessionId: chatId) else { continue }
-            if anchorList?.chatId != chatId || anchorList?.anchors != loaded {
-                anchorList = (chatId, loaded)
-            }
-            if !loaded.isEmpty { return }
+            var cursor: String?
+            var seenCursors = Set<String>()
+            repeat {
+                guard !Task.isCancelled else { return }
+                guard let page = await bridge.getHumanChatAnchorPage(sessionId: chatId, cursor: cursor) else {
+                    failed = true
+                    break
+                }
+                guard !Task.isCancelled else { return }
+                failed = false
+                if anchorList?.chatId != chatId || anchorList?.anchors != page.messages {
+                    anchorList = (chatId, page.messages)
+                }
+                cursor = page.nextCursor
+                if let cursor, !seenCursors.insert(cursor).inserted {
+                    failed = true
+                    break
+                }
+                if cursor == nil, page.complete || !page.messages.isEmpty {
+                    anchorsLoading = false
+                    return
+                }
+            } while cursor != nil
         }
+        guard !Task.isCancelled else { return }
+        anchorsLoading = false
+        if failed { anchorsError = "Couldn’t load saved messages. Please try reloading." }
     }
 
     /// The anchors for the chat on screen. A reply that lands for a chat
@@ -274,14 +422,14 @@ public struct SessionMetadataPanel: View {
 
     // MARK: - Observations
 
+    /// The second tab, all its own: the list fills it, as the Messages tab's does.
     @ViewBuilder
     private var observationsSection: some View {
         if let chatId = session?.sourceChatId {
             SessionObservationsSection(
                 bridge: bridge,
                 chatId: chatId,
-                turnRunning: bridge.isAgentRunning,
-                isExpanded: $observationsExpanded
+                turnRunning: bridge.isAgentRunning
             )
         }
     }
@@ -313,8 +461,7 @@ public struct SessionMetadataPanel: View {
                 Spacer()
                 if !editingDescription {
                     Button {
-                        descriptionDraft = metadata?.description ?? ""
-                        editingDescription = true
+                        beginEditing(.description)
                     } label: {
                         Image(systemName: "pencil")
                             .font(.ripulIcon(.caption))
@@ -330,11 +477,14 @@ public struct SessionMetadataPanel: View {
                     .lineLimit(2...6)
                     .textFieldStyle(.roundedBorder)
                     .font(.ripul(.subheadline))
+                    .focused($focusedEditor, equals: .description)
                     .uiKitIdentifier("SessionMetadataPanel.description.input")
 
                 HStack {
                     Spacer()
                     Button {
+                        focusedEditor = nil
+                        editorToReveal = nil
                         editingDescription = false
                     } label: {
                         Image(systemName: "xmark")
@@ -343,8 +493,12 @@ public struct SessionMetadataPanel: View {
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel description")
+                    .uiKitIdentifier("SessionMetadataPanel.description.cancel")
                     Button {
-                        patch(["description": descriptionDraft])
+                        patch(["description": descriptionDraft.trimmingCharacters(in: .whitespacesAndNewlines)])
+                        focusedEditor = nil
+                        editorToReveal = nil
                         editingDescription = false
                     } label: {
                         Image(systemName: "checkmark")
@@ -353,17 +507,17 @@ public struct SessionMetadataPanel: View {
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Save description")
                     .uiKitIdentifier("SessionMetadataPanel.description.save")
                 }
             } else {
-                Text(metadata?.description?.isEmpty == false ? metadata!.description! : "Tap to add a description...")
+                Text(metadata?.description ?? "")
                     .font(.ripul(.subheadline))
-                    .foregroundStyle(metadata?.description?.isEmpty == false ? .ripul(.text) : .ripul(.textTertiary))
+                    .foregroundStyle(.ripul(.text))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        descriptionDraft = metadata?.description ?? ""
-                        editingDescription = true
+                        beginEditing(.description)
                     }
                     .uiKitIdentifier("SessionMetadataPanel.description.text")
             }
@@ -371,99 +525,27 @@ public struct SessionMetadataPanel: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .modifier(GlassPanelBackground())
+        .uiKitIdentifier("SessionMetadataPanel.description")
     }
 
     // MARK: - Messages
 
-    /// Every message a person typed, as anchors into the chat: tap one to
-    /// jump there; hover (pointer) or long-press shows the whole message.
+    /// Full messages, with the same rich text as the chat and a jump back to it.
     @ViewBuilder
     private var messagesSection: some View {
-        if !anchors.isEmpty {
-            let numbered = Array(anchors.enumerated()).map { NumberedAnchor(number: $0.offset + 1, anchor: $0.element) }
-            let query = messagesSearch.trimmingCharacters(in: .whitespaces)
-            let shown = query.isEmpty ? numbered : numbered.filter { $0.anchor.text.localizedCaseInsensitiveContains(query) }
-            GlassListSection(
-                title: "Messages",
-                subtitle: "\(anchors.count)",
-                isExpanded: $messagesExpanded,
-                data: shown,
-                id: \.anchor.correlationId,
-                searchPlaceholder: anchors.count > 8 ? "Search messages" : nil,
-                searchText: anchors.count > 8 ? $messagesSearch : nil,
-                maxVisibleItems: 6
-            ) { item in
-                messageRow(item)
-            }
-            .uiKitIdentifier("SessionMetadataPanel.messages")
-        }
-    }
-
-    private struct NumberedAnchor {
-        let number: Int
-        let anchor: AgentBridge.HumanChatAnchor
-    }
-
-    @ViewBuilder
-    private func messageRow(_ item: NumberedAnchor) -> some View {
-        let anchor = item.anchor
-        Button {
-            bridge.scrollToChatMessage(correlationId: anchor.correlationId)
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(item.number)")
-                    .font(.ripul(.caption2).monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.ripul(.textTertiary))
-                    .frame(width: 28, alignment: .trailing)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(anchor.text).ripulText()
-                        .font(.ripul(.subheadline))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if let sender = anchor.senderDisplayName, !sender.isEmpty {
-                        Text(sender)
-                            .font(.ripul(.caption2))
-                            .foregroundStyle(.ripul(.textTertiary))
-                            .lineLimit(1)
-                    }
+        if session?.sourceChatId != nil {
+            SessionMessagesSection(
+                anchors: anchors,
+                searchText: $messagesSearch,
+                isLoading: anchorsLoading,
+                error: anchorsError,
+                onReload: { anchorReload += 1 },
+                onJump: { id in
+                    bridge.scrollToChatAnchor(correlationId: id, ts: anchors.first { $0.id == id }?.timestamp.map { $0.timeIntervalSince1970 * 1000 })
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if let ts = anchor.timestamp {
-                    Text(RelativeTimeText.string(for: ts, relativeTo: Date()))
-                        .font(.ripul(.caption2))
-                        .foregroundStyle(.ripul(.textSecondary))
-                }
-            }
-            .contentShape(Rectangle())
+            )
+            .id(session?.sourceChatId)
         }
-        .buttonStyle(.plain)
-        .help(anchor.text)
-        .contextMenu { MenuIcons {
-            Button {
-                bridge.scrollToChatMessage(correlationId: anchor.correlationId)
-            } label: {
-                Label("Jump to Message", systemImage: "arrow.turn.down.right")
-            }
-            Button {
-                #if os(iOS)
-                UIPasteboard.general.string = anchor.text
-                #elseif os(macOS)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(anchor.text, forType: .string)
-                #endif
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-            }
-        }} preview: {
-            ScrollView {
-                Text(anchor.text)
-                    .font(.ripul(.body))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-            }
-            .frame(idealWidth: 320, maxHeight: 400)
-        }
-        .uiKitIdentifier("SessionMetadataPanel.messageRow")
     }
 
     // MARK: - Model
@@ -693,7 +775,7 @@ public struct SessionMetadataPanel: View {
                 Spacer()
                 if !addingNote {
                     Button {
-                        addingNote = true
+                        beginEditing(.note)
                     } label: {
                         Image(systemName: "plus")
                             .font(.ripulIcon(.caption))
@@ -719,10 +801,13 @@ public struct SessionMetadataPanel: View {
                                 .lineLimit(2...4)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.ripul(.subheadline))
+                                .focused($focusedEditor, equals: .note)
                                 .uiKitIdentifier("SessionMetadataPanel.notes.input")
                             HStack {
                                 Spacer()
                                 Button {
+                                    focusedEditor = nil
+                                    editorToReveal = nil
                                     addingNote = false
                                     noteDraft = ""
                                 } label: {
@@ -732,10 +817,15 @@ public struct SessionMetadataPanel: View {
                                         .frame(width: 32, height: 32)
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel("Cancel note")
+                                .uiKitIdentifier("SessionMetadataPanel.notes.cancel")
                                 Button {
-                                    guard !noteDraft.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                                    let text = noteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard !text.isEmpty else { return }
                                     let noteId = "note_" + String(Date().timeIntervalSince1970, radix: 16) + "_" + UUID().uuidString.prefix(6)
-                                    patch(["appendNote": ["id": noteId, "text": noteDraft.trimmingCharacters(in: .whitespaces)]])
+                                    patch(["appendNote": ["id": noteId, "text": text]])
+                                    focusedEditor = nil
+                                    editorToReveal = nil
                                     noteDraft = ""
                                     addingNote = false
                                 } label: {
@@ -745,6 +835,8 @@ public struct SessionMetadataPanel: View {
                                         .frame(width: 32, height: 32)
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel("Save note")
+                                .disabled(noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                                 .uiKitIdentifier("SessionMetadataPanel.notes.save")
                             }
                         }
@@ -781,12 +873,6 @@ public struct SessionMetadataPanel: View {
                             .background(.ripul(.textQuaternary).opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
                             .padding(.horizontal, 12)
                         }
-                    } else if !addingNote {
-                        Text("No notes yet. Tap + to add one.")
-                            .font(.ripul(.caption))
-                            .foregroundStyle(.ripul(.textTertiary))
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 8)
                     }
                 }
                 .padding(.bottom, 8)
@@ -892,7 +978,10 @@ public struct SessionMetadataPanel: View {
                         if let rm = s.remoteMachineName { debugRow("Machine", rm) }
                         if let p = s.provider { debugRow("Provider", p) }
                         if let pl = s.providerLabel { debugRow("Provider Label", pl) }
-                        if let sz = s.sizeBytes { debugRow("Size", ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .memory)) }
+                        // Live, from the tabs themselves: `session` follows what the tab is, not its size.
+                        if let sz = bridge.sessions.first(where: { $0.id == s.id })?.sizeBytes ?? s.sizeBytes {
+                            debugRow("Size", ByteCountFormatter.string(fromByteCount: Int64(sz), countStyle: .memory))
+                        }
                     }
                     if let m = metadata {
                         if let model = m.model { debugRow("Model", model) }

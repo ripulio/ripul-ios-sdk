@@ -176,6 +176,9 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
             .onChanged { value in
                 guard gesturesEnabled else { return }
                 if axis == .undecided {
+                    // Two fingers are the window's swipe, not this pull's: one
+                    // of them landing here must not drive the store as well.
+                    if readingTwoFingers { return }
                     let dx = value.translation.width
                     let dy = value.translation.height
                     // Before the threshold, not after: this is the only moment
@@ -228,6 +231,9 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 switch axis {
                 case .vertical:
                     switcher?.updateInteractive(translation: direction.travel(dy))
+                    // Sideways too: in a window wide enough to dock, the card
+                    // goes where the finger takes it, and an edge docks it.
+                    switcher?.updateCarry(translation: dx)
                 case .horizontal:
                     switcher?.updateSlide(translation: dx, width: screenWidth)
                 case .chrome:
@@ -278,7 +284,11 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
         // rather than once the drag has been recognised. Simultaneous, so it
         // consumes nothing — a tap on whatever this is mounted over still
         // behaves as a tap.
-        let warm = DragGesture(minimumDistance: 0)
+        //
+        // In the window's space, and it keeps the store told where the finger
+        // is: a card carried to the window's edge docks there, and how near the
+        // edge it is cannot be read from a translation.
+        let warm = DragGesture(minimumDistance: 0, coordinateSpace: .global)
             .updating($touching) { _, state, _ in
                 // Nothing to warm when no pull can open the overview.
                 guard gesturesEnabled, let switcher, !hostTakesPull else { return }
@@ -287,6 +297,10 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                     switcher.prepareToOpen()
                 }
                 state = true
+            }
+            .onChanged { value in
+                guard gesturesEnabled, !hostTakesPull, !readingTwoFingers else { return }
+                switcher?.fingerLocation = value.location
             }
             .onEnded { _ in
                 if axis == .undecided { cancelWarmup() }
@@ -318,6 +332,15 @@ public struct ScreenSwitcherPullModifier: ViewModifier {
                 guard !active, axis != .undecided else { return }
                 DispatchQueue.main.async { settleInterruptedDrag() }
             }
+    }
+
+    /// Two fingers are down and `ScreenSwitcherTwoFingerSwipe` is reading them.
+    private var readingTwoFingers: Bool {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        TwoFingerSwipeRecognizer.isReadingPair(in: switcher?.owningWindow)
+        #else
+        false
+        #endif
     }
 
     private func settleInterruptedDrag() {

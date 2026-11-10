@@ -634,6 +634,7 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
         .transaction { if drawer.isRunning { $0.disablesAnimations = true } }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .modifier(ScrollHold(key: "list.\(identifierPrefix)"))
         .onChange(of: activeToken) { _, _ in
             // The owner confirmed (or something else moved the active row);
             // drop the override so the highlight follows the real value.
@@ -717,25 +718,30 @@ public struct GlassRichList<Item: Identifiable, Row: View, Swipe: View, RowMenu:
     private var stack: some View {
         let opensOrCloses = rowsOpenOrClose
         let slots = rowSlots
+        let verticalPadding: CGFloat = 10
         return LazyVStack(spacing: 0) {
             ForEach(slots) { slot in
                 let item = slot.item
                 let slice = slot.slice
-                let bottomPadding: CGFloat = slice == .bottom ? 16 : 10
                 row(item)
-                    .glassRowGroupDivider(slot.showsGroupDivider, footInset: bottomPadding)
+                    .glassRowGroupDivider(slot.showsGroupDivider, footInset: verticalPadding)
                     .padding(.horizontal, 16)
-                    .padding(.top, slice == .top ? 14 : 10)
-                    .padding(.bottom, bottomPadding)
+                    .padding(.vertical, verticalPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(GlassRowGroupBackground(slice: slice, rowTint: background(for: item)))
+                    .overlay(alignment: .bottom) {
+                        if item.id != items.last?.id && !slot.hidesBottomSeparator {
+                            Divider().padding(.leading, 16)
+                        }
+                    }
                     .contentShape(Rectangle())
                     .onTapGesture { tapped(item) }
                     .contextMenu { MenuIcons { if !isSelecting { DeferredRowMenu { rowMenu(item) } } }}
-
-                if item.id != items.last?.id && !slot.hidesBottomSeparator {
-                    Divider().padding(.leading, 16)
-                }
+                    // A stacked row has no cell of its own, so the row's UIKit
+                    // identifiers (`uiKitIdentifier`) have nothing to attach to:
+                    // each row is one element that holds its contents instead.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("\(identifierPrefix).row")
             }
         }
         .animationWhileSessionListSeen(reorderAnimation(rowsOpenOrClose: opensOrCloses), value: items.map(\.id))
@@ -1284,4 +1290,20 @@ private struct ControlClickSurface: UIViewRepresentable {
 private struct DeferredRowMenu<Menu: View>: View {
     @ViewBuilder let build: () -> Menu
     var body: some View { build() }
+}
+
+/// While the person scrolls the list, the session list's work for live agent
+/// activity waits until it rests (`ChatSlideProbe.holdForScroll`).
+private struct ScrollHold: ViewModifier {
+    let key: String
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, macOS 15.0, *) {
+            content
+                .onScrollPhaseChange { _, phase in ChatSlideProbe.holdForScroll(key, phase.isScrolling) }
+                .onDisappear { ChatSlideProbe.holdForScroll(key, false) }
+        } else {
+            content
+        }
+    }
 }

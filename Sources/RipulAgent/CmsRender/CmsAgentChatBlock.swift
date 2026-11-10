@@ -124,11 +124,16 @@ struct CmsFloatingChatHost: View {
             }
     }
 
+    /// The page's own floating chat, else the shell's when the accessory
+    /// doesn't already hold it.
+    private var shown: CmsBlock? {
+        runtime.floatingChat ?? (runtime.shellChatInAccessory ? nil : runtime.shellChat)
+    }
+
     @ViewBuilder
     private var button: some View {
-        if let block = runtime.floatingChat {
-            let label = block.props.string("fabLabel").flatMap { $0.isEmpty ? nil : $0 }
-                ?? block.props.string("title").flatMap { $0.isEmpty ? nil : $0 } ?? "Chat"
+        if let block = shown {
+            let label = CmsFloatingChat.label(block)
             Button {
                 open = true
             } label: {
@@ -152,7 +157,64 @@ struct CmsFloatingChatHost: View {
     }
 }
 
-private struct CmsFloatingChatSheet: View {
+enum CmsFloatingChat {
+    /// The button's words: `fabLabel`, else the chat's title, else "Chat".
+    static func label(_ block: CmsBlock) -> String {
+        block.props.string("fabLabel").flatMap { $0.isEmpty ? nil : $0 }
+            ?? block.props.string("title").flatMap { $0.isEmpty ? nil : $0 } ?? "Chat"
+    }
+
+    /// The shell's floating chat (the web's ShellPage: an `agentChat` with
+    /// `fab`, shown on every page). One hidden, or shown on desktops only
+    /// (`visibleOn: ["desktop"]`), stays hidden here, as the web hides it on a phone.
+    static func find(shell: CmsPage?) -> CmsBlock? {
+        shell?.blocks?.allBlocks().first { block in
+            guard block.type == "agentChat", block.props.bool("fab") == true, block.hidden != true else { return false }
+            if let on = block.visibleOn, !on.isEmpty, !on.contains("mobile") { return false }
+            return true
+        }
+    }
+}
+
+#if os(iOS)
+/// The shell's chat as iOS 26's tab bar bottom accessory: the system's glass
+/// strip above the bar, shrinking into the minimized bar on scroll as Music's
+/// player does. A tap opens the chat in a sheet.
+@available(iOS 26, *)
+struct CmsChatAccessory: View {
+    let block: CmsBlock
+    @ObservedObject var runtime: CmsRuntime
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+
+    var body: some View {
+        Button { runtime.shellChatOpen = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .foregroundStyle(runtime.theme.primary)
+                Text(CmsFloatingChat.label(block))
+                    .font(.ripul(.subheadline).weight(.semibold))
+                    .foregroundStyle(runtime.theme.textPrimary)
+                if placement != .inline, let subtitle = block.props.string("headerSubtitle"), !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.ripul(.footnote))
+                        .foregroundStyle(runtime.theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(CmsFloatingChat.label(block))
+        .accessibilityHint("Opens the chat")
+        .cmsInspectorID("Cms.agentChat.accessory")
+    }
+}
+#endif
+
+struct CmsFloatingChatSheet: View {
     let block: CmsBlock
     var ask: String? = nil
     @Binding var open: Bool

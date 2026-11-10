@@ -2,6 +2,12 @@ import Foundation
 import Network
 import Security
 
+// Also compiled as source outside the SDK, from a list of files in each of:
+// ripul-native-app/device-runner/project.yml and probe/build.sh,
+// ripul-native-app/support-probe/build.sh, and
+// ripul-native-app/experiments/screen-probe/build.sh and harness/build.sh.
+// A new SDK file this one needs goes on every list, or those builds fail.
+
 // MARK: - Protection
 
 /// A direct Live View connection's protection: TLS 1.2 keyed by a one-time
@@ -84,20 +90,29 @@ public enum LiveStreamError: Error, LocalizedError, Equatable {
 
 /// `LiveStreamWire` messages over one protected connection: a direct one,
 /// where frames follow each other in a stream of bytes, or a WebSocket to a
-/// relay room (`LiveStreamRelay`), where each binary message is one frame.
+/// relay room (`LiveStreamRelay`, `LiveStreamScreenRelay`), where each binary
+/// message is one frame, sealed when the room is not to read it.
 public final class LiveStreamChannel: @unchecked Sendable {
     public let connection: NWConnection
     private let receiveLimit: Int
     /// A WebSocket: one frame a message.
     private let framed: Bool
+    /// Seals each frame for a room that mustn't read it (a WebSocket only).
+    private let seal: LiveStreamSeal?
     private let lock = NSLock()
+    /// Held while a frame is sealed and handed over, so frames go out in the order they were counted.
+    private let sendLock = NSLock()
     private var inFlight = 0
 
-    public init(_ connection: NWConnection, receiveLimit: Int, webSocket: Bool = false) {
+    public init(_ connection: NWConnection, receiveLimit: Int, webSocket: Bool = false, seal: LiveStreamSeal? = nil) {
         self.connection = connection
         self.receiveLimit = receiveLimit
         self.framed = webSocket
+        self.seal = webSocket ? seal : nil
     }
+
+    /// Whether this channel crosses a relay room rather than going straight to the other end.
+    public var isRelayed: Bool { framed }
 
     /// Bytes handed to the connection and not yet sent. Video checks it and
     /// skips a frame rather than let delay build up behind a slow network.
@@ -130,7 +145,9 @@ public final class LiveStreamChannel: @unchecked Sendable {
         while true {
             if framed {
                 // Anything that isn't a whole frame (text, a pong) is not ours: skip it.
-                guard let message = try await readMessage(), message.count >= LiveStreamWire.headerLength else { continue }
+                guard var message = try await readMessage() else { continue }
+                if let seal { message = try seal.open(message) }
+                guard message.count >= LiveStreamWire.headerLength else { continue }
                 guard let (kind, length) = LiveStreamWire.rawHeader(message.prefix(LiveStreamWire.headerLength),
                                                                     limit: receiveLimit),
                       message.count == LiveStreamWire.headerLength + length else {
@@ -169,7 +186,17 @@ public final class LiveStreamChannel: @unchecked Sendable {
         }
         let context = NWConnection.ContentContext(identifier: "frame",
                                                   metadata: [NWProtocolWebSocket.Metadata(opcode: .binary)])
-        connection.send(content: data, contentContext: context, isComplete: true, completion: completion)
+        guard let seal else {
+            connection.send(content: data, contentContext: context, isComplete: true, completion: completion)
+            return
+        }
+        sendLock.withLock {
+            guard let sealed = try? seal.seal(data) else {
+                connection.cancel()
+                return
+            }
+            connection.send(content: sealed, contentContext: context, isComplete: true, completion: completion)
+        }
     }
 
     /// One WebSocket message: its bytes if it is binary, nil for any other kind.

@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// Swift twin of the portal theme: `PortalThemeConfig` (stored on the CMS
 /// definition, cmsDefinitionsService.ts) + `buildPortalTheme` / `deriveBrand`
@@ -108,6 +111,12 @@ public struct CmsPortalThemeConfig: Codable, Equatable {
         public var headingWeight: Double?
         /// h1–h6 tracking in em, e.g. -0.02.
         public var headingLetterSpacing: Double?
+        /// The site's own text styles by name (h1–h6, subtitle1, body1, …): CmsSiteText.
+        public var styles: [String: CmsSiteTextStyleConfig]?
+        /// Curly quotes in text blocks.
+        public var smartQuotes: Bool?
+        /// The gap after a paragraph in text and markdown blocks (CSS: `0.87em`, `14px`).
+        public var paragraphSpacing: String?
 
         public init(
             fontFamily: String? = nil, baseFontSize: Double? = nil, scale: Double? = nil,
@@ -127,6 +136,9 @@ public struct CmsPortalThemeConfig: Codable, Equatable {
             headingFontFamily = c.lossyString(.headingFontFamily)
             headingWeight = c.lossyDouble(.headingWeight)
             headingLetterSpacing = c.lossyDouble(.headingLetterSpacing)
+            styles = try? c.decode([String: CmsSiteTextStyleConfig].self, forKey: .styles)
+            smartQuotes = try? c.decode(Bool.self, forKey: .smartQuotes)
+            paragraphSpacing = c.lossyString(.paragraphSpacing)
         }
     }
 
@@ -188,13 +200,32 @@ public struct CmsPortalThemeConfig: Codable, Equatable {
     public var spacing: Double?
     public var shape: Shape?
     public var buttons: Buttons?
+    /// The site's own list styles, by name (CmsListStyle.swift). A key that
+    /// names a built-in (`system`, `plain`, `cards`) is ignored.
+    public var listStyles: [String: CmsListStyle]?
+    /// `system` | `plain` | `cards` | a key of `listStyles`; unset = `system`.
+    public var defaultListStyle: String?
+    /// The site's own card styles, by name, as JSON (CmsCardStyle.swift).
+    public var cardStyles: [String: CmsJSON]?
+    /// `plain` | `elevated` | `outlined` | a key of `cardStyles`; unset = `elevated`.
+    public var defaultCardStyle: String?
+    /// The site's masthead styles, by name, as JSON (CmsMasthead.swift).
+    public var mastheads: [String: CmsJSON]?
+    /// `standard` | a key of `mastheads`; unset = `standard`.
+    public var defaultMasthead: String?
+    /// How record forms open: `{ default: sheet|page, viewerChoice }`, as JSON.
+    public var formPresentation: CmsJSON?
+    /// The site's input settings, as JSON: `choiceStyle` is read (the style choice inputs take when they name none).
+    public var inputs: CmsJSON?
 
     public init(mode: String? = nil, palette: Palette? = nil, darkPalette: Palette? = nil,
                 gradient: Gradient? = nil, typography: Typography? = nil, spacing: Double? = nil,
-                shape: Shape? = nil, buttons: Buttons? = nil) {
+                shape: Shape? = nil, buttons: Buttons? = nil,
+                listStyles: [String: CmsListStyle]? = nil, defaultListStyle: String? = nil) {
         self.mode = mode; self.palette = palette; self.darkPalette = darkPalette
         self.gradient = gradient; self.typography = typography; self.spacing = spacing
         self.shape = shape; self.buttons = buttons
+        self.listStyles = listStyles; self.defaultListStyle = defaultListStyle
     }
 
     public init(from decoder: Decoder) throws {
@@ -207,6 +238,14 @@ public struct CmsPortalThemeConfig: Codable, Equatable {
         spacing = c.lossyDouble(.spacing)
         shape = try? c.decodeIfPresent(Shape.self, forKey: .shape)
         buttons = try? c.decodeIfPresent(Buttons.self, forKey: .buttons)
+        listStyles = c.lossyListStyles(.listStyles)
+        defaultListStyle = c.lossyString(.defaultListStyle)
+        cardStyles = try? c.decodeIfPresent([String: CmsJSON].self, forKey: .cardStyles)
+        defaultCardStyle = c.lossyString(.defaultCardStyle)
+        mastheads = try? c.decodeIfPresent([String: CmsJSON].self, forKey: .mastheads)
+        defaultMasthead = c.lossyString(.defaultMasthead)
+        formPresentation = try? c.decodeIfPresent(CmsJSON.self, forKey: .formPresentation)
+        inputs = try? c.decodeIfPresent(CmsJSON.self, forKey: .inputs)
     }
 }
 
@@ -226,6 +265,18 @@ private extension KeyedDecodingContainer {
         while !list.isAtEnd {
             if let s = try? list.decode(String.self) { out.append(s) }
             else { _ = try? list.decode(CmsSkippedValue.self) }
+        }
+        return out
+    }
+
+    /// Each style that decodes; an entry that is not an object is skipped.
+    func lossyListStyles(_ key: Key) -> [String: CmsListStyle]? {
+        guard let raw = try? decodeIfPresent([String: CmsJSON].self, forKey: key) else { return nil }
+        var out: [String: CmsListStyle] = [:]
+        for (name, value) in raw {
+            guard value.objectValue != nil, let data = try? JSONEncoder().encode(value),
+                  let style = try? JSONDecoder().decode(CmsListStyle.self, from: data) else { continue }
+            out[name] = style
         }
         return out
     }
@@ -321,6 +372,8 @@ public struct CmsPortalTheme {
     let accentRGBA: CmsRGBA
     let tintRGBA: CmsRGBA
     let surfaceMutedRGBA: CmsRGBA
+    /// Every palette role's colour, for list styles (which name roles).
+    let roleRGBA: [CmsPaletteRole: CmsRGBA]
     /// Brand gradient: the theme's stops (its dark ones when dark), or
     /// accent → primary, at `gradientAngle` CSS degrees.
     let gradient: LinearGradient
@@ -331,10 +384,26 @@ public struct CmsPortalTheme {
     let cardRadius: CGFloat
     let inputRadius: CGFloat
     let buttonRadius: CGFloat
+    /// The site set its own button corners (shape.buttonRadius, or the borderRadius
+    /// they fall back to). Unset, native buttons keep the system's shape: the web's
+    /// 4 px is MUI's default, not the site's design.
+    let setsButtonRadius: Bool
+    /// The site set its own card corners (shape.cardRadius, or borderRadius).
+    let setsCardRadius: Bool
+    /// The site set its own field corners (shape.inputRadius, or borderRadius).
+    let setsInputRadius: Bool
     /// `solid` | `gradient`.
     let buttonStyle: String
     let buttonFontWeight: Font.Weight?
     let buttonUppercase: Bool
+
+    /// True when the site's palette (its dark one when dark) names a page
+    /// background. Only then does a native page paint `background`; a site
+    /// that sets none keeps iOS's own system background.
+    let setsPageBackground: Bool
+    /// The site's body font family (`typography.fontFamily`'s first family),
+    /// when it is installed on this device; nil = the system font.
+    let fontFamily: String?
 
     // Heading typography (h1–h6).
     let headingFontFamily: String?
@@ -392,6 +461,16 @@ public struct CmsPortalTheme {
         accent = accentRGBA.color
         tint = tintRGBA.color
         surfaceMuted = surfaceMutedRGBA.color
+        roleRGBA = [
+            .primary: primaryRGBA, .secondary: secondaryRGBA, .accent: accentRGBA, .tint: tintRGBA,
+            .background: rgba(palette.background, dark ? "#121212" : "#ffffff"),
+            .paper: rgba(palette.paper, dark ? "#121212" : "#ffffff"),
+            .surfaceMuted: surfaceMutedRGBA,
+            .divider: rgba(palette.divider, dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.12)"),
+            .text: textRGBA,
+            .mutedText: rgba(palette.mutedText, dark ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.6)"),
+            .success: successRGBA, .warning: warningRGBA, .error: errorRGBA,
+        ]
         // brandGradient (portalTheme.ts): own stops, dark ones when dark, else
         // accent → primary; fewer than two readable stops is no gradient of its own.
         func readable(_ stops: [String]?) -> [CmsRGBA]? {
@@ -415,14 +494,40 @@ public struct CmsPortalTheme {
         cardRadius = CGFloat(shape?.cardRadius ?? radius * 2)
         inputRadius = CGFloat(shape?.inputRadius ?? radius)
         buttonRadius = CGFloat(shape?.buttonRadius ?? radius)
+        setsButtonRadius = shape?.buttonRadius != nil || shape?.borderRadius != nil
+        setsInputRadius = shape?.inputRadius != nil || shape?.borderRadius != nil
+        setsCardRadius = shape?.cardRadius != nil || shape?.borderRadius != nil
         buttonStyle = config?.buttons?.style ?? "solid"
         buttonFontWeight = config?.buttons?.fontWeight.map(CmsTypography.weight(css:))
         buttonUppercase = config?.buttons?.textTransform == "uppercase"
 
+        setsPageBackground = palette.background != nil
         let typography = config?.typography
-        headingFontFamily = Self.firstFamily(typography?.headingFontFamily)
+        // The first family in each stack this device has: a site's stack names its
+        // web font first (freight-sans-pro), then the one an app bundles (Source Sans 3).
+        fontFamily = CmsSiteText.installedFamily(stack: typography?.fontFamily)
+        // Headings resolving to nothing fall back to the body family, as the web's inherit.
+        headingFontFamily = CmsSiteText.installedFamily(stack: typography?.headingFontFamily) ?? fontFamily
         headingWeight = typography?.headingWeight.map(CmsTypography.weight(css:))
         headingLetterSpacing = typography?.headingLetterSpacing
+    }
+
+    /// `family` when this device has it, else nil (the system font draws).
+    static func installedFamily(_ family: String?) -> String? {
+        guard let family else { return nil }
+        #if os(iOS)
+        return UIFont.familyNames.contains(family) ? family : nil
+        #elseif os(macOS)
+        return NSFontManager.shared.availableFontFamilies.contains(family) ? family : nil
+        #else
+        return nil
+        #endif
+    }
+
+    /// A font at `size` and `weight` in the site's family, or the system font.
+    public func font(size: CGFloat, weight: Font.Weight) -> Font {
+        guard let fontFamily else { return .system(size: size, weight: weight) }
+        return Font.custom(fontFamily, size: size).weight(weight)
     }
 
     /// CSS `linear-gradient(<angle>deg, …)` direction as SwiftUI unit points:
@@ -452,8 +557,27 @@ public struct CmsPortalTheme {
     /// values fall through to the CSS parser; unknowns return nil.
     /// `color.gradient` is a FILL, not a colour — it resolves nil here (the
     /// web's CSS would reject it as a text colour too); use `fill(_:)`.
+    /// MUI palette paths and the colour token each is.
+    static let muiPaletteAliases: [String: String] = [
+        "text.primary": "color.text.primary", "text.secondary": "color.text.secondary",
+        "text.disabled": "color.text.disabled",
+        "primary.main": "color.primary", "primary.contrastText": "color.primary.contrast",
+        "secondary.main": "color.secondary", "secondary.contrastText": "color.secondary.contrast",
+        "error.main": "color.error", "warning.main": "color.warning", "info.main": "color.info",
+        "success.main": "color.success",
+        "background.default": "color.background", "background.paper": "color.paper",
+        "divider": "color.divider", "common.white": "color.common.white", "common.black": "color.common.black",
+    ]
+
+    /// Text's colour: the value resolved, else the site's text colour (the web's
+    /// inherited `text.primary`), never the system's own black.
+    public func textColor(_ value: String?) -> Color { resolve(value) ?? textPrimary }
+
     public func resolve(_ value: String?) -> Color? {
         guard let value, !value.isEmpty else { return nil }
+        // MUI's own palette paths (`text.primary`, `primary.main`): the web hands
+        // any value that isn't a token to MUI, which reads these from the palette.
+        if let token = Self.muiPaletteAliases[value] { return resolve(token) }
         switch value {
         case "color.primary": return primary
         case "color.primary.contrast": return primaryContrast
@@ -483,6 +607,12 @@ public struct CmsPortalTheme {
         }
     }
 
+    /// A palette role's colour: `text` is the text colour, `mutedText` the
+    /// secondary text colour, the rest their `color.*` token.
+    public func color(role: CmsPaletteRole) -> Color { rgba(role: role).color }
+
+    func rgba(role: CmsPaletteRole) -> CmsRGBA { roleRGBA[role] ?? CmsRGBA(r: 0, g: 0, b: 0) }
+
     /// Background fill: `color.gradient` → the brand LinearGradient; any
     /// other value resolves as a colour. nil = no paint.
     public func fill(_ value: String?) -> AnyShapeStyle? {
@@ -508,6 +638,104 @@ public struct CmsPortalTheme {
         case "radius.lg": return baseRadius * 2
         case "radius.full": return 9999
         default: return CmsCss.points(value)
+        }
+    }
+}
+
+// MARK: - The site's own mode
+
+extension CmsPortalThemeConfig {
+    /// The colour scheme the site forces (`mode: "light"` or `"dark"`), or nil
+    /// when it follows the device (`system`, unset or anything else).
+    public var forcedColorScheme: ColorScheme? {
+        switch mode {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
+}
+
+/// Applies a site's forced `mode` to everything under it, so the system's
+/// own chrome (large titles, bars, list rows that read `\.colorScheme`) and
+/// the CMS content agree. `ownsWindow` also sets it as the presentation's
+/// preference, which reaches the status bar and the tab bar: only a view that
+/// is the whole app (`CmsAppView`) does that, since the preference spreads to
+/// the window around it. A site that follows the device changes nothing.
+extension CmsPortalTheme {
+    /// A native button's shape in the site's corners (shape.buttonRadius; 999 or
+    /// more is a pill, 0 square), or the system's when the site sets none.
+    /// A native panel's corners: the site's card radius when it sets one, else
+    /// the panel's own (`fallback`), so a site that sets none looks as before.
+    func cardCorner(_ fallback: CGFloat) -> CGFloat { setsCardRadius ? cardRadius : fallback }
+
+    var buttonShape: ButtonBorderShape {
+        !setsButtonRadius ? .automatic : buttonRadius >= 999 ? .capsule : .roundedRectangle(radius: buttonRadius)
+    }
+}
+
+#if os(iOS)
+/// A text field in the site's field corners (shape.inputRadius) with the
+/// system's own field fill, as `.roundedBorder` draws it; the system's
+/// rounded border when the site sets none.
+struct CmsSiteFieldStyle: ViewModifier {
+    let theme: CmsPortalTheme
+
+    func body(content: Content) -> some View {
+        if theme.setsInputRadius {
+            let shape = RoundedRectangle(cornerRadius: theme.inputRadius, style: .continuous)
+            content
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(shape.fill(Color.ripul(system: .systemBackground)))
+                .overlay(shape.strokeBorder(Color.ripul(system: .separator)))
+        } else {
+            content.textFieldStyle(.roundedBorder)
+        }
+    }
+}
+#endif
+
+struct CmsSiteColorScheme: ViewModifier {
+    @ObservedObject var runtime: CmsRuntime
+    var ownsWindow: Bool
+
+    func body(content: Content) -> some View {
+        let forced = runtime.themeConfig?.forcedColorScheme
+        if let forced {
+            if ownsWindow {
+                content.environment(\.colorScheme, forced).preferredColorScheme(forced)
+            } else {
+                // The navigation bar belongs to the host's stack, outside this
+                // view, and `toolbarColorScheme` from inside doesn't reach a
+                // large title at rest (checked on iOS 26.4): a host embedding
+                // a page applies `forcedColorScheme` around its own stack.
+                content.environment(\.colorScheme, forced)
+            }
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - Page background
+
+/// Paints the site palette's `background` behind a native page, under the
+/// large title and the bars as a grouped background is, when the palette
+/// names one. A site that names none keeps the system background.
+struct CmsPageBackground: ViewModifier {
+    @ObservedObject var runtime: CmsRuntime
+    /// The page's own frame background, which wins over the palette's.
+    var pageFill: String? = nil
+
+    func body(content: Content) -> some View {
+        if let fill = runtime.fill(pageFill) {
+            content.background(Rectangle().fill(fill).ignoresSafeArea())
+        } else if runtime.theme.setsPageBackground {
+            content.background(runtime.theme.background.ignoresSafeArea())
+        } else {
+            content
         }
     }
 }

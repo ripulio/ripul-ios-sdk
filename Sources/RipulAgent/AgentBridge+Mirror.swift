@@ -41,6 +41,23 @@ extension AgentBridge {
         return reply.dictionary ?? ["success": false, "error": "CLIPBOARD_DISCONNECTED"]
     }
 
+    /// Live, unreplayed simulator contacts. No RPC is recorded for each move.
+    public func simulatorTouchInput(machineId: String, udid: String, session: String, input: [String: Any]) async -> [String: Any] {
+        let reply = await callPage("__ripulMirrorInvoke",
+            [machineId, "screenWindows", "simulatorTouchInput", [["udid": udid, "session": session], input]],
+            .orElse("{success:false,error:'TOUCH_DISCONNECTED'}"), log: .none)
+        return reply.dictionary ?? ["success": false, "error": "TOUCH_DISCONNECTED"]
+    }
+
+    /// The account pair is encrypted by the phone for the simulator extension.
+    /// The page routes it through targeted, unreplayed frames with no logging.
+    public func simulatorAutoFillExchange(machineId: String, udid: String, session: String, request: [String: Any]) async -> [String: Any] {
+        let reply = await callPage("__ripulMirrorInvoke",
+            [machineId, "screenWindows", "simulatorAutoFillExchange", [["udid": udid, "session": session], request]],
+            .orElse("{success:false,error:'AUTOFILL_DISCONNECTED'}"), log: .none)
+        return reply.dictionary ?? ["success": false, "error": "AUTOFILL_DISCONNECTED"]
+    }
+
     /// A mirrored app's whole menu tree, children nested under their parent.
     ///
     /// One call rather than one per level, because a real menu needs its

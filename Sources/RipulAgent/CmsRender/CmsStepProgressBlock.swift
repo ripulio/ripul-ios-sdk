@@ -19,7 +19,9 @@ import SwiftUI
 ///   progress is not), so a capsule row is the closest native-feeling
 ///   reading. It keeps the web's semantics: current = filled primary, done =
 ///   tinted (and tappable back to its page when `linkCompleted`), upcoming =
-///   outlined; VoiceOver hears "Step n of m" and the selected trait.
+///   outlined; with `linkAll` every step is tappable to its page, ahead as
+///   well as back (a demo, a review). VoiceOver hears "Step n of m" and the
+///   selected trait.
 struct CmsStepProgressBlockView: View {
     let block: CmsBlock
     @EnvironmentObject var runtime: CmsRuntime
@@ -118,17 +120,28 @@ struct CmsStepProgressBlockView: View {
         }
     }
 
+    /// Whether a step links to its page, as the web's `stepLinks`: never while designing, never to
+    /// the page showing or a step with no page; every step with `linkAll`, else completed ones with
+    /// `linkCompleted`.
+    static func links(_ step: Step, index: Int, current: Int, pageSlug: String?, linkAll: Bool,
+                      linkCompleted: Bool, editing: Bool) -> Bool {
+        if editing || step.pageSlug.isEmpty || step.pageSlug == pageSlug { return false }
+        return linkAll || (linkCompleted && index < current)
+    }
+
     private func pills(steps: [Step], current: Int) -> some View {
         let numbered = block.props.bool("numbered") ?? true
         let linkCompleted = block.props.bool("linkCompleted") ?? false
+        let linkAll = block.props.bool("linkAll") ?? false
         let theme = runtime.theme
         return CmsStepFlowLayout(spacing: 8, alignment: alignment.horizontal) {
             ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                 let isCurrent = index == current
                 let done = index < current
-                let linkable = linkCompleted && done && !step.pageSlug.isEmpty && !runtime.isDesignMode
+                let linkable = Self.links(step, index: index, current: current, pageSlug: runtime.currentPageSlug,
+                                          linkAll: linkAll, linkCompleted: linkCompleted, editing: runtime.isDesignMode)
                 Button {
-                    guard linkable, step.pageSlug != runtime.currentPageSlug else { return }
+                    guard linkable else { return }
                     runtime.navigate(toPage: step.pageSlug)
                 } label: {
                     Text("\(numbered ? "\(index + 1). " : "")\(step.label)")
@@ -229,6 +242,8 @@ enum CmsStepProgressInspector {
             CmsPropertyField(key: "numbered", label: "Number the steps", kind: .boolean, group: "style",
                              default: .bool(true)),
             CmsPropertyField(key: "linkCompleted", label: "Completed steps link back", kind: .boolean,
+                             group: "style", default: .bool(false)),
+            CmsPropertyField(key: "linkAll", label: "Every step links to its page", kind: .boolean,
                              group: "style", default: .bool(false)),
             CmsPropertyField(key: "align", label: "Align", kind: .select(options: [
                 CmsPropertyOption("start", "Start"),

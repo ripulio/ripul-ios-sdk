@@ -12,6 +12,8 @@ struct CmsAgGridBlockView: View {
     @EnvironmentObject var runtime: CmsRuntime
 
     @State private var searchText = ""
+    /// `openRowForm`: the record form a row's tap opens.
+    @State private var rowForm: CmsRecordFormRequest?
     @State private var sortKey: String?
     @State private var sortAscending = true
     /// Expanded group keys. Groups start COLLAPSED — AG Grid's
@@ -26,6 +28,9 @@ struct CmsAgGridBlockView: View {
     /// area so the pinned total row packs up under the last row when rows
     /// are sparse instead of sitting at the bottom of the block height.
     @State private var gridBodyHeight: CGFloat = 0
+    /// Runs the phone list's swipe actions (`swipeActions`, CmsSwipe).
+    @StateObject private var swipeRunner = CmsRowActionRunner()
+    @Environment(\.openURL) private var openURL
 
     private var outputSlug: String { block.slug ?? block.id }
     /// The grid's READ query. A gridViewSwitcher view can re-bind it via the
@@ -148,6 +153,9 @@ struct CmsAgGridBlockView: View {
         /// shared selection so a modal/drawer watching this query opens.
         /// Independent of `rowSelectionMode` (a drill grid needn't be selectable).
         var drillLink: Bool
+        /// The column's own presentation (format, style rules, chip,
+        /// picture), for a `listRow`'s slots, chip and pictures.
+        var presentation: CmsColumnPresentation? = nil
         var id: String { key }
     }
 
@@ -188,7 +196,8 @@ struct CmsAgGridBlockView: View {
                 visible: obj.bool("visible") ?? true,
                 pinned: obj.string("pinned"),
                 image: obj.object("image"),
-                drillLink: obj.bool("drillLink") ?? false
+                drillLink: obj.bool("drillLink") ?? false,
+                presentation: CmsColumnPresentation(key: key, json: obj)
             )
         }
         // View columnOrder (runtime state) orders columns; unknown keys keep
@@ -248,6 +257,8 @@ struct CmsAgGridBlockView: View {
 
     var body: some View {
         content
+            .modifier(CmsRecordFormPresenter(runtime: runtime, request: $rowForm))
+            .modifier(CmsRowActionRunnerPresenter(runner: swipeRunner, runtime: runtime))
             .onAppear {
                 runtime.ensureLoaded(querySlug)
                 userViewIntent = UserDefaults.standard.string(forKey: viewIntentPersistenceKey)
@@ -284,6 +295,10 @@ struct CmsAgGridBlockView: View {
             let cols = resolvedColumns(schema: result.schema)
             let visibleCols = cols.filter { $0.visible }
             let rows = displayRows(result.rows, columns: cols)
+            // `groupDefaultExpanded` (AG Grid's): groups start open, and stay
+            // as the viewer leaves them until the rows reload.
+            let groupCol = cols.first { $0.rowGroup }
+            let seedKey = groupCol.map { col in "\(result.rows.count)|" + groupedKeys(result.rows, by: col).joined(separator: "\u{1}") }
             VStack(alignment: .leading, spacing: 8) {
                 toolbar(columns: visibleCols)
                 switch presentation {
@@ -298,6 +313,12 @@ struct CmsAgGridBlockView: View {
                 if showGrandTotal && presentation != "grid" {
                     grandTotalRow(columns: visibleCols)
                 }
+            }
+            .task(id: seedKey) {
+                // Unset keeps today's behaviour exactly (closed, kept across reloads).
+                guard let groupCol, props.double("groupDefaultExpanded") != nil else { return }
+                expandedGroups = CmsLevers.groupsStartOpen(props.double("groupDefaultExpanded"))
+                    ? Set(groupedKeys(result.rows, by: groupCol)) : []
             }
         }
     }
@@ -423,8 +444,49 @@ struct CmsAgGridBlockView: View {
             }
         let subtitleCols = bodyCols.dropFirst().filter { $0.key != trailingCol?.key }.prefix(2)
         let groupCol = columns.first { $0.rowGroup }
+        let style = listStyle
 
-        return VStack(spacing: 0) {
+        return Group {
+            if style.isBareSystem && rowLayout == nil && props["swipeActions"]?.objectValue == nil {
+                bareListProjection(rows: rows, columns: columns, groupCol: groupCol, title: titleCol,
+                                   trailing: trailingCol, subtitle: Array(subtitleCols))
+            } else {
+                styledListProjection(rows: rows, columns: columns, groupCol: groupCol, title: titleCol,
+                                     trailing: trailingCol, subtitle: Array(subtitleCols), style: style)
+            }
+        }
+    }
+
+    /// The grid's row layout (`listRow`): which columns go in which part of a
+    /// list row. Without it rows are filled as they always have been.
+    private var rowLayout: CmsListRowLayout? { CmsListRowLayout(props["listRow"]) }
+
+    /// A column's presentation by key or field, for the row layout: a
+    /// configured column's own, else the bare field. The configured columns
+    /// are read whatever `nativeColumns` keeps (the web's reading): a row
+    /// layout names its own columns, hidden ones included, and a chip or
+    /// picture must still find its rules and image chain.
+    private func presentation(_ name: String, in columns: [Column]) -> CmsColumnPresentation {
+        let all = configuredColumns + columns
+        if let col = all.first(where: { $0.key == name }) ?? all.first(where: { $0.valueFrom == name }) {
+            return col.presentation ?? CmsColumnPresentation(key: col.key, valueFrom: col.valueFrom,
+                                                             json: ["format": col.format.map(CmsJSON.string) ?? .null,
+                                                                    "transform": col.transform.map(CmsJSON.string) ?? .null])
+        }
+        return CmsColumnPresentation(key: name, json: nil)
+    }
+
+    /// The site's list style for this grid (the view's `listStyle` first).
+    private var listStyle: CmsResolvedListStyle {
+        CmsResolvedListStyle(config: runtime.themeConfig, block: props.string("listStyle"), theme: runtime.theme)
+    }
+
+    /// The list as it has always looked: the built-in `system` style with
+    /// nothing set keeps it exactly.
+    private func bareListProjection(rows: [[String: CmsJSON]], columns: [Column], groupCol: Column?,
+                                    title titleCol: Column?, trailing trailingCol: Column?,
+                                    subtitle subtitleCols: [Column]) -> some View {
+        VStack(spacing: 0) {
             if let groupCol {
                 ForEach(groupedKeys(rows, by: groupCol), id: \.self) { groupValue in
                     let groupRows = rows.filter { $0[groupCol.valueFrom]?.displayString == groupValue }
@@ -443,6 +505,85 @@ struct CmsAgGridBlockView: View {
                 .fill(runtime.theme.divider.opacity(0.08))
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// The list in the site's list style: the rows of each group (or all
+    /// rows) laid out by `CmsStyledRows`, each drawn by `CmsListRowContent`.
+    private func styledListProjection(rows: [[String: CmsJSON]], columns: [Column], groupCol: Column?,
+                                      title: Column?, trailing: Column?, subtitle: [Column],
+                                      style: CmsResolvedListStyle) -> some View {
+        VStack(spacing: style.layout == .cards ? style.gap : 8) {
+            if let groupCol {
+                ForEach(groupedKeys(rows, by: groupCol), id: \.self) { groupValue in
+                    let groupRows = rows.filter { $0[groupCol.valueFrom]?.displayString == groupValue }
+                    let expanded = expandedGroups.contains(groupValue)
+                    groupHeader(groupValue, rows: groupRows, columns: columns, expanded: expanded)
+                        .clipShape(RoundedRectangle(cornerRadius: style.layout == .plain ? 0 : style.cornerRadius,
+                                                    style: .continuous))
+                    if expanded {
+                        styledRows(groupRows, columns: columns, title: title, trailing: trailing, subtitle: subtitle, style: style)
+                    }
+                }
+            } else {
+                styledRows(rows, columns: columns, title: title, trailing: trailing, subtitle: subtitle, style: style)
+            }
+        }
+    }
+
+    /// A row's swipe actions (`swipeActions`), run by the swipe runner; nil when the grid has none.
+    private var swipeSet: (([String: CmsJSON]) -> GlassSwipeSet)? {
+        guard let config = props["swipeActions"], config.objectValue != nil else { return nil }
+        let slug = querySlug
+        return { row in
+            let key = CmsSwipeRowKey.of(row)
+            return CmsSwipe.glassSet(CmsSwipe.resolve(config, row: row), theme: runtime.theme, key: key) { action in
+                swipeRunner.perform(action, row: row, query: slug, runtime: runtime, openURL: { openURL($0) })
+            }
+        }
+    }
+
+    private func styledRows(_ rows: [[String: CmsJSON]], columns: [Column], title: Column?, trailing: Column?,
+                            subtitle: [Column], style: CmsResolvedListStyle) -> some View {
+        let layout = rowLayout
+        return CmsStyledRows(style: style, items: rows, swipe: swipeSet) { row in
+            let selected = isSelected(row)
+            Button {
+                rowTapped(row)
+            } label: {
+                if let layout {
+                    CmsLayoutRowContent(
+                        style: style, layout: layout, row: row,
+                        column: { presentation($0, in: columns) },
+                        // The row's tap drills; its title keeps the style's colour.
+                        navigates: hasDrillLink
+                    ) {
+                        if !hasDrillLink && selectionMode != "none" {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .font(.subheadline)
+                                .foregroundColor(selected ? runtime.theme.primary : runtime.theme.textSecondary.opacity(0.4))
+                        }
+                    }
+                } else {
+                CmsListRowContent(
+                    style: style,
+                    title: title.map { cellText(row, $0) } ?? "",
+                    titleColor: hasDrillLink ? drillLinkColor : nil,
+                    subtitle: subtitle.isEmpty ? nil
+                        : subtitle.map { "\($0.label): \(cellText(row, $0))" }.joined(separator: " · "),
+                    trailing: trailing.map { cellText(row, $0) },
+                    navigates: hasDrillLink
+                ) {
+                    if !hasDrillLink && selectionMode != "none" {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .font(.subheadline)
+                            .foregroundColor(selected ? runtime.theme.primary : runtime.theme.textSecondary.opacity(0.4))
+                    }
+                }
+                }
+            }
+            .buttonStyle(.plain)
+            .cmsInspectorID("Cms.agGrid.listRow")
+        }
     }
 
     private func groupedKeys(_ rows: [[String: CmsJSON]], by column: Column) -> [String] {
@@ -564,7 +705,7 @@ struct CmsAgGridBlockView: View {
             // no drill column, the tap publishes selection (single/multi) and a
             // no-selection grid is inert — the web reading, where detail is
             // driven by an authored modal/drawer watching this query.
-            if hasDrillLink { drill(row) } else { toggle(row) }
+            rowTapped(row)
         } label: {
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1095,6 +1236,13 @@ struct CmsAgGridBlockView: View {
     /// Drill: publish this row as the query's selection — regardless of
     /// `rowSelectionMode` — so an authored modal/drawer watching `querySlug`
     /// opens. Twin of the web drillLink handler (setSelectedRows(querySlug,[row])).
+    /// A row's tap: its record form (`openRowForm`), else a drill, else selection.
+    private func rowTapped(_ row: [String: CmsJSON]) {
+        if let spec = CmsRowFormSpec(block.props["openRowForm"]) {
+            rowForm = CmsRecordFormRequest(spec: spec, row: row)
+        } else if hasDrillLink { drill(row) } else { toggle(row) }
+    }
+
     private func drill(_ row: [String: CmsJSON]) {
         runtime.setSelectedRows(querySlug, rows: [row])
     }

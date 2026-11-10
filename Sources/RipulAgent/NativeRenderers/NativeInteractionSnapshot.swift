@@ -18,6 +18,7 @@ struct NativeInteractionSnapshot: Decodable {
   let expectsResponse: Bool
   let selectedIndices: [Int]
   let dateInput: DateInput?
+  let passwordInput: Bool?
   let selectedDate: String
   let text: String
   let editSequence: Int

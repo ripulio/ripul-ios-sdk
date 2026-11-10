@@ -162,13 +162,17 @@ struct ChatPermissionsScreen: View {
     /// One line for what a person holds, in the words of their own screen.
     static func holds(_ member: MemberAuthorityState.Member?) -> String {
         let refuses = member?.whenNotHeld == "refuse"
+        let everywhere = member?.everyChat?.count ?? 0
+        let folders = everywhere == 0 ? "" : "\(everywhere) \(everywhere == 1 ? "folder" : "folders") in all your chats."
         switch member?.level {
         case "acts-as-me":
             return "Everything, as you"
         case "named" where member?.permissions.isEmpty == false:
             let count = member?.permissions.count ?? 0
-            return "\(count) \(count == 1 ? "thing" : "things") you chose. Anything else is \(refuses ? "refused" : "asked")."
+            let chosen = "\(count) \(count == 1 ? "thing" : "things") you chose."
+            return [chosen, folders, "Anything else is \(refuses ? "refused" : "asked")."].filter { !$0.isEmpty }.joined(separator: " ")
         default:
+            if !folders.isEmpty { return "\(folders) Anything else is \(refuses ? "refused" : "asked")." }
             return refuses ? "Nothing of yours. Their requests for it are refused." : "Nothing standing. You are asked each time."
         }
     }

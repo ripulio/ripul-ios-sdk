@@ -17,6 +17,10 @@ public final class RipulComposerChrome: ObservableObject {
     /// Expanded navigation clearance. Consumers observe this independently of
     /// display-frame progress so chat padding cannot retain a pre-navigation value.
     @Published public var contentBottomInset: CGFloat = 0
+    /// True once the composer has collapsed into its compact pill, so the chat's
+    /// bottom clearance drops the separate tab-bar row and the folded composer rows
+    /// without republishing on intermediate animation frames.
+    @Published public var isCollapsed = false
     public var requestExpand: (() -> Void)?
     #if canImport(UIKit)
     /// A thumb on the composer itself, for the host that owns the collapse:
@@ -53,7 +57,7 @@ extension EnvironmentValues {
     /// Chrome whose clearance a retained chat keeps while its composer is
     /// detached (sessions list showing). Without it the web padding shrinks and
     /// regrows by the bar's height on every list round trip — the entry nod.
-    var composerClearanceChrome: RipulComposerChrome? {
+    public var composerClearanceChrome: RipulComposerChrome? {
         get { self[ComposerClearanceChromeKey.self] }
         set { self[ComposerClearanceChromeKey.self] = newValue }
     }

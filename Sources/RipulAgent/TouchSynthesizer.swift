@@ -64,6 +64,17 @@ enum TouchSynthesizer {
 
     static var isAvailable: Bool { unavailableReason == nil }
 
+    /// `unavailableReason` as a name a viewer can act on without reading the
+    /// words: "touch_left_out" (this build has no real touches) or
+    /// "touch_unsupported" (this iOS lacks the functions). nil when available.
+    static var unavailableCode: String? {
+        #if DEBUG || RIPUL_DEVELOPER_BUILD
+        return HID.shared == nil ? "touch_unsupported" : nil
+        #else
+        return "touch_left_out"
+        #endif
+    }
+
     /// A tap (or `count` taps) at `point`, in `window`'s coordinates.
     static func tap(at point: CGPoint, in window: UIWindow, count: Int = 1) async throws {
         for index in 0..<max(1, count) {
@@ -164,6 +175,32 @@ enum TouchSynthesizer {
         }
         try await pause(0.03)
         try hand(fingers(to, .up), in: window)
+    }
+
+    /// Two fingers side by side, `spread` points apart across the line they
+    /// travel, the point between them going from `start` to `end` over
+    /// `duration`: a two-finger swipe.
+    static func twoFingerDrag(from start: CGPoint, to end: CGPoint, spread: CGFloat = 60, in window: UIWindow,
+                              duration: TimeInterval) async throws {
+        let bounds = window.bounds.insetBy(dx: 1, dy: 1)
+        let length = max(hypot(end.x - start.x, end.y - start.y), 1)
+        // Across the travel, so the pair moves together rather than in line.
+        let across = CGPoint(x: -(end.y - start.y) / length * spread / 2, y: (end.x - start.x) / length * spread / 2)
+        func fingers(_ center: CGPoint, _ phase: Phase) -> [Finger] {
+            func inside(_ point: CGPoint) -> CGPoint {
+                CGPoint(x: min(max(point.x, bounds.minX), bounds.maxX), y: min(max(point.y, bounds.minY), bounds.maxY))
+            }
+            return [Finger(slot: 0, point: inside(CGPoint(x: center.x - across.x, y: center.y - across.y)), phase: phase),
+                    Finger(slot: 1, point: inside(CGPoint(x: center.x + across.x, y: center.y + across.y)), phase: phase)]
+        }
+        let moves = TouchPath.moves(from: start, to: end, steps: TouchPath.steps(for: duration))
+        let interval = duration / Double(moves.count)
+        try hand(fingers(start, .down), in: window)
+        for point in moves {
+            try await pause(interval)
+            try hand(fingers(point, .moved), in: window)
+        }
+        try hand(fingers(end, .up), in: window)
     }
 
     /// One phase of a finger driven from outside, as it happens there (Live

@@ -1,0 +1,43 @@
+# Playground: the CMS site `control-playground` as an iPhone app, read without signing in.
+# The .xcodeproj is generated from this file and gitignored: run `xcodegen generate` here.
+# Build outside the repo (see README): no DerivedData folder is sanctioned for this app yet.
+name: ControlPlayground
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  RipulAgent:
+    path: ../..
+targets:
+  ControlPlayground:
+    type: application
+    platform: iOS
+    sources:
+      - ControlPlayground
+    dependencies:
+      - package: RipulAgent
+        product: RipulAgent
+    # `ripul-playground://ripul-page/<slug>` opens any page of the site (CmsAppController.handle(url:)),
+    # including pages the tab bar doesn't list.
+    info:
+      path: ControlPlayground/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: io.ripul.playground
+            CFBundleURLSchemes: [ripul-playground]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.ripul.playground
+        PRODUCT_NAME: ControlPlayground
+        DEVELOPMENT_TEAM: C7AA358R56
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Playground
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        ENABLE_PREVIEWS: NO

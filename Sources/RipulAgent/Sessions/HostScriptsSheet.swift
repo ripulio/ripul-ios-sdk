@@ -64,7 +64,7 @@ struct HostScriptsSheet: View {
             ContentUnavailableView {
                 RipulEmptyStateLabel("No Scripts Here", systemImage: "terminal")
             } description: {
-                Text("\(machine.displayName) has no script store. Scripts are a Mac host feature over the relay. You can hide this row from Customise Panel.")
+                Text("\(machine.displayName) has no script store. Scripts require a Mac host that supports them.")
                     .ripulEmptyStateDescription()
             }
         } else {
@@ -78,7 +78,7 @@ struct HostScriptsSheet: View {
                     ContentUnavailableView {
                         RipulEmptyStateLabel("No Scripts Yet", systemImage: "terminal")
                     } description: {
-                        Text("Tap + to write one. It appears as a tile in \(machine.displayName)’s panel.")
+                        Text("Tap + to write one. It becomes an action on \(machine.displayName).")
                             .ripulEmptyStateDescription()
                     }
                     .listRowBackground(Color.clear)
@@ -100,7 +100,7 @@ struct HostScriptsSheet: View {
                             pendingDelete = offsets.first.map { scripts[$0] }
                         }
                     } footer: { RipulSectionFooter {
-                        Text("Each script is a tile in \(machine.displayName)’s panel.")
+                        Text("Run these scripts from \(machine.displayName)’s actions.")
                     } }.ripulThemedListRows()
                 }
             }.ripulThemedList()
@@ -114,7 +114,7 @@ struct HostScriptsSheet: View {
                     if let script = pendingDelete { Task { await delete(script) } }
                 }
             } message: {
-                Text("This removes it from the host and its tile from the panel.")
+                Text("This removes the script and its action from the host.")
             }
         }
     }

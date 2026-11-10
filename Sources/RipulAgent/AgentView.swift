@@ -22,7 +22,9 @@ private struct ChatInputHeightKey: PreferenceKey {
 @MainActor
 public final class ScrollButtonModel: ObservableObject {
     @Published public var show = false
+    @Published public var isScrolling = false
     @Published public var unreadCount = 0
+    public var isVisible: Bool { show && !isScrolling }
     public init() {}
 }
 
@@ -42,7 +44,7 @@ struct ScrollToBottomOverlay: View {
         Color.clear
             .frame(height: ComposerContentLayout.scrollButtonHeight)
             .overlay(alignment: .bottom) {
-                if model.show {
+                if model.isVisible {
                     ScrollToBottomButton(unreadCount: model.unreadCount, action: onTap)
                         #if os(iOS)
                         .background(KeyboardOverlayHitRegion())
@@ -52,7 +54,11 @@ struct ScrollToBottomOverlay: View {
                         .transition(.scale.combined(with: .opacity))
                 }
             }
-            .animation(.easeInOut(duration: 0.45), value: model.show)
+            // A moving chat cannot accept the jump yet. Remove its hit target
+            // immediately, including while a previous transition is finishing.
+            .allowsHitTesting(model.isVisible)
+            .accessibilityHidden(!model.isVisible)
+            .animation(model.isScrolling ? nil : .easeInOut(duration: 0.45), value: model.isVisible)
     }
 }
 
@@ -101,56 +107,39 @@ public struct AgentView<TopBar: View>: View {
         #endif
     }
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dismiss) private var dismiss
+    // No `dismiss` here: `MinimizeRequest` reads it, so a new dismiss action
+    // (one comes with every turn of the phone) does not redraw this screen.
     @Environment(\.ripulPreviewPanelsAtWindow) private var previewPanelsAtWindow
 
     @State private var readyConfig: AgentConfiguration?
-    // Chat text / attachments / plan-mode / addressed-participants state lives in
+    // Chat text / attachments / addressed-participants state lives in
     // the ChatComposer child, NOT here. Keeping it here meant every keystroke
     // invalidated AgentView.body — re-rendering the WKWebView host subtree, the
     // top bar, and the glass composer background. See ChatComposer below.
     @State private var showingQuickCommands = false
     @State private var showingDebugCommands = false
     @State private var showingConsoleLogs = false
-    @State private var showingPlanReview = false
-
-    /// Extracted from the body chain deliberately: AgentView's modifier chain
-    /// is at the Swift type-checker's limit, and inlining this sheet tips it
-    /// into "unable to type-check this expression in reasonable time".
-    @ViewBuilder
-    private var planReviewSheet: some View {
-        // The list view does not own a NavigationStack (it is also pushed as a
-        // link destination), so presenting it as a sheet supplies one.
-        NavigationStack {
-            Group {
-                // Plans resolve against the active chat's machine and working
-                // directory, so with no chat there is nothing to look in.
-                if let chatId = bridge.currentSourceChatId {
-                    PlanReviewScreen(bridge: bridge.planReviewBridge(), chatId: chatId)
-                } else {
-                    ContentUnavailableView(
-                        themed: "No active chat",
-                        systemImage: "bubble.left.and.exclamationmark.bubble.right",
-                        description: Text("Plans are read from the working directory of the chat you're in. Open a session first.")
-                    )
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showingPlanReview = false }
-                }
-            }
-        }
-    }
     @State private var chatInputMeasuredHeight: CGFloat = 0
     @State private var chatNavigationInset: CGFloat = 0
-    @Environment(\.ripulComposerChrome) private var composerChrome
-    @Environment(\.composerClearanceChrome) private var clearanceChrome
+    /// How far below its usual place the composer rests (beside the system's
+    /// tab rail on a square bottom): the chat's clearance follows it down.
+    @State private var composerRestingDrop: CGFloat = 0
+    /// How far above the window's bottom safe area the composer rests over a system
+    /// bar (`KeyboardAttachedOverlay`'s resting lift): the open Duo's tab bar.
+    @State private var composerRestingLift: CGFloat = 0
+    /// Whether the composer has collapsed into its compact pill, so the chat's
+    /// bottom clearance drops the separate tab-bar row and the folded composer rows.
+    /// Read by the views that draw with it, never by this body (see `ComposerFoldState`).
+    @State private var composerFold = ComposerFoldState()
 
     @StateObject private var messageHistory = MessageHistory.shared
 
     #if os(iOS)
     @StateObject private var keyboard = KeyboardObserver()
+    /// Where the bar over the chat sits in its window, for the native
+    /// scroller's top inset. Fed by `WindowTopChrome`: the window's inset is
+    /// never read during `body` (see AgentWebView's `topChrome`).
+    @State private var nativeScrollerTopChrome = WindowTopChromeClearance()
     #endif
 
     /// Creates an AgentView that manages its own bridge internally.
@@ -263,9 +252,22 @@ public struct AgentView<TopBar: View>: View {
         }
     }
 
+    private func handleAppear() {
+        if let tokenProvider {
+            NativeChatReadAloudController.shared.externalTokenProvider = tokenProvider
+        }
+        guard readyConfig == nil else { return }
+        bridge.composerContexts.availableOptions = configuration.composerContexts
+        let on = bridge.nativeChatScrollerEnabled
+        // Always sync render-suspension state on appear — clears crash-while-suspended
+        // localStorage so the web never starts suspended when native chat is off.
+        bridge.evaluateJavaScript("window.__ripulSetHostRenderSuspended?.(\(on))")
+        if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))") }
+    }
+
     public var body: some View {
         let _ = ChatSlideProbe.markBody("AgentView") { Self._printChanges() }
-        ZStack(alignment: .top) {
+        let step1 = ZStack(alignment: .top) {
             #if os(iOS)
             (colorScheme == .dark ? Color.ripul(system: .black) : Color.ripul(system: .white))
                 .ignoresSafeArea(edges: .top)
@@ -279,8 +281,10 @@ public struct AgentView<TopBar: View>: View {
             if let config = readyConfig, !showsOwnedPage {
                 #if os(iOS)
                 GeometryReader { viewport in
-                    AgentWebView(configuration: config, bridge: bridge,
-                                 keyboardNavigationInset: webKeyboardNavigationInset)
+                    FoldAwareAgentWebView(configuration: config, bridge: bridge,
+                                          openNavigationInset: webKeyboardNavigationInset,
+                                          fold: composerFold,
+                                          keyboardRestingDrop: composerRestingDrop)
                         // Pin the viewport before UIKit translates its content.
                         .frame(width: viewport.size.width, height: viewport.size.height)
                 }
@@ -297,14 +301,18 @@ public struct AgentView<TopBar: View>: View {
             // mounted for comms) but UNDER the top bar and the ChatComposer overlay,
             // so the real native composer + chrome are reused — no throwaway input.
             if bridge.nativeChatScrollerEnabled, readyConfig != nil {
-                NativeChatView(
+                NativeChatHost(
                     store: bridge.nativeChat,
                     bridge: bridge,
-                    topInset: topBar != nil ? 48 : 0,
-                    bottomInset: nativeScrollerBottomInset
+                    topInset: nativeScrollerTopInset,
+                    bottomInset: nativeScrollerBottomInset(folded: false),
+                    foldedBottomInset: nativeScrollerBottomInset(folded: true),
+                    fold: composerFold
                 )
+                    .equatable()
                     .background(nativeScrollerBackground)
                     #if os(iOS)
+                    .background(WindowTopChrome { nativeScrollerTopChrome = $0 })
                     .ignoresSafeArea(.keyboard)
                     #endif
             }
@@ -362,14 +370,13 @@ public struct AgentView<TopBar: View>: View {
             guard bridge.nativeChatScrollerEnabled else { return }
             bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))")
         }
-        .onAppear {
-            bridge.composerContexts.availableOptions = configuration.composerContexts
-            let on = bridge.nativeChatScrollerEnabled
-            // Always sync render-suspension state on appear — clears crash-while-suspended
-            // localStorage so the web never starts suspended when native chat is off.
-            bridge.evaluateJavaScript("window.__ripulSetHostRenderSuspended?.(\(on))")
-            if on { bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))") }
+        // Settings > Debug > Native Chat Performance: the page takes a change of
+        // lean forwarding at once (it backfills the chat in the other mode).
+        .onReceive(NotificationCenter.default.publisher(for: NativeChatPerformance.changed)) { _ in
+            guard bridge.nativeChatScrollerEnabled else { return }
+            bridge.evaluateJavaScript("window.__ripulSetNativeChatForwarding?.(true, 'debug', null, \(NativeChatMessageStore.forwardingFeaturesJSON))")
         }
+        .onAppear(perform: handleAppear)
         .overlay(alignment: .bottom) {
             if !bridge.fileViewerExpanded && !bridge.artefactPageExpanded && bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
                 // Leaf-isolated composer: owns the chat text state so typing
@@ -402,7 +409,10 @@ public struct AgentView<TopBar: View>: View {
                     onShowConsoleLogs: { showingConsoleLogs = true },
                     onHeightChange: updateComposerHeight
                 )
-                .modifier(KeyboardAttachedOverlayModifier(onHeightChange: updateComposerHeight))
+                .modifier(KeyboardAttachedOverlayModifier(onHeightChange: updateComposerHeight,
+                                                          onRestingDropChange: updateComposerRestingDrop,
+                                                          onRestingLiftChange: updateComposerRestingLift,
+                                                          reachesBottomEdge: composerRestingDrop > 0))
             }
         }
         // Hands-free voice mode — attached AFTER the composer overlay so it
@@ -435,6 +445,8 @@ public struct AgentView<TopBar: View>: View {
         #if os(iOS)
         .ignoresSafeArea(.keyboard)
         #endif
+
+        return step1
         .onChange(of: bridge.currentPageContext) { context in
             if !context.showNativeChatInput || bridge.suppressNativeChatInput {
                 bridge.setNativeChatInputHeight(0)
@@ -449,20 +461,15 @@ public struct AgentView<TopBar: View>: View {
                 updateWebBottomPadding()
             }
         }
-        .onReceive(composerClearancePublisher, perform: updateComposerClearance)
+        .modifier(ComposerClearanceObserver(
+            onClearance: updateComposerClearance,
+            onCollapsed: updateComposerCollapsed
+        ))
         .onChange(of: colorScheme) { newScheme in
             let theme: AgentTheme = newScheme == .dark ? .dark : .light
             bridge.setTheme(theme)
         }
-        .onChange(of: bridge.wantsMinimize) { wantsMinimize in
-            if wantsMinimize {
-                if let onMinimize {
-                    onMinimize()
-                } else {
-                    dismiss()
-                }
-            }
-        }
+        .modifier(MinimizeRequest(bridge: bridge, onMinimize: onMinimize))
         .onChange(of: bridge.wantsShowConsoleLogs) { wants in
             if wants {
                 showingConsoleLogs = true
@@ -475,16 +482,9 @@ public struct AgentView<TopBar: View>: View {
                 bridge.wantsShowViewInspector = false
             }
         }
-        .onChange(of: bridge.wantsShowPlanReview) { wants in
-            if wants {
-                showingPlanReview = true
-                bridge.wantsShowPlanReview = false
-            }
-        }
         .ripulSheet(isPresented: $showingQuickCommands) {
             QuickCommandsSheet(bridge: bridge)
         }
-        .ripulSheet(isPresented: $showingPlanReview) { planReviewSheet }
         .ripulSheet(isPresented: $showingDebugCommands) {
             QuickCommandsSheet(bridge: bridge, debugMode: true)
         }
@@ -584,7 +584,8 @@ public struct AgentView<TopBar: View>: View {
 
     #if os(iOS)
     /// Embedded containers already own their keyboard avoidance. UIKit checks
-    /// native composer focus when the keyboard notification arrives.
+    /// native composer focus when the keyboard notification arrives. The inset with
+    /// the composer open: `FoldAwareAgentWebView` takes it to 0 while folded.
     private var webKeyboardNavigationInset: CGFloat? {
         guard !configuration.respectsContainerSafeArea,
               bridge.currentPageContext.showNativeChatInput, !bridge.suppressNativeChatInput else { return nil }
@@ -601,13 +602,6 @@ public struct AgentView<TopBar: View>: View {
         #endif
     }
 
-    /// Observe only structural clearance, never the shared animation frames.
-    /// A new chrome owner must republish even when the editor's height is unchanged.
-    private var composerClearancePublisher: AnyPublisher<CGFloat, Never> {
-        (clearanceChrome ?? composerChrome)?.$contentBottomInset.removeDuplicates().eraseToAnyPublisher()
-            ?? Just(CGFloat.zero).eraseToAnyPublisher()
-    }
-
     private func updateComposerClearance(_ inset: CGFloat) {
         guard chatNavigationInset != inset else { return }
         chatNavigationInset = inset
@@ -616,20 +610,84 @@ public struct AgentView<TopBar: View>: View {
         }
     }
 
+    private func updateComposerCollapsed(_ collapsed: Bool) {
+        guard composerFold.collapsed != collapsed else { return }
+        if collapsed, NativeChatPerformance.isEnabled(.smoothFollow) {
+            withAnimation(.easeOut(duration: 0.25)) { composerFold.collapsed = collapsed }
+        } else {
+            composerFold.collapsed = collapsed
+        }
+        if bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
+            updateWebBottomPadding()
+        }
+    }
+
     private func updateComposerHeight(_ height: CGFloat) {
         guard height > 0 else { return }
-        chatInputMeasuredHeight = height
+        if height < chatInputMeasuredHeight, NativeChatPerformance.isEnabled(.smoothFollow) {
+            // The composer collapsing as a sent message of several lines clears it: the
+            // chat comes down into the space on a curve. Set plainly, its content shrank
+            // in one step and SwiftUI moved a chat at its end down by the whole drop at
+            // once (Peter, 5 November 2026).
+            withAnimation(.easeOut(duration: 0.25)) { chatInputMeasuredHeight = height }
+        } else {
+            chatInputMeasuredHeight = height
+        }
         updateWebBottomPadding(inputHeight: height)
+    }
+
+    private func updateComposerRestingDrop(_ drop: CGFloat) {
+        guard composerRestingDrop != drop else { return }
+        composerRestingDrop = drop
+        if bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
+            updateWebBottomPadding()
+        }
+    }
+
+    private func updateComposerRestingLift(_ lift: CGFloat) {
+        guard composerRestingLift != lift else { return }
+        composerRestingLift = lift
+        if bridge.currentPageContext.showNativeChatInput && !bridge.suppressNativeChatInput {
+            updateWebBottomPadding()
+        }
+    }
+
+    /// Top inset for the native scroller so its first message clears the bar
+    /// floating over it. Like the web view, the scroller starts at the window's
+    /// top (the chat column extends under the status bar), so on iOS it clears
+    /// what the web chat's `--native-header-height` does
+    /// (AgentBridge.updateNativeHeaderHeight): the window's top clearance and
+    /// the bar's 44pt row, and a masthead below it. A flat 48 left the first
+    /// message under the bar on every iPhone.
+    private var nativeScrollerTopInset: CGFloat {
+        #if os(iOS)
+        guard !configuration.hostRendersMasthead else { return 0 }
+        let masthead = bridge.mastheadConfig.map { ($0.height ?? 48) + 12 } ?? 0
+        return nativeScrollerTopChrome.contentClearance(below: GlassTopBarLayout.outerBarHeight) + masthead
+        #else
+        return topBar != nil ? GlassTopBarLayout.compactHeight : 0
+        #endif
     }
 
     /// Bottom inset for the native scroller so its last message clears the reused
     /// ChatComposer (which sits below it). Mirrors `updateWebBottomPadding`:
     /// measured input height + resting inset + an 8pt gap above the composer.
-    private var nativeScrollerBottomInset: CGFloat {
+    /// Both the open and the folded clearance go to the chat, which reads the fold
+    /// itself (`NativeChatHost`).
+    private func nativeScrollerBottomInset(folded: Bool) -> CGFloat {
         #if os(iOS)
-        let safeBottom = configuration.respectsContainerSafeArea ? 0 : (bridge.hostingWindow?.safeAreaInsets.bottom ?? 0)
+        // With the keyboard up the composer stands on the keyboard, not at rest. At
+        // rest it stands on its own view's safe area, which over the open Duo's tab
+        // bar is higher than the window's (`composerRestingLift`): measured from the
+        // window's, the last message sat on the composer (Peter, 5 November 2026).
+        let drop = keyboard.height > 0 ? 0 : composerRestingDrop
+        let lift = keyboard.height > 0 ? 0 : composerRestingLift
+        let safeBottom = configuration.respectsContainerSafeArea ? 0
+            : max(0, (bridge.hostingWindow?.safeAreaInsets.bottom ?? 0) - drop) + lift
         return ComposerContentLayout.bottomClearance(inputHeight: chatInputMeasuredHeight,
-            navigationInset: chatNavigationInset, safeBottom: safeBottom, keyboardHeight: configuration.respectsContainerSafeArea ? 0 : keyboard.height)
+            navigationInset: chatNavigationInset, safeBottom: safeBottom,
+            keyboardHeight: configuration.respectsContainerSafeArea ? 0 : keyboard.height,
+            collapsed: keyboard.height == 0 && folded)
         #else
         return ComposerContentLayout.bottomClearance(inputHeight: chatInputMeasuredHeight,
             navigationInset: chatNavigationInset, safeBottom: 0)
@@ -647,14 +705,16 @@ public struct AgentView<TopBar: View>: View {
         guard measuredHeight > 0 else { return }
         let safeBottom: CGFloat
         #if os(iOS)
-        safeBottom = configuration.respectsContainerSafeArea ? 0 : (bridge.hostingWindow?.safeAreaInsets.bottom ?? 0)
+        safeBottom = configuration.respectsContainerSafeArea ? 0
+            : max(0, (bridge.hostingWindow?.safeAreaInsets.bottom ?? 0) - composerRestingDrop) + composerRestingLift
         #else
         safeBottom = 0
         #endif
         let totalHeight = Int(ceil(ComposerContentLayout.bottomClearance(inputHeight: measuredHeight,
-            navigationInset: navigationInset ?? chatNavigationInset, safeBottom: safeBottom)))
+            navigationInset: navigationInset ?? chatNavigationInset, safeBottom: safeBottom,
+            collapsed: composerFold.collapsed)))
         #if DEBUG
-        bridge.handleConsoleLog("LOG: [ComposerInset] body=\(measuredHeight) navigation=\(navigationInset ?? chatNavigationInset) safeBottom=\(safeBottom) total=\(totalHeight)")
+        bridge.handleConsoleLog("LOG: [ComposerInset] body=\(measuredHeight) navigation=\(navigationInset ?? chatNavigationInset) safeBottom=\(safeBottom) collapsed=\(composerFold.collapsed) total=\(totalHeight)")
         #endif
         bridge.setNativeChatInputHeight(totalHeight)
     }
@@ -700,9 +760,69 @@ public extension AgentView where TopBar == EmptyView {
     }
 }
 
+// MARK: - Native chat host
+
+/// The native chat, redrawn only when what it is given changes. AgentView's
+/// body runs again for its own state (the keyboard, the composer's height,
+/// voice mode, the chrome), and each run built a new `NativeChatView`, whose
+/// body then ran in full. The chat follows its store by itself.
+@available(iOS 16.0, macOS 14.0, *)
+private struct NativeChatHost: View, Equatable {
+    let store: NativeChatMessageStore
+    let bridge: AgentBridge
+    let topInset: CGFloat
+    /// The clearance with the composer open, and folded to its pill; the chat reads
+    /// which one applies from `fold` itself.
+    let bottomInset: CGFloat
+    let foldedBottomInset: CGFloat
+    let fold: ComposerFoldState
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.store === rhs.store && lhs.bridge === rhs.bridge && lhs.fold === rhs.fold
+            && lhs.topInset == rhs.topInset && lhs.bottomInset == rhs.bottomInset
+            && lhs.foldedBottomInset == rhs.foldedBottomInset
+    }
+
+    var body: some View {
+        NativeChatView(store: store, bridge: bridge, topInset: topInset, bottomInset: bottomInset,
+                       foldedBottomInset: foldedBottomInset, fold: fold)
+    }
+}
+
+/// Whether the composer is folded to its pill. Kept out of `AgentView`'s body and
+/// `NativeChatView`'s: the composer folds as the chat scrolls away from its end and
+/// unfolds as it comes back, and each ran both bodies in full (a 21 ms frame mid-fling
+/// on Peter's Duo, `AgentView.body` named in it, 9 November 2026). The views that draw
+/// with it read it: the chat list's clearance (`OwnedListClearance`) and the page's
+/// keyboard inset.
+@MainActor
+@Observable
+final class ComposerFoldState {
+    var collapsed = false
+}
+
+#if os(iOS)
+/// The page's web view, its keyboard navigation inset taken to 0 while the composer is
+/// folded: read here so a fold does not run `AgentView`'s body.
+@available(iOS 16.0, *)
+private struct FoldAwareAgentWebView: View {
+    let configuration: AgentConfiguration
+    let bridge: AgentBridge
+    let openNavigationInset: CGFloat?
+    let fold: ComposerFoldState
+    let keyboardRestingDrop: CGFloat
+
+    var body: some View {
+        AgentWebView(configuration: configuration, bridge: bridge,
+                     keyboardNavigationInset: openNavigationInset.map { fold.collapsed ? 0 : $0 },
+                     keyboardRestingDrop: keyboardRestingDrop)
+    }
+}
+#endif
+
 // MARK: - ChatComposer
 //
-// Leaf-isolated chat composer. Owns the chat text / attachments / plan-mode /
+// Leaf-isolated chat composer. Owns the chat text / attachments /
 // addressed-participants state so that a keystroke re-renders ONLY this view —
 // not AgentView.body, which hosts the WKWebView, the top bar, and reads many
 // bridge.* properties. Previously this state lived on AgentView, so every
@@ -820,7 +940,9 @@ private struct ChatComposer: View {
                     }
                 )
                 #endif
-                .padding(.horizontal, 12)
+                // Beside the system's tab rail the safe area already keeps a
+                // margin, and the composer lines up with the messages.
+                .railGutters(12)
                 // NativeChatInput owns the rounded glass surface. Keep its
                 // surrounding gutters and home-indicator gap transparent.
         }
@@ -934,6 +1056,7 @@ private struct ChatComposer: View {
             composerActionPending: composerActionPending,
             onComposerAction: handleComposerAction,
             onPause: { Task { await bridge.interruptAgent() } },
+            onStop: { Task { await bridge.stopAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: bridge.chatInputShowQuickCommands ? onQuickCommands : nil,
             onAddArtefact: BundledAgentRuntime.isEnabled ? nil : {
@@ -992,7 +1115,8 @@ private struct ChatComposer: View {
                 return dicts.compactMap { dict in
                     guard let name = dict["name"] as? String,
                           let token = dict["token"] as? String else { return nil }
-                    return ChatSuggestion(id: token, name: name, description: dict["description"] as? String, token: token)
+                    return ChatSuggestion(id: token, name: name, description: dict["description"] as? String, token: token,
+                                          icon: bridge.chatSuggestionIcon(dict))
                 }
             },
             onQueryBranches: { query in
@@ -1088,6 +1212,7 @@ private struct ChatComposer: View {
             composerActionPending: composerActionPending,
             onComposerAction: handleComposerAction,
             onPause: { Task { await bridge.interruptAgent() } },
+            onStop: { Task { await bridge.stopAgent() } },
             onNewChat: handleNewChat,
             onQuickCommands: bridge.chatInputShowQuickCommands ? onQuickCommands : nil,
             onAddArtefact: BundledAgentRuntime.isEnabled ? nil : {
@@ -1137,7 +1262,8 @@ private struct ChatComposer: View {
                 return dicts.compactMap { dict in
                     guard let name = dict["name"] as? String,
                           let token = dict["token"] as? String else { return nil }
-                    return ChatSuggestion(id: token, name: name, description: dict["description"] as? String, token: token)
+                    return ChatSuggestion(id: token, name: name, description: dict["description"] as? String, token: token,
+                                          icon: bridge.chatSuggestionIcon(dict))
                 }
             },
             onQueryBranches: { query in
@@ -1308,5 +1434,53 @@ private struct ChatComposer: View {
     private func recordHistory(_ message: String) {
         messageHistory.record(message, chatID: bridge.currentSourceChatId,
             chatTitle: bridge.sessions.first { $0.sourceChatId == bridge.currentSourceChatId }?.displayName ?? "Chat")
+    }
+}
+
+/// Minimises the agent screen when the page asks to (`bridge.wantsMinimize`):
+/// the host's own minimise when it gave one, otherwise the environment's
+/// dismiss. A modifier of its own so the agent screen never reads `dismiss`.
+/// SwiftUI hands down a new dismiss action whenever the window's scene
+/// updates, as it does in every turn of the phone, and the screen read it in
+/// its body: each turn of the open Duo redrew the whole chat twice more
+/// (6 November 2026). Here only this modifier is asked again.
+private struct MinimizeRequest: ViewModifier {
+    let bridge: AgentBridge
+    let onMinimize: (() -> Void)?
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        content.onChange(of: bridge.wantsMinimize) { wantsMinimize in
+            guard wantsMinimize else { return }
+            if let onMinimize { onMinimize() } else { dismiss() }
+        }
+    }
+}
+
+/// Follows the composer's bottom clearance and collapse state in its own
+/// modifier so `AgentView` never reads `ripulComposerChrome` or
+/// `composerClearanceChrome` in its body: the workspace shell switches
+/// `ripulComposerChrome` between nil and the tab bar's chrome when leaving or
+/// entering `.agent`, which otherwise re-ran `AgentView.body` on every tab switch.
+private struct ComposerClearanceObserver: ViewModifier {
+    let onClearance: (CGFloat) -> Void
+    let onCollapsed: (Bool) -> Void
+    @Environment(\.ripulComposerChrome) private var composerChrome
+    @Environment(\.composerClearanceChrome) private var clearanceChrome
+
+    private var clearancePublisher: AnyPublisher<CGFloat, Never> {
+        (clearanceChrome ?? composerChrome)?.$contentBottomInset.removeDuplicates().eraseToAnyPublisher()
+            ?? Just(CGFloat.zero).eraseToAnyPublisher()
+    }
+
+    private var collapsedPublisher: AnyPublisher<Bool, Never> {
+        (clearanceChrome ?? composerChrome)?.$isCollapsed.removeDuplicates().eraseToAnyPublisher()
+            ?? Just(false).eraseToAnyPublisher()
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(clearancePublisher, perform: onClearance)
+            .onReceive(collapsedPublisher, perform: onCollapsed)
     }
 }

@@ -43,6 +43,7 @@ extension AgentBridge {
     static func spokenPreview(_ raw: String?) -> String? { SessionReadLedger.spokenPreview(raw) }
     static func canonicalChatKey(_ chatId: String) -> String { SessionReadLedger.canonicalChatKey(chatId) }
     static func pinnedKeys(cache: RipulSessionCache?) -> Set<String> { SessionReadLedger(cache: cache).pinnedKeys }
+    static func customIcons(cache: RipulSessionCache?) -> [String: String] { SessionReadLedger(cache: cache).customIcons }
     static func readStamps(cache: RipulSessionCache?) -> [String: Date] { SessionReadLedger(cache: cache).readStamps }
     static func stampRead(chatId: String, cache: RipulSessionCache?) { SessionReadLedger(cache: cache).stampRead(chatId: chatId) }
 
@@ -303,5 +304,76 @@ extension AgentBridge {
 
     func publishPinnedKeys() {
         sessionList.pinnedChatKeys = readLedger.pinnedKeys
+    }
+
+    // MARK: - Custom session icons
+
+    /// Sets or clears a user-chosen SF Symbol icon for a session row.
+    public func setSessionIcon(_ icon: String?, _ session: UnifiedSession) {
+        guard sessionCache != nil else { return }
+        readLedger.setCustomIcon(icon, names: session.readStateKeys)
+        publishCustomIcons()
+        sendSessionIcon(icon, metadataKey: session.metadataKey)
+    }
+
+    /// Sets or clears a user-chosen SF Symbol icon from an open chat session's context menu.
+    public func setSessionIcon(_ icon: String?, chatSession: ChatSession, unified: UnifiedSession? = nil) {
+        guard sessionCache != nil else { return }
+        var names = [chatSession.id, chatSession.sourceChatId, chatSession.hostChatId].compactMap { $0 }
+        if let unified {
+            names.append(contentsOf: unified.readStateKeys)
+        }
+        for sibling in sessions where sibling.id == chatSession.id || sibling.sourceChatId == chatSession.sourceChatId {
+            names.append(sibling.id)
+            names.append(sibling.sourceChatId)
+            if let host = sibling.hostChatId { names.append(host) }
+        }
+        readLedger.setCustomIcon(icon, names: names)
+        publishCustomIcons()
+        sendSessionIcon(icon, metadataKey: unified?.metadataKey ?? UnifiedSession.canonicalKey(chatSession.sourceChatId))
+    }
+
+    func publishCustomIcons() {
+        sessionList.customIconsByChatId = readLedger.customIcons
+    }
+
+    /// Takes in the icons the server holds (by metadata key, "" for one the
+    /// person cleared), read with the list's facts, and sends the server what
+    /// only this device knows. Icons used to stay on the device that set them
+    /// (Peter, 7 November 2026: one set on his iPhone Duo never reached his
+    /// iPhone), so each device sends those once the server is asked.
+    public func applyServerSessionIcons(_ server: [String: String], rows: [UnifiedSession]) {
+        guard sessionCache != nil else { return }
+        let local = readLedger.customIcons
+        let merged = SessionReadLedger.mergingServerIcons(
+            local: local, server: server,
+            rows: rows.map { SessionReadLedger.IconRow(metadataKey: $0.metadataKey, names: $0.readStateKeys) },
+            unsaved: Set(unsavedSessionIcons.keys))
+        if merged.icons != local {
+            readLedger.setCustomIcons(merged.icons)
+            publishCustomIcons()
+        }
+        var send = merged.send
+        // A choice whose save failed is sent again.
+        for (key, icon) in unsavedSessionIcons where !sessionIconSaves.contains(key) { send[key] = icon }
+        for (key, icon) in send { sendSessionIcon(icon, metadataKey: key) }
+    }
+
+    /// Keeps a chat's icon on the server, where every device reads it with the
+    /// list's facts. Held as unsaved until the server has it, so a read that
+    /// set out before the save cannot put the old icon back meanwhile.
+    func sendSessionIcon(_ icon: String?, metadataKey: String) {
+        guard !SessionReadLedger.iconStaysOnDevice(metadataKey) else { return }
+        let value = icon?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        unsavedSessionIcons[metadataKey] = value
+        sessionIconSaves.insert(metadataKey)
+        Task { [weak self] in
+            guard let self else { return }
+            let saved = await saveSessionIcon(sessionId: metadataKey, icon: value.isEmpty ? nil : value)
+            sessionIconSaves.remove(metadataKey)
+            // A later choice for the same chat is that one's to settle.
+            if saved, unsavedSessionIcons[metadataKey] == value { unsavedSessionIcons[metadataKey] = nil }
+            if !saved { handleConsoleLog("LOG: [ICONS] could not save the icon of \(metadataKey); kept on this device and sent again at the list's next read") }
+        }
     }
 }

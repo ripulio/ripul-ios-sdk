@@ -394,6 +394,8 @@ final class LiveStreamHost {
         if settings.server {
             var identity = frameIdentity()
             identity["touch"] = TouchSynthesizer.isAvailable
+            identity["touchUnavailable"] = TouchSynthesizer.unavailableReason
+            identity["touchCode"] = TouchSynthesizer.unavailableCode
             identity["pointer"] = TouchSynthesizer.isAvailable
             identity["fingers"] = TouchSynthesizer.isAvailable ? TouchSynthesizer.mostFingers : 0
             identity["keyboard"] = true
@@ -568,6 +570,9 @@ final class LiveStreamHost {
         // A support session is looked at and pointed at, never driven.
         let driven = support == nil && TouchSynthesizer.isAvailable
         config["touch"] = driven
+        // Why not, for the viewer to say so (Live View's "can be watched but not controlled").
+        config["touchUnavailable"] = TouchSynthesizer.unavailableReason
+        config["touchCode"] = TouchSynthesizer.unavailableCode
         config["capture"] = settings.capture
         config["encoder"] = encoderKind.rawValue
         config["pointer"] = driven
@@ -630,6 +635,7 @@ final class LiveStreamHost {
             let result = (try? await TouchTool().execute(args: args)) as? [String: Any] ?? ["success": false]
             var reply: [String: Any] = ["id": id, "success": result["success"] as? Bool ?? false]
             if let error = result["error"] { reply["error"] = error }
+            if let code = result["code"] { reply["code"] = code }
             try? await channel.send(.touchResult, json: reply)
         case .pointer:
             await handlePointer(LiveStreamWire.json(payload))
@@ -1022,6 +1028,14 @@ final class LiveStreamIndicator {
     private var window: LiveStreamIndicatorWindow?
     private var model = LiveStreamIndicatorModel()
 
+    /// `mark` is what it shrinks to; `lead` is how VoiceOver begins it. Live
+    /// View's are the defaults; a shared device says "Shared" (DeviceSharingIndicator).
+    init(mark: String = "Live", lead: String = "This app is being viewed", hint: String = "Shows who is watching, and Stop") {
+        model.mark = mark
+        model.lead = lead
+        model.hint = hint
+    }
+
     func show(_ text: String, onStop: @escaping () -> Void) {
         model.text = text
         model.onStop = onStop
@@ -1063,6 +1077,9 @@ final class LiveStreamIndicator {
 @Observable
 final class LiveStreamIndicatorModel {
     var text = ""
+    var mark = "Live"
+    var lead = "This app is being viewed"
+    var hint = "Shows who is watching, and Stop"
     /// Showing who is watching and Stop, not only the mark.
     var isOpen = true
     @ObservationIgnored var onStop: () -> Void = {}
@@ -1124,21 +1141,21 @@ struct LiveStreamIndicatorPill: View {
                 Button { model.open() } label: {
                     HStack(spacing: 4) {
                         Circle().fill(Color.ripul(.danger)).frame(width: 6, height: 6)
-                        Text("Live").ripulText().font(.ripul(.caption2, weight: .semibold))
+                        Text(model.mark).ripulText().font(.ripul(.caption2, weight: .semibold))
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint("Shows who is watching, and Stop")
+                .accessibilityHint(model.hint)
                 .uiKitIdentifier("LiveStreamIndicator.mark")
             }
         }
         .modifier(LiveStreamIndicatorBackground())
         .animation(.snappy(duration: 0.25), value: model.isOpen)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("This app is being viewed: \(model.text)")
+        .accessibilityLabel("\(model.lead): \(model.text)")
         .uiKitIdentifier("LiveStreamIndicator.pill")
     }
 }
